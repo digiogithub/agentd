@@ -1,0 +1,7 @@
+# actionlint configuration.
+paths:
+  .github/workflows/release.yml:
+    ignore:
+      # The windows job is deliberately disabled with `if: false` until the
+      # Windows port lands (ROADMAP.md, "Windows support").
+      - 'constant expression "false" in condition'

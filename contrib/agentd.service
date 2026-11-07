@@ -1,0 +1,33 @@
+# agentd daemon as a systemd user service.
+#
+# Install:
+#   go build -o ~/bin/agentd ./cmd/agentd
+#   mkdir -p ~/.config/systemd/user && cp contrib/agentd.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now agentd
+#   # optional, keep it running without a login session:
+#   loginctl enable-linger "$USER"
+#
+# The CLI talks to it over $XDG_RUNTIME_DIR/agentd/agentd.sock (the same path the
+# auto-started daemon uses), so `agentd run/ls/attach...` work unchanged.
+#
+# NOTE: sessions live inside the daemon process. Until session persistence lands
+# (ROADMAP, "Later"), stopping or restarting this unit (including Restart=on-failure
+# after a crash, or `systemctl --user restart agentd`) kills every running agent
+# session. The mailbox (SQLite) survives.
+
+[Unit]
+Description=agentd - terminal session manager and mailbox for CLI coding agents
+
+[Service]
+Type=simple
+ExecStart=%h/bin/agentd daemon
+Restart=on-failure
+RestartSec=2
+# Agents started by the daemon inherit this environment: make sure their
+# binaries (claude, codex, pando...) are on PATH.
+Environment=PATH=%h/bin:%h/.local/bin:%h/go/bin:/usr/local/bin:/usr/bin:/bin
+# Terminate the agents on stop instead of leaving orphans.
+KillMode=control-group
+
+[Install]
+WantedBy=default.target

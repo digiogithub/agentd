@@ -1,0 +1,409 @@
+name: Release
+
+# Tag-driven release pipeline: push a `v*` tag (e.g. v0.1.0 or v0.1.0-rc.1).
+#
+#   linux    : linux amd64 + arm64 (CGO_ENABLED=0; modernc.org/sqlite is pure
+#              Go), one tar.gz and one .deb (nfpm, packaging/nfpm.yaml) per
+#              arch                                   -> dist-linux-<arch>
+#   macos    : darwin amd64 + arm64 merged into a universal binary with lipo,
+#              signed with the Developer ID (hardened runtime + timestamp),
+#              shipped as a .zip (notarized, submit-only) and a signed .pkg
+#              installing /usr/local/bin/agentd (notarized + stapled)
+#                                                     -> dist-macos
+#   windows  : NOT SUPPORTED yet (agentd needs Unix PTYs and peer
+#              credentials). The signing job is kept below, gated with
+#              `if: false`, so it can be enabled after the port (ROADMAP,
+#              "Windows support")                     -> dist-windows
+#   release  : SHA256SUMS + one GitHub release for the tag with generated
+#              notes; prerelease when the tag carries a '-' suffix.
+#
+# Only artifacts named dist-* reach the release job; unsigned intermediates
+# must use another name so an unsigned binary can never be published.
+#
+# Signing material (see docs/release.md):
+#   secrets.MACOS_SIGNING_BUNDLE  base64 .tar.gz with both Developer ID .p12
+#                                 files and the `kvagerc` env file.
+#   vars.AZURE_*                  only used by the gated windows job (OIDC
+#                                 federation, environment `release`, no secret).
+#
+# A tag-triggered run uses this file as it is in the tagged commit. To re-cut
+# a release for an existing tag, run the workflow manually with `tag`.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)build and release, e.g. v0.1.0.'
+        required: true
+        type: string
+      draft:
+        description: 'Publish the release as a draft.'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  NFPM_VERSION: v2.48.0
+
+jobs:
+  linux:
+    name: Linux (${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Resolve the version
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "$TAG" in v*) ;; *) echo "::error::Tag '$TAG' does not start with v"; exit 1 ;; esac
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+
+      - name: Build
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          mkdir -p build dist
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/digiogithub/agentd/internal/version.Version=${VERSION}" \
+            -o build/agentd ./cmd/agentd
+          file build/agentd
+
+      - name: Smoke test (amd64)
+        if: matrix.goarch == 'amd64'
+        run: |
+          set -euo pipefail
+          out="$(build/agentd version 2>/dev/null | head -n1 || true)"
+          echo "$out"
+          [ "$out" = "agentd ${VERSION}" ] || { echo "::error::unexpected version output: $out"; exit 1; }
+
+      - name: Package tar.gz
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          stage="$(mktemp -d)"
+          cp build/agentd README.md LICENSE "$stage/"
+          cp packaging/agentd.service "$stage/agentd.service"
+          tar -C "$stage" -czf "dist/agentd_${VERSION}_linux_${GOARCH}.tar.gz" .
+          tar -tzvf "dist/agentd_${VERSION}_linux_${GOARCH}.tar.gz"
+
+      - name: Install nfpm
+        run: go install "github.com/goreleaser/nfpm/v2/cmd/nfpm@${NFPM_VERSION}"
+
+      - name: Package .deb
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          # nfpm writes Debian's `~` pre-release form (0.1.0~rc.1) into the
+          # file name; release assets keep the tag's form instead.
+          nfpm package --packager deb --config packaging/nfpm.yaml --target "dist/agentd_${VERSION}_${GOARCH}.deb"
+          for f in dist/*.deb; do
+            echo "-- $f"
+            dpkg-deb --info "$f"
+            dpkg-deb --contents "$f"
+          done
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux-${{ matrix.goarch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+          if-no-files-found: error
+
+  macos:
+    name: macOS (universal, signed + notarized)
+    runs-on: macos-latest
+    # Notarization submits the zip and the pkg to Apple with --wait.
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Resolve the version
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "$TAG" in v*) ;; *) echo "::error::Tag '$TAG' does not start with v"; exit 1 ;; esac
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+
+      - name: Build the universal binary
+        env:
+          CGO_ENABLED: '0'
+          GOOS: darwin
+        run: |
+          set -euo pipefail
+          mkdir -p build dist
+          for arch in amd64 arm64; do
+            GOARCH="$arch" go build -trimpath \
+              -ldflags "-s -w -X github.com/digiogithub/agentd/internal/version.Version=${VERSION}" \
+              -o "build/agentd-$arch" ./cmd/agentd
+          done
+          lipo -create -output build/agentd build/agentd-amd64 build/agentd-arm64
+          lipo -info build/agentd
+          out="$(build/agentd version 2>/dev/null | head -n1 || true)"
+          echo "$out"
+          [ "$out" = "agentd ${VERSION}" ] || { echo "::error::unexpected version output: $out"; exit 1; }
+
+      - name: Set up the signing keychain
+        # Exports SIGNING_IDENTITY, PKG_SIGN_IDENTITY, NOTARY_PROFILE and
+        # MACOS_SIGN_KEYCHAIN_PATH/PASSWORD for every step below.
+        uses: digiogithub/ci-actions/macos-signing-keychain@v1
+        with:
+          signing-bundle: ${{ secrets.MACOS_SIGNING_BUNDLE }}
+          env-file: kvagerc
+          keychain-name: agentd-build
+          notary-profile: agentd-notary
+
+      - name: Sign the binary
+        # Hardened runtime (options: runtime) + secure timestamp, the action's
+        # defaults; agentd needs no entitlements (no JIT, no unsigned memory).
+        uses: digiogithub/ci-actions/macos-codesign@v1
+        with:
+          paths: build/agentd
+
+      - name: Package the zip and the pkg
+        run: |
+          set -euo pipefail
+          base="agentd_${VERSION}_darwin_universal"
+
+          # zip: the bare signed binary (notarized submit-only below).
+          ditto -c -k build/agentd "dist/${base}.zip"
+
+          # pkg: installs /usr/local/bin/agentd, signed with the Developer ID
+          # Installer identity from the ephemeral keychain.
+          stage="$(mktemp -d)"
+          mkdir -p "$stage/usr/local/bin"
+          cp build/agentd "$stage/usr/local/bin/agentd"
+          chmod 0755 "$stage/usr/local/bin/agentd"
+          pkgbuild \
+            --root "$stage" \
+            --identifier com.github.digiogithub.agentd \
+            --version "$VERSION" \
+            --install-location / \
+            --sign "$PKG_SIGN_IDENTITY" \
+            --keychain "$MACOS_SIGN_KEYCHAIN_PATH" \
+            --timestamp \
+            "dist/${base}.pkg"
+          pkgutil --check-signature "dist/${base}.pkg"
+          ls -la dist/
+
+      - name: Notarize
+        # .pkg is notarized and stapled; .zip is submit-only (Gatekeeper's
+        # online check covers it).
+        uses: digiogithub/ci-actions/macos-notarize@v1
+        with:
+          paths: |
+            dist/*.pkg
+            dist/*.zip
+
+      - name: Verify the stapled pkg
+        run: |
+          set -euo pipefail
+          status=0
+          for f in dist/*.pkg; do
+            echo "-- $f"
+            xcrun stapler validate "$f" || { echo "::error::Not stapled: $f"; status=1; }
+            spctl --assess --type install -vv "$f" || { echo "::error::Gatekeeper rejects: $f"; status=1; }
+          done
+          codesign --verify --strict --verbose=2 build/agentd
+          exit $status
+
+      - name: Clean up the signing keychain
+        if: always()
+        uses: digiogithub/ci-actions/macos-keychain-cleanup@v1
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-macos
+          path: |
+            dist/*.zip
+            dist/*.pkg
+          if-no-files-found: error
+
+  windows:
+    # DISABLED: agentd does not build on Windows yet (Unix PTYs, setsid,
+    # SO_PEERCRED and /proc identity). Kept as scaffolding for the port, see
+    # ROADMAP.md "Windows support". To enable: port the code, remove `if: false`,
+    # and set up the `release` environment, the federated credentials and the
+    # AZURE_* repository variables (docs/release.md).
+    if: false
+    name: Windows (Authenticode)
+    runs-on: windows-latest
+    # The federated credential on the Entra app is scoped to
+    # repo:<owner>/<repo>:environment:release, so the OIDC token minted for
+    # this job only validates from within that environment.
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        shell: pwsh
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+          CGO_ENABLED: '0'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:TAG -replace '^v', ''
+          New-Item -ItemType Directory -Force -Path unsigned, dist | Out-Null
+          go build -trimpath -ldflags "-s -w -X github.com/digiogithub/agentd/internal/version.Version=$version" -o unsigned/agentd.exe ./cmd/agentd
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign with Azure Artifact Signing
+        # No credential inputs: the action uses the Azure CLI session above,
+        # which is the federated GitHub identity.
+        uses: azure/trusted-signing-action@v0
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_CERT_PROFILE }}
+          files-folder: ${{ github.workspace }}\unsigned
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify the signature
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-ChildItem unsigned/*.exe | ForEach-Object {
+            $sig = Get-AuthenticodeSignature $_.FullName
+            "-- $($_.Name): $($sig.Status) / $($sig.SignerCertificate.Subject)"
+            if ($sig.Status -ne 'Valid') {
+              Write-Output "::error::Unsigned or invalid: $($_.Name) ($($sig.Status))"
+              exit 1
+            }
+          }
+
+      - name: Package the signed zip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Copy-Item README.md, LICENSE unsigned/
+          Compress-Archive -Path unsigned/* -DestinationPath "dist/agentd_$($env:VERSION)_windows_amd64.zip" -Force
+          Get-ChildItem dist
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-windows
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [linux, macos, windows]
+    # The windows job is skipped while Windows is unsupported; a skipped need
+    # would otherwise skip this job too.
+    if: >-
+      ${{ !cancelled()
+          && needs.linux.result == 'success'
+          && needs.macos.result == 'success'
+          && (needs.windows.result == 'success' || needs.windows.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        # Full history and tags: the notes are measured against the previous tag.
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd dist
+          shopt -s nullglob
+          sha256sum *.tar.gz *.deb *.zip *.pkg > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish
+        # prerelease: auto marks tags with a '-' suffix (v0.1.0-rc.1).
+        uses: digiogithub/ci-actions/github-release@v1
+        with:
+          tag: ${{ inputs.tag || github.ref_name }}
+          files: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.zip
+            dist/*.pkg
+            dist/SHA256SUMS
+          draft: ${{ inputs.draft || false }}
+          prerelease: auto
+          notes-header: |
+            Downloads:
+
+            - Debian/Ubuntu: `agentd_<version>_amd64.deb` / `_arm64.deb` (`sudo apt install ./agentd_*.deb`, then `systemctl --user enable --now agentd`).
+            - Other Linux: `agentd_<version>_linux_<arch>.tar.gz`.
+            - macOS (universal, Developer ID signed and notarized): `.pkg` installer (stapled, installs `/usr/local/bin/agentd`) or the bare binary in the `.zip`.
+            - `SHA256SUMS` lists the SHA-256 of every file.
+
+            Windows is not supported yet.
+          token: ${{ github.token }}

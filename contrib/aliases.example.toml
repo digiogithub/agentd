@@ -1,0 +1,19 @@
+# agentd project aliases: short name -> working directory.
+#
+# Copy to ~/.config/agentd/aliases.toml (or $XDG_CONFIG_HOME/agentd/aliases.toml,
+# or any path set in AGENTD_ALIASES_FILE). Flat table of name = "path":
+#   - names use [a-zA-Z0-9._-] (the session-name charset without '@');
+#     quote names containing '.' or '-' if your TOML tooling needs it;
+#   - paths must be absolute; a leading "~" or "~/" is expanded to $HOME.
+#
+# Extra aliases can come from the environment, comma-separated name=path
+# pairs that override entries in this file:
+#   AGENTD_ALIASES="webapp=~/src/webapp,api=~/src/api"
+#
+# Usage: agentd run webapp --harness codex   # session codex@webapp in that dir
+#        agentd aliases                      # list aliases and their source
+
+webapp = "~/src/webapp"
+api = "~/src/api"
+infra = "~/work/infra"
+"docs-site" = "/srv/projects/docs-site"

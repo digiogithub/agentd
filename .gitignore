@@ -1,0 +1,6 @@
+/agentd
+/bin/
+/dist/
+*.db
+*.db-*
+/build/

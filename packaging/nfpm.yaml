@@ -1,0 +1,49 @@
+# nfpm configuration for the agentd .deb package.
+#
+# Used by .github/workflows/release.yml; environment variables:
+#   VERSION  package version without the leading "v" (e.g. 1.2.3 or 1.2.3-rc.1)
+#   GOARCH   amd64 | arm64
+# The binary for GOARCH must be at build/agentd (nfpm does not expand
+# variables in contents paths).
+#
+# Local dry run:
+#   CGO_ENABLED=0 GOARCH=amd64 go build -o build/agentd ./cmd/agentd
+#   VERSION=0.0.0 GOARCH=amd64 nfpm package -p deb -f packaging/nfpm.yaml -t dist/
+name: agentd
+arch: ${GOARCH}
+platform: linux
+version: ${VERSION}
+version_schema: semver
+section: devel
+priority: optional
+maintainer: Digio Soluciones Digitales SL <noreply@github.com>
+vendor: Digio Soluciones Digitales SL
+homepage: https://github.com/digiogithub/agentd
+license: MIT
+description: |-
+  Lightweight session manager for CLI coding agents.
+  agentd runs CLI coding agents (Claude Code, Codex, Pando...) in persistent
+  PTYs, lets you detach and reattach like zellij/tmux, and lets agents message
+  each other through a local mailbox, from the CLI or MCP.
+
+contents:
+  - src: build/agentd
+    dst: /usr/bin/agentd
+    file_info:
+      mode: 0755
+  - src: packaging/agentd.service
+    dst: /usr/lib/systemd/user/agentd.service
+    file_info:
+      mode: 0644
+  - src: README.md
+    dst: /usr/share/doc/agentd/README.md
+    file_info:
+      mode: 0644
+  - src: LICENSE
+    dst: /usr/share/doc/agentd/LICENSE
+    file_info:
+      mode: 0644
+  - src: contrib/aliases.example.toml
+    dst: /usr/share/doc/agentd/examples/aliases.example.toml
+    file_info:
+      mode: 0644
