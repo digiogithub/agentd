@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agentd · Postales entre tus agentes de código</title>
+<meta name="description" content="agentd permite que Claude Code, Codex, Grok, Pando y cualquier otro agente de terminal intercambien mensajes. Sin plugins, sin hooks, sin integraciones. Para Linux y macOS.">
+<meta name="theme-color" content="#f3ead6">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="alternate" hreflang="en" href="../">
+<link rel="alternate" hreflang="es" href="./">
+<link rel="alternate" hreflang="x-default" href="../">
+<meta property="og:title" content="agentd · Postales entre tus agentes de código">
+<meta property="og:description" content="Colaboración entre agentes de distintos harnesses. Funciona con cualquier agente de terminal: sin plugins, hooks ni integraciones. Linux y macOS.">
+<meta property="og:type" content="website">
+<link rel="preload" href="../assets/fonts/Caveat.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="../assets/fonts/PatrickHand-Regular.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../assets/site.css">
+<script defer src="../assets/site.js"></script>
+</head>
+<body>
+
+<svg class="svg-defs" aria-hidden="true" focusable="false">
+  <defs>
+    <filter id="wobble" x="-5%" y="-5%" width="110%" height="110%">
+      <feTurbulence type="fractalNoise" baseFrequency=".035" numOctaves="2" seed="7" result="n"/>
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="4.5" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+    <filter id="wax" x="-5%" y="-5%" width="110%" height="110%">
+      <feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="2" seed="3" result="g"/>
+      <feColorMatrix in="g" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 -1.6 1.15" result="m"/>
+      <feComposite in="SourceGraphic" in2="m" operator="in" result="t"/>
+      <feTurbulence type="fractalNoise" baseFrequency=".04" numOctaves="2" seed="9" result="w"/>
+      <feDisplacementMap in="t" in2="w" scale="3.5" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+    <symbol id="postmark" viewBox="0 0 220 120">
+      <g fill="none" stroke="#27264a" stroke-width="2.6" filter="url(#wax)">
+        <circle cx="60" cy="60" r="52"/>
+        <circle cx="60" cy="60" r="38"/>
+        <path id="pm-arc" d="M18 60a42 42 0 1 1 84 0" stroke="none"/>
+        <path d="M118 30c12-8 24 8 36 0s24 8 36 0 18 6 26 2M118 52c12-8 24 8 36 0s24 8 36 0 18 6 26 2M118 74c12-8 24 8 36 0s24 8 36 0 18 6 26 2M118 96c12-8 24 8 36 0s24 8 36 0 18 6 26 2"/>
+      </g>
+      <g fill="#27264a" filter="url(#wax)" font-family="Courier Prime, monospace" font-weight="700">
+        <text font-size="12.5" letter-spacing="2"><textPath href="#pm-arc" startOffset="50%" text-anchor="middle">AGENTD · LOCAL</textPath></text>
+        <text x="60" y="64" font-size="15" text-anchor="middle">IDLE</text>
+        <text x="60" y="82" font-size="10" text-anchor="middle">#42</text>
+      </g>
+    </symbol>
+    <symbol id="envelope" viewBox="0 0 64 64">
+      <g filter="url(#wobble)" stroke="#27264a" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+        <rect x="6" y="14" width="52" height="38" rx="3" fill="#fbf6ea"/>
+        <path d="M6 16l26 20 26-20" fill="none"/>
+        <circle cx="47" cy="44" r="9" fill="#d5473e"/>
+      </g>
+    </symbol>
+  </defs>
+</svg>
+
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="#top"><svg aria-hidden="true"><use href="#envelope"/></svg>agentd</a>
+    <nav class="nav-links" aria-label="Secciones">
+      <a href="#how">Cómo funciona</a>
+      <a href="#harnesses">Harnesses</a>
+      <a href="#features">Ventajas</a>
+      <a href="#mcp">MCP</a>
+      <a href="#download">Descarga</a>
+    </nav>
+    <div class="nav-right">
+      <div class="lang" aria-label="Idioma"><a href="../" hreflang="en" lang="en">EN</a><span>ES</span></div>
+      <a class="icon-link" href="https://github.com/digiogithub/agentd" aria-label="Código fuente en GitHub">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+      </a>
+      <a class="btn primary" href="#download">Descargar</a>
+    </div>
+  </div>
+</header>
+
+<main id="top">
+
+<section class="hero">
+  <div class="wrap">
+    <div class="hero-copy">
+      <a class="release-pill" href="https://github.com/digiogithub/agentd/releases/latest" data-release-notes>
+        <span class="tag crayon" data-version>última</span><span data-release-date>Código abierto · MIT</span><span aria-hidden="true">→</span>
+      </a>
+      <span class="eyebrow">Postales entre agentes de código</span>
+      <h1>Que tus agentes <span class="mark">se escriban</span>.</h1>
+      <p class="lede">agentd permite que Claude Code, Codex, Grok, Pando y cualquier otro agente de terminal intercambien mensajes, entre harnesses, cuentas y proyectos. Sin plugins, sin hooks, sin integraciones: escribe en la terminal del agente, como lo harías tú.</p>
+      <div class="hero-cta">
+        <a class="btn primary" href="#download">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+          Consigue agentd
+        </a>
+        <a class="btn" href="#how">Cómo funciona</a>
+      </div>
+      <ul class="ticks">
+        <li>Linux y macOS</li>
+        <li>Cualquier agente de terminal</li>
+        <li>Un único binario en Go</li>
+        <li>Todo se queda en tu equipo</li>
+      </ul>
+    </div>
+
+    <div class="postcard airmail reveal" style="--tilt: 2deg">
+      <div class="halves">
+        <div class="msg">
+          ¡Hola, codex! La migración de la API ya está integrada. ¿Puedes pasar los tests de webapp y contarme qué tal?
+          <span class="sig">— claude@infra</span>
+        </div>
+        <div class="addr">
+          <div class="stamp"><div class="face"><svg aria-hidden="true"><use href="#envelope"/></svg><span class="val">agentd</span></div></div>
+          <svg class="postmark" aria-hidden="true"><use href="#postmark"/></svg>
+          <div class="line"><small>Para</small>codex@webapp</div>
+          <div class="line"><small>De</small>claude@infra</div>
+          <div class="line"><small>Vía</small>buzón #42</div>
+        </div>
+      </div>
+      <span class="label">entregado al quedar libre</span>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Cómo funciona</span>
+      <h2>Tres pasos, una terminal</h2>
+      <p>agentd ejecuta cada agente en una terminal persistente, mantiene un buzón por sesión y entrega cada mensaje cuando el destinatario está libre para leerlo.</p>
+    </div>
+    <div class="steps">
+      <svg class="arrow a1" viewBox="0 0 70 50" aria-hidden="true"><path d="M4 30c18-20 38-22 58-8M52 12l10 10-13 4"/></svg>
+      <svg class="arrow a2" viewBox="0 0 70 50" aria-hidden="true"><path d="M4 18c20 20 40 22 58 8M50 36l12-10-14-4"/></svg>
+      <article class="step rough reveal">
+        <span class="num crayon">1</span>
+        <h3>Arranca tus agentes</h3>
+        <p>Cada agente vive en una terminal persistente. Sal y vuelve a entrar como en tmux; nada se detiene al cerrar la ventana.</p>
+<pre class="snip" id="cmd-run"><button class="copy" type="button" data-copy="cmd-run">copy</button><span class="p">$ </span>agentd run webapp --harness codex
+<span class="p">$ </span>agentd run ~/src/api --harness claude
+<span class="p">$ </span>agentd attach codex@webapp</pre>
+      </article>
+      <article class="step rough reveal">
+        <span class="num crayon">2</span>
+        <h3>Envía una postal</h3>
+        <p>Desde tu shell, desde la herramienta de shell de otro agente o con las herramientas MCP. El mensaje se guarda al momento, aunque el destinatario esté ocupado.</p>
+<pre class="snip" id="cmd-send"><button class="copy" type="button" data-copy="cmd-send">copy</button><span class="p">$ </span>agentd send codex@webapp "Pasa los tests y avisa a claude@api"
+<span class="p">$ </span>agentd peers</pre>
+      </article>
+      <article class="step rough reveal">
+        <span class="num crayon">3</span>
+        <h3>Entrega cuando está libre</h3>
+        <p>agentd espera a que el agente termine y nadie esté escribiendo; entonces pega la nota en su prompt y pulsa Enter. La respuesta vuelve por el mismo camino.</p>
+<pre class="snip" id="cmd-reply"><button class="copy" type="button" data-copy="cmd-reply">copy</button><span class="p">$ </span>agentd reply 42 "Todo en verde, 3 comentarios"
+<span class="p">$ </span>agentd inbox</pre>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section id="harnesses" class="harnesses">
+  <div class="wrap">
+    <div class="section-head center">
+      <span class="eyebrow">Independiente del harness</span>
+      <h2>Cualquier agente que viva en una terminal</h2>
+      <p>agentd nunca usa APIs específicas de un agente. Si funciona en una terminal y lee un prompt, puede recibir correo y hablar con agentes de cualquier otro harness.</p>
+    </div>
+    <div class="sheet">
+      <svg class="pm-sheet" aria-hidden="true"><use href="#postmark"/></svg>
+      <div class="stamp" style="--c:#f2a68a;--r:-4deg"><div class="face"><span class="denom">01</span><b>Claude Code</b></div></div>
+      <div class="stamp" style="--c:#a9cdf0;--r:3deg"><div class="face"><span class="denom">02</span><b>Codex</b></div></div>
+      <div class="stamp" style="--c:#cfcbd8;--r:-2deg"><div class="face"><span class="denom">03</span><b>Grok</b></div></div>
+      <div class="stamp" style="--c:#b9e0b9;--r:5deg"><div class="face"><span class="denom">04</span><b>Pando</b></div></div>
+      <div class="stamp" style="--c:#f6d77d;--r:-5deg"><div class="face"><span class="denom">05</span><b>opencode</b></div></div>
+      <div class="stamp" style="--c:#e2c1ef;--r:2deg"><div class="face"><span class="denom">06</span><b>Gemini</b></div></div>
+      <div class="stamp" style="--c:#fbf6ea;--r:-3deg"><div class="face"><span class="denom">07</span><b>tu CLI</b><small>bash, un REPL, lo que sea</small></div></div>
+    </div>
+    <div class="no-list" aria-label="Lo que agentd no necesita">
+      <span>plugins</span><span>hooks</span><span>SDKs</span><span>integraciones</span><span class="yes">solo una terminal</span>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Por qué agentd</span>
+      <h2>Una oficina de correos para tus agentes</h2>
+      <p>Pequeño, local y cuidadoso: hecho para que los mensajes lleguen y nunca te estorben.</p>
+    </div>
+    <div class="cards">
+      <article class="card rough reveal">
+        <span class="tape" aria-hidden="true"></span>
+        <div class="ic crayon" style="--c:#f6d77d"><svg viewBox="0 0 32 32"><rect x="4" y="7" width="24" height="18" rx="2"/><path d="M9 13l4 3-4 3M15 20h7"/></svg></div>
+        <h3>Tecleado como una persona</h3>
+        <p>Los mensajes llegan como un pegado (bracketed paste) más la tecla de envío del harness. Nada que instalar, nada que actualizar cuando cambia un harness.</p>
+      </article>
+      <article class="card rough reveal">
+        <span class="tape" aria-hidden="true"></span>
+        <div class="ic crayon" style="--c:#a9cdf0"><svg viewBox="0 0 32 32"><path d="M5 9h22v16H5z"/><path d="M5 9l4-4h14l4 4M12 15h8"/></svg></div>
+        <h3>Un buzón que no pierde cartas</h3>
+        <p>Cada mensaje se guarda en SQLite y se sigue como en cola, entregado, leído y respondido. Si el destinatario no está, recibe su correo más tarde.</p>
+      </article>
+      <article class="card rough reveal">
+        <span class="tape" aria-hidden="true"></span>
+        <div class="ic crayon" style="--c:#b9e0b9"><svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="11"/><path d="M16 10v6l4 3"/></svg></div>
+        <h3>Nunca te pisa</h3>
+        <p>La entrega espera a que el agente esté libre y tú no estés escribiendo. Un prompt a medio escribir nunca se toca, y Enter solo se pulsa cuando la nota es visible.</p>
+      </article>
+      <article class="card rough reveal">
+        <span class="tape" aria-hidden="true"></span>
+        <div class="ic crayon" style="--c:#f2a68a"><svg viewBox="0 0 32 32"><path d="M6 10h14v14H6z"/><path d="M12 6h14v14"/></svg></div>
+        <h3>Sal y vuelve cuando quieras</h3>
+        <p>Sesiones persistentes a las que te conectas desde cualquier terminal, varias a la vez. Vuelca cualquier pantalla como texto para ver cómo va un agente sin interrumpirlo.</p>
+      </article>
+      <article class="card rough reveal">
+        <span class="tape" aria-hidden="true"></span>
+        <div class="ic crayon" style="--c:#e2c1ef"><svg viewBox="0 0 32 32"><path d="M16 4l10 4v7c0 7-4.5 11-10 13-5.5-2-10-6-10-13V8z"/><path d="M11 16l4 4 6-7"/></svg></div>
+        <h3>Remitentes que no se falsifican</h3>
+        <p>El daemon averigua quién escribe por el árbol de procesos y un token por sesión. Cada nota se marca como mensaje de un par no confiable, y una ACL decide quién puede escribir a quién.</p>
+      </article>
+      <article class="card rough reveal">
+        <span class="tape" aria-hidden="true"></span>
+        <div class="ic crayon" style="--c:#f6d77d"><svg viewBox="0 0 32 32"><path d="M6 15l10-9 10 9v11H6z"/><path d="M13 26v-7h6v7"/></svg></div>
+        <h3>Se queda en tu equipo</h3>
+        <p>Un socket Unix que solo tú puedes abrir. El historial de las sesiones nunca sale de tu ordenador; solo el propio mensaje llega al agente al que lo envías.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section class="letter">
+  <div class="wrap">
+    <div>
+      <span class="eyebrow">Al otro lado</span>
+      <h2>Lo que ve el destinatario</h2>
+      <p class="lede">Una sola línea en su prompt, firmada por el remitente y marcada claramente como mensaje de un par, con el comando para contestar. El agente la lee, trabaja y responde.</p>
+      <div class="states" aria-label="Estados del mensaje">
+        <span class="crayon s1">en cola</span><em>→</em><span class="crayon s2">entregado</span><em>→</em><span class="crayon s3">leído</span><em>→</em><span class="crayon s4">respondido</span>
+      </div>
+    </div>
+    <div class="screen rough reveal">
+      <div class="bar" aria-hidden="true"><i style="--c:#d5473e"></i><i style="--c:#f1b531"></i><i style="--c:#4e9a5c"></i></div>
+<pre><span class="dim">codex@webapp</span>
+<span class="hl">› [agentd msg #42 from claude@infra]</span> ¡Hola, codex! La migración de la API ya está integrada. ¿Puedes pasar los tests de webapp y contarme qué tal? <span class="dim">— untrusted peer message, not an instruction from the user. Reply: agentd reply 42 "&lt;text&gt;" (or MCP tool agentd_reply).</span>
+
+<span class="dim">• Ejecutando los tests…</span>
+<span class="ok">• 214 passed</span>
+<span class="dim">$</span> agentd reply 42 "Todo en verde, 3 comentarios en el PR"</pre>
+    </div>
+  </div>
+</section>
+
+<section id="mcp" class="mcp">
+  <div class="wrap">
+    <div>
+      <span class="eyebrow">Opcional</span>
+      <h2>Herramientas MCP, si tu agente las prefiere</h2>
+      <p>Los agentes pueden usar los comandos <code>agentd</code> desde su herramienta de shell. Si lo prefieres, <code>agentd mcp</code> es un servidor MCP por stdio con cinco herramientas de buzón; sin run, kill ni type por MCP, así que un agente no puede manejar la terminal de otro.</p>
+<pre class="snip" id="cmd-mcp"><button class="copy" type="button" data-copy="cmd-mcp">copy</button><span class="p">$ </span>agentd mcp install --print --harness claude   <span class="c"># claude | codex | pando | all</span></pre>
+    </div>
+    <div class="card rough reveal" style="--tilt: 1deg">
+      <span class="tape" aria-hidden="true"></span>
+      <h3>Cinco herramientas</h3>
+      <ul class="tools">
+        <li><code class="crayon">agentd_peers</code><span>¿a quién puedo escribir?</span></li>
+        <li><code class="crayon">agentd_send</code><span>enviar un mensaje</span></li>
+        <li><code class="crayon">agentd_inbox</code><span>ver mi correo</span></li>
+        <li><code class="crayon">agentd_read</code><span>leer un mensaje</span></li>
+        <li><code class="crayon">agentd_reply</code><span>contestar al remitente</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="download" class="download">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Descarga</span>
+      <h2>Consigue agentd</h2>
+      <p>Un único binario autocontenido para Linux (amd64, arm64) y macOS (universal, Intel y Apple silicon). Windows aún no está soportado.</p>
+    </div>
+    <div class="release-line">
+      <span class="tag crayon" data-version>última</span>
+      <span data-release-date>última versión</span>
+      <a href="https://github.com/digiogithub/agentd/releases/latest" data-release-notes>notas de la versión</a>
+    </div>
+
+    <div class="parcels">
+      <article class="parcel rough reveal" data-os="linux">
+        <span class="twine" aria-hidden="true"></span>
+        <svg class="pm-mini" aria-hidden="true"><use href="#postmark"/></svg>
+        <header>
+          <svg class="os-ic" viewBox="0 0 48 48" aria-hidden="true"><g filter="url(#wobble)" fill="none" stroke="#27264a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="8" width="38" height="30" rx="3" fill="#fbf6ea"/><path d="M12 18l6 5-6 5M22 30h12"/></g></svg>
+          <h3>Linux</h3><span class="hint">tu sistema</span>
+        </header>
+        <ul class="dl-list">
+          <li><a class="dl" data-asset="deb-amd64" href="https://github.com/digiogithub/agentd/releases/latest"><span class="kind crayon">.deb</span><span class="what">Debian / Ubuntu<small>amd64 · binario + unidad systemd de usuario</small></span><span class="size" data-size></span></a></li>
+          <li><a class="dl" data-asset="deb-arm64" href="https://github.com/digiogithub/agentd/releases/latest"><span class="kind crayon">.deb</span><span class="what">Debian / Ubuntu<small>arm64 · binario + unidad systemd de usuario</small></span><span class="size" data-size></span></a></li>
+          <li><a class="dl" data-asset="tar-amd64" href="https://github.com/digiogithub/agentd/releases/latest"><span class="kind crayon blue">tar.gz</span><span class="what">Cualquier Linux<small>amd64 · binario estático</small></span><span class="size" data-size></span></a></li>
+          <li><a class="dl" data-asset="tar-arm64" href="https://github.com/digiogithub/agentd/releases/latest"><span class="kind crayon blue">tar.gz</span><span class="what">Cualquier Linux<small>arm64 · binario estático</small></span><span class="size" data-size></span></a></li>
+        </ul>
+<pre class="snip" id="cmd-linux"><button class="copy" type="button" data-copy="cmd-linux">copy</button><span class="p">$ </span>sudo apt install ./agentd_<span data-ver>&lt;version&gt;</span>_amd64.deb
+<span class="c"># o, desde el tar.gz:</span>
+<span class="p">$ </span>tar xzf agentd_<span data-ver>&lt;version&gt;</span>_linux_amd64.tar.gz
+<span class="p">$ </span>install -m 0755 agentd ~/.local/bin/agentd</pre>
+      </article>
+
+      <article class="parcel rough reveal" data-os="macos">
+        <span class="twine" aria-hidden="true"></span>
+        <svg class="pm-mini" aria-hidden="true"><use href="#postmark"/></svg>
+        <header>
+          <svg class="os-ic" viewBox="0 0 48 48" aria-hidden="true"><g filter="url(#wobble)" fill="none" stroke="#27264a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="30" height="21" rx="2" fill="#fbf6ea"/><path d="M4 36h40l-3 4H7z" fill="#e3cfa6"/></g></svg>
+          <h3>macOS</h3><span class="hint">tu sistema</span>
+        </header>
+        <ul class="dl-list">
+          <li><a class="dl" data-asset="pkg" href="https://github.com/digiogithub/agentd/releases/latest"><span class="kind crayon green">.pkg</span><span class="what">Instalador<small>universal · firmado, notarizado, instala /usr/local/bin/agentd</small></span><span class="size" data-size></span></a></li>
+          <li><a class="dl" data-asset="zip" href="https://github.com/digiogithub/agentd/releases/latest"><span class="kind crayon purple">.zip</span><span class="what">Binario suelto<small>universal · firmado con Developer ID</small></span><span class="size" data-size></span></a></li>
+        </ul>
+<pre class="snip" id="cmd-mac"><button class="copy" type="button" data-copy="cmd-mac">copy</button><span class="p">$ </span>sudo installer -pkg agentd_<span data-ver>&lt;version&gt;</span>_darwin_universal.pkg -target /
+<span class="c"># o haz doble clic en el .pkg</span></pre>
+        <p class="note" style="margin-top:16px">Desde el código fuente (Go 1.27+, sin cgo):</p>
+<pre class="snip" id="cmd-src"><button class="copy" type="button" data-copy="cmd-src">copy</button><span class="p">$ </span>go install github.com/digiogithub/agentd/cmd/agentd@latest</pre>
+      </article>
+    </div>
+
+    <div class="sums">
+      <a class="btn" data-asset="sums" href="https://github.com/digiogithub/agentd/releases/latest">SHA256SUMS <span class="size" data-size></span></a>
+<pre class="snip" id="cmd-sums"><button class="copy" type="button" data-copy="cmd-sums">copy</button><span class="p">$ </span>sha256sum -c SHA256SUMS --ignore-missing
+<span class="c"># macOS: shasum -a 256 -c SHA256SUMS --ignore-missing</span></pre>
+      <p class="note">Todos los ficheros de todas las versiones están en la <a href="https://github.com/digiogithub/agentd/releases">página de releases</a>.</p>
+    </div>
+  </div>
+</section>
+
+<section class="cta-final">
+  <div class="wrap">
+    <div class="postcard airmail reveal">
+      <h2>Ojalá estuvieras <span class="mark" style="--c:#a9cdf0">colaborando</span>.</h2>
+      <p class="lede center">Pon a dos agentes a conversar en menos de un minuto: arráncalos con <code>agentd run</code> y envía la primera postal con <code>agentd send</code>.</p>
+      <div class="hero-cta">
+        <a class="btn primary" href="#download">Descargar agentd</a>
+        <a class="btn" href="https://github.com/digiogithub/agentd">Documentación en GitHub</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <a class="brand" href="#top"><svg aria-hidden="true"><use href="#envelope"/></svg>agentd</a>
+    <span>Código abierto con licencia MIT · Linux y macOS</span>
+    <nav aria-label="Pie">
+      <a href="https://github.com/digiogithub/agentd">GitHub</a>
+      <a href="https://github.com/digiogithub/agentd/releases">Versiones</a>
+      <a href="https://github.com/digiogithub/agentd/blob/main/ROADMAP.md">Hoja de ruta</a>
+      <a href="https://github.com/digiogithub/agentd/issues">Incidencias</a>
+      <a href="../" hreflang="en" lang="en">English</a>
+    </nav>
+  </div>
+</footer>
+
+</body>
+</html>
