@@ -448,11 +448,13 @@ func assertCleanRedrawTranscript(t *testing.T, v proto.View, turns, replyLines i
 	}
 	seen := map[string]bool{}
 	hasGap := false
+	segStart := map[int]bool{} // index in got where a segment after a gap starts
 	for _, l := range v.Lines {
 		tx := strings.TrimSpace(l.Text)
 		if l.Role == "gap" {
 			if lossy {
 				hasGap = true
+				segStart[len(got)] = true
 				continue
 			}
 			t.Errorf("gap marker in history: %q", lineTexts(v))
@@ -471,7 +473,7 @@ func assertCleanRedrawTranscript(t *testing.T, v proto.View, turns, replyLines i
 		seen[tx] = true
 		got = append(got, l.Text)
 	}
-	if lossy { // script lines in order, most of the script captured
+	if lossy { // script lines in order within each gap-delimited segment, most of the script captured
 		idx := func(g string) int {
 			for i, w := range want {
 				if strings.HasPrefix(g, w) {
@@ -481,7 +483,12 @@ func assertCleanRedrawTranscript(t *testing.T, v proto.View, turns, replyLines i
 			return -1
 		}
 		prev, hit := -1, map[int]bool{}
-		for _, g := range got {
+		for k, g := range got {
+			// After a gap marker the history re-anchors on whatever the
+			// screen shows, which may repeat earlier script lines.
+			if segStart[k] {
+				prev = -1
+			}
 			if i := idx(g); i >= 0 {
 				if i < prev {
 					t.Fatalf("script line %q out of order\n got %q", g, got)

@@ -22,3 +22,11 @@ and the app works.
 
 Release bundle launched on COSMIC Wayland: main thread in `poll` (not `futex`), X11 window created, the
 maintainer confirmed the app is clickable. `.deb` regenerated (`dist/agentd-app_0.3.0~dev_amd64.deb`).
+
+## CI follow-up (same day)
+
+- `.github/workflows/app.yml` `check` job installs `clang pkg-config libgtk-3-dev libx11-dev libxi-dev`:
+  `flutter test` builds native assets and the `cnativeapi` hook runs `pkg-config gtk+-3.0 x11 xi`.
+- `internal/daemon/view_test.go` `assertCleanRedrawTranscript` (lossy mode): script order is checked per
+  gap-delimited segment. A non-2026 child may get a gap marker, after which the history re-anchors on the
+  current screen and can repeat earlier lines (seen on a GitHub runner, `TestViewRedrawCleanHistory/nosync`).
