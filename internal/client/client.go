@@ -225,6 +225,24 @@ func (c *Client) Ping() (proto.PingResult, error) {
 	return r, err
 }
 
+// Info returns the daemon's host info: version, epoch, profiles, aliases
+// (with source) and harnesses.
+func (c *Client) Info() (proto.InfoResult, error) { return c.InfoFor(nil) }
+
+// InfoFor is Info with the caller's environment ("KEY=VALUE", e.g.
+// os.Environ()): the daemon then lists the aliases a run from that
+// environment would resolve (AGENTD_ALIASES, AGENTD_ALIASES_FILE,
+// XDG_CONFIG_HOME, HOME).
+func (c *Client) InfoFor(envBase []string) (proto.InfoResult, error) {
+	var r proto.InfoResult
+	var args any
+	if len(envBase) > 0 {
+		args = proto.InfoArgs{EnvBase: envBase}
+	}
+	err := c.Call(proto.OpInfo, args, &r)
+	return r, err
+}
+
 // Run starts a session.
 func (c *Client) Run(a proto.RunArgs) (proto.SessionInfo, error) {
 	var r proto.SessionInfo
@@ -260,6 +278,25 @@ func (c *Client) DumpResult(a proto.DumpArgs) (proto.DumpResult, error) {
 	var r proto.DumpResult
 	err := c.Call(proto.OpDump, a, &r)
 	return r, err
+}
+
+// View returns the semantic view of a session. With a current SinceRevision
+// the result has NotModified set and only Name/Epoch/Revision filled.
+func (c *Client) View(a proto.ViewArgs) (proto.View, error) {
+	var v proto.View
+	err := c.Call(proto.OpView, a, &v)
+	if v.NotModified {
+		v.Name = a.Name
+	}
+	return v, err
+}
+
+// ViewAck clears a session's attention flag (humans only) and returns the
+// resulting view revision.
+func (c *Client) ViewAck(name string) (uint64, error) {
+	var r proto.ViewAckResult
+	err := c.Call(proto.OpViewAck, proto.NameArgs{Name: name}, &r)
+	return r.Revision, err
 }
 
 // Type writes raw text into a session, optionally followed by the submit key.
@@ -345,4 +382,21 @@ func (f *frameConn) Read(p []byte) (int, error) { return f.r.Read(p) }
 func IsRemote(err error) bool {
 	var re *proto.RemoteError
 	return errors.As(err, &re)
+}
+
+// ErrorCode returns the structured error code of a daemon-side error (see
+// proto.Code*), or "" when err is not a daemon error, the daemon is old, or
+// the error is unclassified. Treat "" as unclassified/internal.
+func ErrorCode(err error) string { return proto.CodeOf(err) }
+
+// IsCode reports whether err is a daemon error with the given code.
+func IsCode(err error, code string) bool { return code != "" && proto.CodeOf(err) == code }
+
+// Act acts on a session's terminal (prompt, choose, keys, interrupt, cancel).
+// A conflict error carries the fresh view in RemoteError.Data
+// (proto.ActConflict).
+func (c *Client) Act(a proto.ActArgs) (proto.ActResult, error) {
+	var r proto.ActResult
+	err := c.Call(proto.OpAct, a, &r)
+	return r, err
 }

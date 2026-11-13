@@ -35,11 +35,14 @@ type Deliverer interface {
 
 // Server is the agentd daemon.
 type Server struct {
-	Cfg      *config.Config
-	Aliases  *config.Aliases
-	Store    *mailbox.Store
-	Log      *slog.Logger
-	Delivery Deliverer
+	Cfg     *config.Config
+	Aliases *config.Aliases
+	// AliasesLoader, if set, re-reads the aliases on every run/info (see
+	// currentAliases); Aliases is the fallback when a reload fails.
+	AliasesLoader func(getenv func(string) string) (*config.Aliases, error)
+	Store         *mailbox.Store
+	Log           *slog.Logger
+	Delivery      Deliverer
 
 	// SocketPath is where Listen binds; "" means config.SocketPath().
 	SocketPath string
@@ -55,6 +58,9 @@ type Server struct {
 	AttachWriteTimeout time.Duration
 	// Clock drives mailbox retention and purge's older_than (nil = real time).
 	Clock Clock
+	// HeartbeatInterval is the period of heartbeat events on subscribe
+	// streams (0 = DefaultHeartbeat). Set before Serve.
+	HeartbeatInterval time.Duration
 
 	mu       sync.Mutex
 	sessions map[string]*entry
@@ -64,6 +70,8 @@ type Server struct {
 	conns    map[net.Conn]struct{}
 	ln       net.Listener
 	closing  bool
+	epoch    string
+	bus      *bus
 
 	lockFile *os.File    // exclusive flock on <socketdir>/agentd.lock, held for the daemon's lifetime
 	sockInfo os.FileInfo // the socket file as bound, to unlink only our own on shutdown
@@ -87,6 +95,7 @@ func New(cfg *config.Config, aliases *config.Aliases, store *mailbox.Store, log 
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
+	epoch := newEpoch()
 	return &Server{
 		Cfg:      cfg,
 		Aliases:  aliases,
@@ -96,6 +105,8 @@ func New(cfg *config.Config, aliases *config.Aliases, store *mailbox.Store, log 
 		starting: make(map[string]proto.SessionInfo),
 		conns:    make(map[net.Conn]struct{}),
 		done:     make(chan struct{}),
+		epoch:    epoch,
+		bus:      newBus(epoch),
 	}
 }
 
@@ -393,6 +404,7 @@ func (s *Server) Shutdown() {
 		if ln != nil {
 			_ = ln.Close()
 		}
+		s.bus.close() // subscribers say bye before their connections are closed
 		for _, c := range conns {
 			_ = c.Close()
 		}
@@ -408,6 +420,9 @@ func (s *Server) Shutdown() {
 			go func() {
 				defer wg.Done()
 				_ = e.sess.Close()
+				if e.view != nil {
+					e.view.shutdown()
+				}
 			}()
 		}
 		wg.Wait()
@@ -448,6 +463,18 @@ func (s *Server) Done() <-chan struct{} { return s.done }
 type entry struct {
 	sess    *session.Session
 	profile config.Profile
+	// baseCols/baseRows is the size the session started with (profile size
+	// unless run gave one); restore says whether the last client's detach
+	// resizes back to it ([run] restore_size_on_detach).
+	baseCols, baseRows uint16
+	restore            bool
+
+	// view is the semantic view state and its watcher (view.go).
+	view *viewState
+
+	// exitPub is closed once session.exited was published, so that rm can
+	// order session.removed after it. nil = nothing to wait for.
+	exitPub chan struct{}
 
 	mu      sync.Mutex
 	clients map[*attachClient]struct{}
@@ -464,9 +491,9 @@ func (s *Server) lookup(name string) (*entry, error) {
 	e, ok := s.sessions[name]
 	if !ok {
 		if _, starting := s.starting[name]; starting {
-			return nil, fmt.Errorf("session %q is starting", name)
+			return nil, proto.Errorf(proto.CodeStarting, "session %q is starting", name)
 		}
-		return nil, fmt.Errorf("no such session %q", name)
+		return nil, proto.Errorf(proto.CodeNotFound, "no such session %q", name)
 	}
 	return e, nil
 }
@@ -534,6 +561,11 @@ func (e *entry) removeClient(c *attachClient) {
 	}
 	if len(e.clients) == 0 {
 		e.sess.SetReplyForwarding(true)
+		if e.restore && e.baseCols > 0 && e.baseRows > 0 && e.sess.State() == session.StateRunning {
+			if cols, rows := e.sess.Size(); cols != e.baseCols || rows != e.baseRows {
+				_ = e.sess.Resize(e.baseCols, e.baseRows)
+			}
+		}
 	}
 }
 

@@ -1,0 +1,24 @@
+{
+  "Cols": 120,
+  "Rows": 40,
+  "CursorX": 0,
+  "CursorY": 10,
+  "CursorHidden": true,
+  "AltScreen": false,
+  "AppCursor": false,
+  "BracketedPaste": true,
+  "Bells": 0,
+  "Notifies": 0,
+  "Lines": [
+    "fakeagent ready",
+    "╭──────────────────────────────────────────────────────────╮",
+    "│ Do you want to proceed?                                  │",
+    "│                                                          │",
+    "│   1. Yes                                                 │",
+    "│ ❯ 2. Yes, and don't ask again                            │",
+    "│   3. No, and tell the agent what to do differently       │",
+    "│                                                          │",
+    "╰──────────────────────────────────────────────────────────╯",
+    " Enter to confirm · Esc to cancel"
+  ]
+}

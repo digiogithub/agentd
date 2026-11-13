@@ -1,0 +1,14 @@
+{
+  "cols": 120,
+  "rows": 40,
+  "profile": "default",
+  "description": "numbered menu, pointer moved to item 2 by a digit (-digitmove)",
+  "frames": [
+    153
+  ],
+  "cmd": [
+    "fakeagent",
+    "-numbered",
+    "-digitmove"
+  ]
+}

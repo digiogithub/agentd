@@ -25,6 +25,12 @@ const (
 	DefaultSubmit        = "\r"
 	DefaultSubmitDelayMS = 150
 	DefaultInlineMax     = 400
+	// DefaultCols and DefaultRows are the fixed PTY size of daemon-started
+	// sessions (profile cols/rows); see AGENTS.md "PTY size".
+	DefaultCols = 160
+	DefaultRows = 50
+	// MaxPTYDim bounds profile cols/rows.
+	MaxPTYDim = 1000
 )
 
 // ProfileConfig is a partial profile as written in config.toml. Nil fields
@@ -36,6 +42,10 @@ type ProfileConfig struct {
 	Submit        *string `toml:"submit"`
 	SubmitDelayMS *int    `toml:"submit_delay_ms"`
 	InlineMax     *int    `toml:"inline_max"`
+	// Cols and Rows are the fixed PTY size of sessions started without an
+	// explicit size (default 160x50).
+	Cols *int `toml:"cols"`
+	Rows *int `toml:"rows"`
 
 	// Ghost text (suggested prompt / placeholder) classification, see
 	// AGENTS.md "Ghost text" and docs/ghost-text.md.
@@ -43,6 +53,18 @@ type ProfileConfig struct {
 	GhostColors        *[]string `toml:"ghost_colors"`
 	GhostRightOfCursor *bool     `toml:"ghost_right_of_cursor"`
 	PromptMarker       *string   `toml:"prompt_marker"`
+
+	// Menu / option detection keys (menu_*), see menu.go.
+	MenuConfig
+
+	// Region / reflow keys (rule_chars, input_bg_colors, ...), see regions.go.
+	RegionConfig
+
+	// Status classifier key (waiting_regex), see status.go.
+	StatusConfig
+
+	// Act key lists (interrupt_keys, cancel_keys), see actkeys.go.
+	ActConfig
 }
 
 // DefaultLogMaxMB is the default session log cap ([run] log_max_mb).
@@ -57,6 +79,16 @@ type RunConfig struct {
 	// LogMaxMB caps each session log (rotated once to <log>.1); nil means
 	// DefaultLogMaxMB, 0 disables the cap.
 	LogMaxMB *int `toml:"log_max_mb"`
+	// RestoreSizeOnDetach resizes a session back to its start size (the
+	// profile's cols/rows unless `run` gave one) when the last attached client
+	// detaches; nil means true.
+	RestoreSizeOnDetach *bool `toml:"restore_size_on_detach"`
+}
+
+// RestoreSize reports whether sessions are resized back when the last client
+// detaches (default true).
+func (r RunConfig) RestoreSize() bool {
+	return r.RestoreSizeOnDetach == nil || *r.RestoreSizeOnDetach
 }
 
 // LogMaxBytes returns the session log cap in bytes (0 = no cap).
@@ -192,6 +224,8 @@ type Config struct {
 	Run RunConfig `toml:"run"`
 	// Mailbox holds message retention settings ([mailbox]).
 	Mailbox MailboxConfig `toml:"mailbox"`
+	// API holds the HTTP gateway settings ([api], see api.go).
+	API APIConfig `toml:"api"`
 
 	// Path is the file the config was loaded from ("" for defaults).
 	Path string `toml:"-"`
@@ -206,6 +240,9 @@ type Security struct {
 	// AgentType allows sessions (agents) to use the type op on other
 	// sessions. Default false: only humans may type into another session.
 	AgentType bool `toml:"agent_type"`
+	// AgentView allows sessions (agents) to use the view op on other
+	// sessions. Default false: only humans may view another session.
+	AgentView bool `toml:"agent_view"`
 }
 
 // Profile is a fully resolved harness profile.
@@ -217,6 +254,9 @@ type Profile struct {
 	Submit        string
 	SubmitDelayMS int
 	InlineMax     int
+	// Cols and Rows are the fixed PTY size for sessions started without an
+	// explicit size.
+	Cols, Rows int
 	// Prompt is PromptRegex compiled; nil when PromptRegex is empty.
 	Prompt *regexp.Regexp
 
@@ -233,6 +273,15 @@ type Profile struct {
 	GhostRightOfCursor bool
 	// PromptMarker is the harness's input prompt glyph ("❯", "›"); "" = none.
 	PromptMarker string
+
+	// Menu holds the resolved menu_* keys (option detection).
+	Menu MenuProfile
+	// Regions holds the resolved region / reflow keys.
+	Regions RegionProfile
+	// Status holds the resolved status classifier keys.
+	Status StatusProfile
+	// Act holds the resolved interrupt / cancel key lists.
+	Act ActProfile
 }
 
 // Idle returns IdleMS as a duration.
@@ -275,20 +324,32 @@ var builtinProfiles = map[string]ProfileConfig{
 		Submit:             strp(DefaultSubmit),
 		SubmitDelayMS:      intp(DefaultSubmitDelayMS),
 		InlineMax:          intp(DefaultInlineMax),
+		Cols:               intp(DefaultCols),
+		Rows:               intp(DefaultRows),
 		GhostFaint:         boolp(true),
 		GhostColors:        strsp(nil),
 		GhostRightOfCursor: boolp(false),
 		PromptMarker:       strp(""),
+		MenuConfig:         defaultMenuConfig(),
+		RegionConfig:       defaultRegionConfig(),
+		StatusConfig:       defaultStatusConfig(),
+		ActConfig:          defaultActConfig(),
 	},
 	"claude": {
 		PromptRegex:        strp(`(?m)^❯([ \x{a0}]|$)`),
 		GhostRightOfCursor: boolp(true),
 		PromptMarker:       strp("❯"),
+		MenuConfig:         MenuConfig{MenuPointers: strsp([]string{"❯"}), MenuDigitAction: strp(MenuDigitSelect)}, // digit action to confirm (F8)
+		ActConfig:          ActConfig{InterruptKeys: strsp([]string{"esc"})},                                       // to confirm (F8)
 	},
 	"codex": {
 		PromptRegex:        strp(`(?m)^›( |$)`),
 		GhostRightOfCursor: boolp(true),
 		PromptMarker:       strp("›"),
+		MenuConfig:         MenuConfig{MenuPointers: strsp([]string{"›"}), MenuDigitAction: strp(MenuDigitSelect)}, // digit action to confirm (F8)
+		ActConfig:          ActConfig{InterruptKeys: strsp([]string{"esc"})},                                       // to confirm (F8)
+		// Codex draws its input row on a #1e1e1e background (docs/ghost-text.md).
+		RegionConfig: RegionConfig{InputBgColors: strsp([]string{"#1e1e1e"})},
 	},
 	"pando": {},
 }
@@ -352,6 +413,10 @@ func (c *Config) init() error {
 	if err := c.Mailbox.validate(); err != nil {
 		return err
 	}
+	c.API.applyDefaults()
+	if err := c.API.Validate(); err != nil {
+		return err
+	}
 	for name, pc := range c.Profiles {
 		if err := pc.validate(); err != nil {
 			return fmt.Errorf("profiles.%s: %w", name, err)
@@ -375,7 +440,7 @@ func (c *Config) init() error {
 			return err
 		}
 	}
-	return nil
+	return c.validateAPIHarnesses()
 }
 
 func (pc ProfileConfig) validate() error {
@@ -392,6 +457,14 @@ func (pc ProfileConfig) validate() error {
 			return fmt.Errorf("%s must be >= 0, got %d", f.key, *f.v)
 		}
 	}
+	for _, f := range []struct {
+		key string
+		v   *int
+	}{{"cols", pc.Cols}, {"rows", pc.Rows}} {
+		if f.v != nil && (*f.v < 1 || *f.v > MaxPTYDim) {
+			return fmt.Errorf("%s must be between 1 and %d, got %d", f.key, MaxPTYDim, *f.v)
+		}
+	}
 	if pc.GhostColors != nil {
 		if _, err := termcolor.ParseAll(*pc.GhostColors); err != nil {
 			return fmt.Errorf("ghost_colors: %w", err)
@@ -399,6 +472,18 @@ func (pc ProfileConfig) validate() error {
 	}
 	if pc.PromptMarker != nil && strings.ContainsAny(*pc.PromptMarker, "\r\n") {
 		return errors.New("prompt_marker must be a single line")
+	}
+	if err := pc.MenuConfig.validate(); err != nil {
+		return err
+	}
+	if err := pc.ActConfig.validate(); err != nil {
+		return err
+	}
+	if err := pc.StatusConfig.validate(); err != nil {
+		return err
+	}
+	if err := pc.RegionConfig.validate(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -426,6 +511,8 @@ func (c *Config) resolve(name string) error {
 		Submit:        *pc.Submit,
 		SubmitDelayMS: *pc.SubmitDelayMS,
 		InlineMax:     *pc.InlineMax,
+		Cols:          *pc.Cols,
+		Rows:          *pc.Rows,
 
 		GhostFaint:         *pc.GhostFaint,
 		GhostColors:        append([]string(nil), *pc.GhostColors...),
@@ -437,6 +524,25 @@ func (c *Config) resolve(name string) error {
 		return fmt.Errorf("profiles.%s: ghost_colors: %w", name, err)
 	}
 	p.GhostColorSpecs = specs
+	menu, err := pc.MenuConfig.resolve()
+	if err != nil {
+		return fmt.Errorf("profiles.%s: %w", name, err)
+	}
+	if menu.Submit == "" {
+		menu.Submit = p.Submit // menu_submit "" = the profile's submit key
+	}
+	p.Menu = menu
+	regions, err := pc.RegionConfig.resolve()
+	if err != nil {
+		return fmt.Errorf("profiles.%s: %w", name, err)
+	}
+	p.Regions = regions
+	status, err := pc.StatusConfig.resolve()
+	if err != nil {
+		return fmt.Errorf("profiles.%s: %w", name, err)
+	}
+	p.Status = status
+	p.Act = pc.ActConfig.resolve()
 	if p.PromptRegex != "" {
 		re, err := regexp.Compile(p.PromptRegex)
 		if err != nil {
@@ -467,6 +573,12 @@ func (pc *ProfileConfig) merge(o ProfileConfig) {
 	if o.InlineMax != nil {
 		pc.InlineMax = o.InlineMax
 	}
+	if o.Cols != nil {
+		pc.Cols = o.Cols
+	}
+	if o.Rows != nil {
+		pc.Rows = o.Rows
+	}
 	if o.GhostFaint != nil {
 		pc.GhostFaint = o.GhostFaint
 	}
@@ -479,6 +591,10 @@ func (pc *ProfileConfig) merge(o ProfileConfig) {
 	if o.PromptMarker != nil {
 		pc.PromptMarker = o.PromptMarker
 	}
+	pc.MenuConfig.merge(o.MenuConfig)
+	pc.RegionConfig.merge(o.RegionConfig)
+	pc.StatusConfig.merge(o.StatusConfig)
+	pc.ActConfig.merge(o.ActConfig)
 }
 
 // Profile returns the resolved profile for name. An empty or unknown name
@@ -496,6 +612,9 @@ func (c *Config) Profile(name string) Profile {
 	cp := *p
 	cp.GhostColors = append([]string(nil), p.GhostColors...)
 	cp.GhostColorSpecs = append([]termcolor.Spec(nil), p.GhostColorSpecs...)
+	cp.Menu = p.Menu.clone()
+	cp.Regions = p.Regions.clone()
+	cp.Act = p.Act.clone()
 	return cp
 }
 
@@ -532,4 +651,24 @@ func (c *Config) Allowed(recipient, sender string) bool {
 		}
 	}
 	return false
+}
+
+// ProfileNames returns the names of every profile (built-in and defined in
+// the file, "default" included), sorted.
+func (c *Config) ProfileNames() []string {
+	seen := map[string]bool{}
+	for n := range builtinProfiles {
+		seen[n] = true
+	}
+	if c != nil {
+		for n := range c.Profiles {
+			seen[n] = true
+		}
+	}
+	names := make([]string, 0, len(seen))
+	for n := range seen {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }

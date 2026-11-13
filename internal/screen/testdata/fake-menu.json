@@ -1,0 +1,14 @@
+{
+  "cols": 120,
+  "rows": 40,
+  "profile": "default",
+  "description": "pointer menu, pointer moved down once (Beta selected)",
+  "frames": [
+    86
+  ],
+  "cmd": [
+    "fakeagent",
+    "-menu",
+    "Alpha|Beta|Gamma"
+  ]
+}

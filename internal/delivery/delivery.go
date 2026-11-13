@@ -57,9 +57,9 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"github.com/digiogithub/agentd/internal/config"
+	"github.com/digiogithub/agentd/internal/inject"
 	"github.com/digiogithub/agentd/internal/mailbox"
 	"github.com/digiogithub/agentd/internal/session"
 )
@@ -76,18 +76,15 @@ const MinBoot = 3 * time.Second
 
 // DraftTimeout is how long a pending human draft blocks injection; an older
 // draft is considered abandoned.
-const DraftTimeout = 10 * time.Minute
+const DraftTimeout = inject.DraftTimeout
 
 // PasteVerifyTimeout bounds how long inject waits for the pasted notice to
 // show up on the (ghost-filtered) screen before giving up without submitting.
-const PasteVerifyTimeout = time.Second
-
-// pastePoll is the polling interval of the paste verification.
-const pastePoll = 25 * time.Millisecond
+const PasteVerifyTimeout = inject.PasteVerifyTimeout
 
 // ErrPasteNotVisible is returned by an injection whose pasted notice never
 // appeared on screen; nothing was submitted.
-var ErrPasteNotVisible = errors.New("pasted notice not visible on screen; not submitted")
+var ErrPasteNotVisible = inject.ErrPasteNotVisible
 
 // Input states reported by InputState.
 const (
@@ -134,6 +131,9 @@ type Loop struct {
 	Now func() time.Time
 	// Cooldown overrides the default cooldown max(MinCooldown, 4×idle).
 	Cooldown time.Duration
+	// OnDelivered, if set, is called after an injected message was marked
+	// delivered. It must not block.
+	OnDelivered func(m mailbox.Message)
 
 	once sync.Once
 	kick chan struct{}
@@ -273,14 +273,7 @@ func (l *Loop) prune(queued []string) {
 // GhostOpts returns the screen options that hide the ghost text of profile
 // p's harness (ghost_faint, ghost_colors, ghost_right_of_cursor,
 // prompt_marker).
-func GhostOpts(p config.Profile) session.ScreenOpts {
-	return session.ScreenOpts{HideGhost: true, Ghost: session.GhostRules{
-		Faint:         p.GhostFaint,
-		Colors:        p.GhostColorSpecs,
-		RightOfCursor: p.GhostRightOfCursor,
-		PromptMarker:  p.PromptMarker,
-	}}
-}
+func GhostOpts(p config.Profile) session.ScreenOpts { return inject.GhostOpts(p) }
 
 // InputState classifies t's input line under profile p at time now:
 // InputDraft when a human typed something not yet submitted (younger than
@@ -310,7 +303,7 @@ func Idle(t Target, p config.Profile, now time.Time) bool {
 	if now.Sub(t.StartedAt()) < max(p.Idle(), MinBoot) {
 		return false
 	}
-	if now.Sub(t.LastHumanInput()) < p.HumanGrace() {
+	if now.Sub(lastInput(t)) < p.HumanGrace() {
 		return false
 	}
 	if d := t.HumanDraftSince(); !d.IsZero() && now.Sub(d) < DraftTimeout {
@@ -367,6 +360,9 @@ func (l *Loop) deliver(ctx context.Context, name string, rs *recState) {
 		return
 	}
 	err = l.inject(ctx, tgt, prof, m, log)
+	if errors.Is(err, errNotIdle) {
+		return // guard refused before anything was written: not an attempt
+	}
 	l.mu.Lock()
 	rs.attempt = l.now()
 	rs.cooldown = l.CooldownFor(prof)
@@ -386,61 +382,38 @@ func (l *Loop) deliver(ctx context.Context, name string, rs *recState) {
 		return
 	}
 	log.Info("delivery: injected")
+	if l.OnDelivered != nil {
+		l.OnDelivered(m)
+	}
 }
 
-// inject pastes the notice, verifies that it landed in the input line,
-// waits the rest of the submit delay and writes the submit sequence.
+// inject pastes the notice through the shared safe-input path (see
+// internal/inject): human re-check before the paste (abort), paste
+// verification, submit delay and submit.
 func (l *Loop) inject(ctx context.Context, tgt Target, p config.Profile, m mailbox.Message, log *slog.Logger) error {
-	human := tgt.LastHumanInput()
-	pasted := time.Now()
-	if err := tgt.Paste(FormatNotice(m, p)); err != nil {
-		return err
-	}
-	// Never submit unless the paste is visible: Enter on an empty input line
-	// may submit the harness's suggested prompt instead.
-	needle := noticePrefix(m)
-	opts := GhostOpts(p)
-	for {
-		scr, _ := tgt.ScreenFiltered(opts)
-		if PasteVisible(scr, needle) {
-			break
-		}
-		if time.Since(pasted) >= PasteVerifyTimeout {
-			return ErrPasteNotVisible
-		}
-		if err := sleepCtx(ctx, pastePoll); err != nil {
-			return err
-		}
-	}
-	if err := sleepCtx(ctx, p.SubmitDelay()-time.Since(pasted)); err != nil {
-		return err
-	}
-	if tgt.LastHumanInput().After(human) {
+	start := l.now()
+	res, err := inject.Input(ctx, tgt, p, inject.Request{
+		Text:   FormatNotice(m, p),
+		Needle: noticePrefix(m),
+		Submit: true,
+		Guard: func() error {
+			// A human may have started typing since the idle check.
+			if lastInput(tgt).After(start) || !Idle(tgt, p, l.now()) {
+				return errNotIdle
+			}
+			return nil
+		},
+	})
+	if res.HumanRaced {
 		// Trade-off documented in the package comment: the paste is in, so
 		// submit anyway rather than leave it glued to the human's next input.
 		log.Warn("delivery: human typed during the submit delay; submitting anyway")
 	}
-	submit := p.Submit
-	if submit == "" {
-		submit = config.DefaultSubmit
-	}
-	_, err := tgt.Write([]byte(submit), false)
 	return err
 }
 
-func sleepCtx(ctx context.Context, d time.Duration) error {
-	if d <= 0 {
-		return ctx.Err()
-	}
-	tm := time.NewTimer(d)
-	defer tm.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-tm.C:
-		return nil
-	}
-}
+// errNotIdle aborts an injection whose target stopped being idle.
+var errNotIdle = errors.New("target no longer idle")
 
 // noticePrefix is the start of m's notice, used to verify a paste.
 func noticePrefix(m mailbox.Message) string {
@@ -450,15 +423,14 @@ func noticePrefix(m mailbox.Message) string {
 // PasteVisible reports whether needle appears in screen, ignoring all
 // whitespace (including no-break spaces and line breaks), so a notice that
 // the harness wrapped or indented over several rows still matches.
-func PasteVisible(screen, needle string) bool {
-	return strings.Contains(stripSpace(screen), stripSpace(needle))
-}
+func PasteVisible(screen, needle string) bool { return inject.PasteVisible(screen, needle) }
 
-func stripSpace(s string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsSpace(r) || r == '\u00a0' {
-			return -1
-		}
-		return r
-	}, s)
+// lastInput is the latest input activity on t: a real human keystroke or, for
+// targets that track it (*session.Session), keys written by the act op.
+func lastInput(t Target) time.Time {
+	last := t.LastHumanInput()
+	if a, ok := t.(interface{ LastActInput() time.Time }); ok && a.LastActInput().After(last) {
+		last = a.LastActInput()
+	}
+	return last
 }

@@ -1,0 +1,14 @@
+{
+  "cols": 120,
+  "rows": 40,
+  "profile": "default",
+  "description": "boxed permission-style dialog with numbered options",
+  "frames": [
+    865
+  ],
+  "cmd": [
+    "fakeagent",
+    "-dialog",
+    "-digitmove"
+  ]
+}

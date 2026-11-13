@@ -3,11 +3,14 @@ package proto
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRequestRoundTrip(t *testing.T) {
@@ -227,4 +230,120 @@ func FuzzReadFrame(f *testing.F) {
 			}
 		}
 	})
+}
+
+func TestCodedErrorRoundTrip(t *testing.T) {
+	err := Errorf(CodeNotFound, "no such session %q", "x")
+	resp := ErrorResponse(fmt.Errorf("wrapped: %w", err))
+	if resp.OK || resp.Code != CodeNotFound || resp.Error != `wrapped: no such session "x"` {
+		t.Fatalf("resp = %+v", resp)
+	}
+	var buf bytes.Buffer
+	c := NewCodec(&buf)
+	if err := c.WriteResponse(resp); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `"code":"not_found"`) {
+		t.Fatalf("wire = %s", buf.String())
+	}
+	got, err2 := c.ReadResponse()
+	if err2 != nil {
+		t.Fatal(err2)
+	}
+	derr := got.Decode(nil)
+	var re *RemoteError
+	if !errors.As(derr, &re) || re.Code != CodeNotFound || re.Msg != resp.Error || CodeOf(derr) != CodeNotFound {
+		t.Fatalf("decoded = %#v", derr)
+	}
+}
+
+func TestCodedErrorData(t *testing.T) {
+	resp := ErrorResponse(&CodedError{Code: CodeConflict, Msg: "stale", Data: map[string]int{"revision": 7}})
+	if string(resp.Data) != `{"revision":7}` {
+		t.Fatalf("data = %s", resp.Data)
+	}
+	var re *RemoteError
+	if !errors.As(resp.Decode(nil), &re) || string(re.Data) != `{"revision":7}` {
+		t.Fatalf("remote = %#v", re)
+	}
+}
+
+func TestUncodedErrorAndOldClients(t *testing.T) {
+	resp := ErrorResponse(errors.New("boom"))
+	if resp.Code != "" {
+		t.Fatalf("code = %q", resp.Code)
+	}
+	b, _ := json.Marshal(resp)
+	if strings.Contains(string(b), "code") {
+		t.Fatalf("uncoded response carries a code: %s", b)
+	}
+	// An old daemon response (no code) decodes with an empty code.
+	var old Response
+	if err := json.Unmarshal([]byte(`{"ok":false,"error":"nope"}`), &old); err != nil {
+		t.Fatal(err)
+	}
+	if CodeOf(old.Decode(nil)) != "" {
+		t.Fatal("expected empty code")
+	}
+	// An old client struct (without Code) still reads the error text.
+	var legacy struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	cb, _ := json.Marshal(ErrorResponse(Errorf(CodeBusy, "busy")))
+	if err := json.Unmarshal(cb, &legacy); err != nil || legacy.Error != "busy" {
+		t.Fatalf("legacy = %+v err=%v", legacy, err)
+	}
+	if WithCode(CodeInvalid, nil) != nil {
+		t.Fatal("WithCode(nil)")
+	}
+	if got := CodeOf(WithCode(CodeInvalid, Errorf(CodeBusy, "x"))); got != CodeBusy {
+		t.Fatalf("WithCode must keep the existing code, got %q", got)
+	}
+}
+
+func TestCodedErrorWrap(t *testing.T) {
+	cause := errors.New("boom")
+	err := Errorf(CodeTimeout, "write: %w", cause)
+	if !errors.Is(err, cause) || err.Error() != "write: boom" || CodeOf(err) != CodeTimeout {
+		t.Fatalf("Errorf %%w: %v", err)
+	}
+	if plain := Errorf(CodeInvalid, "x %d", 1); errors.Unwrap(plain) != nil {
+		t.Fatal("no %w must not wrap")
+	}
+	w := WithCode(CodeBusy, cause)
+	if !errors.Is(w, cause) || CodeOf(w) != CodeBusy {
+		t.Fatalf("WithCode: %v", w)
+	}
+}
+
+func TestViewWireShape(t *testing.T) {
+	b, err := json.Marshal(ViewNotModified{NotModified: true, Epoch: "e1", Revision: 7})
+	if err != nil || string(b) != `{"not_modified":true,"epoch":"e1","revision":7}` {
+		t.Fatalf("not modified = %s, %v", b, err)
+	}
+	from := 3
+	args, _ := json.Marshal(ViewArgs{Name: "a", FromLine: &from})
+	if string(args) != `{"name":"a","from_line":3}` {
+		t.Fatalf("args = %s", args)
+	}
+	v := View{Name: "a", Status: "waiting", Options: []ViewOption{{ID: "o1", Label: "Yes", Index: 1, Kind: "numbered"}}}
+	b, _ = json.Marshal(v)
+	if strings.Contains(string(b), "keys") || strings.Contains(string(b), "submit") {
+		t.Fatalf("view leaks key sequences: %s", b)
+	}
+}
+
+func TestEventJSONShape(t *testing.T) {
+	ev := Event{Seq: 7, Epoch: "e", Kind: EvStatusChanged, Session: "a", Time: time.Unix(0, 0).UTC()}
+	ev.Data, _ = json.Marshal(StatusChangedData{Status: "idle", Attention: true, Revision: 3})
+	b, _ := json.Marshal(ev)
+	want := `{"seq":7,"epoch":"e","time":"1970-01-01T00:00:00Z","kind":"status.changed","session":"a","data":{"status":"idle","attention":true,"revision":3}}`
+	if string(b) != want {
+		t.Fatalf("got %s\nwant %s", b, want)
+	}
+	hb, _ := json.Marshal(Event{Kind: EvHeartbeat})
+	if strings.Contains(string(hb), `"data"`) || strings.Contains(string(hb), `"session"`) {
+		t.Fatalf("heartbeat carries empty fields: %s", hb)
+	}
 }

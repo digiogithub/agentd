@@ -1,0 +1,1198 @@
+openapi: 3.1.0
+info:
+  title: agentd HTTP API
+  version: 0.1.0-draft
+  summary: HTTP/JSON + SSE gateway (`agentd serve`) in front of the agentd daemon.
+  description: |
+    Draft contract for `agentd serve` (docs/design/api/http-api.md). The gateway talks to the
+    daemon over its unix socket as `human:<user>`; clients authenticate to the gateway with device
+    tokens (docs/design/api/security-remote.md).
+
+    Schemas marked "owned by semantic-model.md" or "owned by daemon-ops.md" mirror sibling design
+    pages; when those pages change, this file follows them.
+
+    Every operation declares its minimum token scope in `x-agentd-scope` (`none`, `read`, `write`,
+    `admin`; `read` ⊂ `write` ⊂ `admin`). Contract tests assert that the handlers' route table
+    matches `paths` and these scopes.
+
+    Hardening that applies to every operation (security-remote.md §1, §5): an unknown `Host` is
+    `421 misdirected_request` before authentication; a request carrying an `Origin` that is not in
+    `[api] cors_origins` (default none; `Origin: null` never) is `403`; requests with a body must be
+    `application/json` (`415`); responses carry `X-Content-Type-Options: nosniff`,
+    `Referrer-Policy: no-referrer` and JSON ones `Cache-Control: no-store`; per-device rate limits and a
+    per-address limit on failed authentication answer `429` with `Retry-After`; daemon-side internal errors
+    are `500 internal` with a generic message. Side effects (`run`, `act`, `kill`, `rm`, `send`, `reply`,
+    `view/ack`, pairing, device add/revoke) are written to the audit log `api/audit.log` (JSONL, no prompt
+    or message text).
+  license:
+    name: MIT
+servers:
+  - url: http://127.0.0.1:7477
+    description: Default loopback listener
+security:
+  - deviceToken: []
+tags:
+  - name: host
+  - name: sessions
+  - name: view
+  - name: terminal
+  - name: events
+  - name: mailbox
+
+paths:
+  /v1/health:
+    get:
+      tags: [host]
+      operationId: getHealth
+      summary: Liveness of the gateway and reachability of the daemon
+      security: []
+      x-agentd-scope: none
+      responses:
+        "200":
+          description: Gateway up and daemon reachable
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { type: boolean, const: true }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /v1/pair:
+    post:
+      tags: [host]
+      operationId: pairDevice
+      summary: Exchange a one-time pairing code for a device token (long poll until the host approves)
+      description: |
+        Unauthenticated (the code is the credential). Mounted by `agentd serve` through
+        `httpapi.Server.AddRoute` (internal/apitoken), not part of the base route table, so it carries
+        `x-agentd-pairing` instead of `x-agentd-scope` (the route/OpenAPI contract test only tracks base routes).
+        The request is held open (up to the 5-minute life of the code) until the host answers
+        `Approve? [y/N]` in `agentd serve pair`. The code is single use and burned after 5 failed attempts;
+        at most 10 requests per minute per remote address, and 20 failures in 10 minutes lock pairing for
+        10 minutes (429 with Retry-After). Issues a token with the scope chosen by the host (default `write`).
+      security: []
+      x-agentd-pairing: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code, name]
+              properties:
+                code: { type: string, description: "12 Crockford base32 symbols, dashes optional (XXXX-XXXX-XXXX)." }
+                name: { type: string, minLength: 1, maxLength: 64, description: Device name shown to the host. }
+                platform: { type: string, maxLength: 32, examples: [android, linux, macos] }
+      responses:
+        "201":
+          description: Paired; the token is shown only once
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, device_id, scope]
+                properties:
+                  token: { type: string, description: "agd_<id>_<secret>" }
+                  device_id: { type: string }
+                  scope: { type: string, enum: [read, write, admin] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403":
+          description: "`pairing_invalid` (wrong, expired, used or burned code) or `pairing_denied` (host answered no)"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "410":
+          description: "`pairing_expired`: the code expired, was cancelled on the host or the request was abandoned"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          description: "`rate_limited`: per-address limit or global lockout; see Retry-After"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /v1/info:
+    get:
+      tags: [host]
+      operationId: getInfo
+      summary: Host, versions, identity, harnesses, profiles and project aliases
+      x-agentd-scope: read
+      responses:
+        "200":
+          description: Host information
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Info" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /v1/sessions:
+    get:
+      tags: [sessions]
+      operationId: listSessions
+      summary: List sessions with status and a short preview
+      x-agentd-scope: read
+      parameters:
+        - $ref: "#/components/parameters/IfNoneMatch"
+      responses:
+        "200":
+          description: Sessions sorted by name
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessions]
+                properties:
+                  sessions:
+                    type: array
+                    items: { $ref: "#/components/schemas/SessionSummary" }
+        "304": { description: Not modified }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    post:
+      tags: [sessions]
+      operationId: runSession
+      summary: Start an agent session on the daemon host
+      description: |
+        Mirrors `agentd run <alias|path> --harness H`. `cmd`, `args` and `env` choose what the daemon
+        executes and require the `admin` scope;
+        `harness` outside `[api] run_harnesses` requires `admin`. The PTY size is never set by the
+        API (profile default).
+      x-agentd-scope: write
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RunRequest" }
+            examples:
+              alias:
+                value: { target: webapp, harness: codex }
+              path:
+                description: "`args` (like `cmd` and `env`) need the admin scope."
+                value: { target: /home/user/src/api, harness: claude, name: "claude@api", args: ["--continue"] }
+      responses:
+        "201":
+          description: Session started (state `starting` or `running`)
+          headers:
+            Location:
+              schema: { type: string }
+              description: URL of the new session
+            Idempotent-Replayed: { $ref: "#/components/headers/IdempotentReplayed" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionSummary" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "422": { $ref: "#/components/responses/IdempotencyMismatch" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /v1/sessions/{name}:
+    parameters:
+      - $ref: "#/components/parameters/SessionName"
+    get:
+      tags: [sessions]
+      operationId: getSession
+      summary: One session
+      x-agentd-scope: read
+      responses:
+        "200":
+          description: The session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionSummary" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    delete:
+      tags: [sessions]
+      operationId: removeSession
+      summary: Remove an exited session (force = kill then remove)
+      x-agentd-scope: write
+      parameters:
+        - name: force
+          in: query
+          schema: { type: boolean, default: false }
+          description: Send TERM, wait up to 3 s, then KILL, then remove (`kill --rm`).
+      responses:
+        "204": { description: Removed }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /v1/sessions/{name}/kill:
+    parameters:
+      - $ref: "#/components/parameters/SessionName"
+    post:
+      tags: [sessions]
+      operationId: killSession
+      summary: Signal a session's process
+      x-agentd-scope: write
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                signal:
+                  type: string
+                  default: TERM
+                  description: Signal name (`TERM`, `SIGKILL`) or number.
+                  examples: [TERM, INT, KILL, "9"]
+      responses:
+        "202":
+          description: Signal sent; the exit is reported as `session.exited` on /v1/events
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionSummary" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /v1/sessions/{name}/view:
+    parameters:
+      - $ref: "#/components/parameters/SessionName"
+    get:
+      tags: [view]
+      operationId: getView
+      summary: Semantic view (L1) of a session
+      description: |
+        Without `since`: the full View. With `since` equal to the current revision:
+        `{unchanged: true, revision, epoch}`. With an older `since`: the full View (ViewPatch
+        answers are reserved for a later story; clients must accept all three shapes).
+        `If-None-Match: "e<epoch>-i<instance>-r<revision>"` (also a list or `*`, weak comparison) has the same
+        meaning and answers `304`. `<instance>` identifies the incarnation of the session name (its start
+        time): the ETag of a session that was removed and re-created never matches.
+      x-agentd-scope: read
+      parameters:
+        - name: since
+          in: query
+          schema: { type: integer, minimum: 0 }
+          description: Revision the client already has.
+        - name: epoch
+          in: query
+          schema: { type: string }
+          description: |
+            Daemon epoch `since` belongs to (an `If-None-Match` ETag carries it itself). `since`
+            is only honoured together with `epoch`: without it the full View is returned.
+        - name: lines
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 5000, default: 500 }
+          description: Maximum number of logical lines returned (the newest N, or N from `from`). `tail` is accepted as an alias.
+        - name: from
+          in: query
+          schema: { type: integer, minimum: 0 }
+          description: Absolute line index to start at (`first_line` of an earlier answer); default the newest lines.
+        - name: scrollback
+          in: query
+          schema: { type: boolean, default: false }
+          description: Return the main-screen scrollback and screen as one transcript (`first_line` 0, not pageable).
+        - $ref: "#/components/parameters/IfNoneMatch"
+      responses:
+        "200":
+          description: View, patch or unchanged marker
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/View"
+                  - $ref: "#/components/schemas/ViewPatchResponse"
+                  - $ref: "#/components/schemas/ViewUnchanged"
+        "304": { description: Not modified (If-None-Match matched) }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /v1/sessions/{name}/view/ack:
+    parameters:
+      - $ref: "#/components/parameters/SessionName"
+    post:
+      tags: [view]
+      operationId: ackView
+      summary: Clear the session's attention flag (daemon `view_ack`)
+      x-agentd-scope: write
+      responses:
+        "200":
+          description: Attention cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [revision]
+                properties:
+                  revision: { type: integer, format: int64, description: View revision after the ack. }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /v1/sessions/{name}/act:
+    parameters:
+      - $ref: "#/components/parameters/SessionName"
+    post:
+      tags: [view]
+      operationId: act
+      summary: Act on a session (prompt, choose, keys, interrupt, cancel)
+      description: |
+        Passed through to the daemon op `act` (daemon-ops.md §3), which applies the same safety
+        rules as mailbox injection (pending human draft, sanitised bracketed paste, paste
+        verification). Never resizes the PTY. `text` is at most `limits.prompt_max_chars` (16000)
+        characters (413 above). The gateway waits up to 40 s for the daemon (more than the daemon's
+        own act budget). When the request reached the daemon but its outcome was not seen (daemon
+        connection lost, timeout, client disconnect) the answer is `502`/`504` `outcome_unknown`
+        (`retryable: false`, with the fresh view in `error.details` when obtainable): look at the
+        view before repeating. The same applies to `run`, `kill`, `rm`, `send`, `reply` and
+        `view/ack`. With an `Idempotency-Key`, a retry of such a request gets `409 outcome_unknown`
+        instead of executing it a second time.
+      x-agentd-scope: write
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: If-Match
+          in: header
+          schema: { type: string }
+          description: |
+            View ETag `"e<epoch>-i<instance>-r<revision>"` (strong comparison, RFC 9110): `*` = no
+            precondition; a list is accepted when one tag matches the current view. A weak (`W/`)
+            tag, another incarnation of the session or a view that moved on is
+            `412 precondition_failed` with the fresh view. Overrides `revision`/`epoch` in the body.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ActRequest" }
+            examples:
+              choose:
+                value: { action: choose, epoch: "1760000000-4242-a1b2c3", revision: 57, option_id: "2", label: "No" }
+              prompt:
+                value: { action: prompt, epoch: "1760000000-4242-a1b2c3", revision: 57, text: "Run the tests again", submit: true }
+              keys:
+                value: { action: keys, keys: [esc] }
+              interrupt:
+                value: { action: interrupt }
+      responses:
+        "200":
+          description: Action performed
+          headers:
+            Idempotent-Replayed: { $ref: "#/components/headers/IdempotentReplayed" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ActResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: |
+            `conflict` (stale revision/epoch, option mismatch) carries the fresh state in
+            `error.details`: `{revision, view}`, and the `ETag` header of that view. Also
+            `exited`, `starting`, `busy` (pending human draft), `not_ready`, `in_progress`.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+            Retry-After: { schema: { type: integer } }
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "412": { $ref: "#/components/responses/PreconditionFailed" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "421": { $ref: "#/components/responses/MisdirectedRequest" }
+        "422": { $ref: "#/components/responses/IdempotencyMismatch" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+        "504": { $ref: "#/components/responses/Timeout" }
+
+  /v1/sessions/{name}/view/stream:
+    parameters:
+      - $ref: "#/components/parameters/SessionName"
+    get:
+      tags: [view, events]
+      operationId: streamView
+      summary: SSE stream of one session's view
+      description: |
+        Events: `view` (full View, first event and after resync), `view.patch` (ViewStreamPatch),
+        `status.changed`, `input.changed`, `session.exited` (then `bye`), `session.removed` (then
+        `bye`), `resync`, `bye`. View event id = `e<epoch>-i<instance>-r<revision>`
+        (`Last-Event-ID` of another incarnation of the session yields a full `view`). `tail` is served from
+        the buckets 50/100/200/500/5000 (trimmed to the requested count). At most 8 streams per device and 64
+        in total (`429 too_many_streams`). At most one view event per
+        100 ms per stream (latest revision wins). Heartbeat comment `: ping` every `sse_heartbeat`.
+        `Last-Event-ID` with a revision the gateway still holds yields a patch from it, otherwise a
+        full `view`. A patch larger than the full view is sent as `view`. After `resync` the next
+        view event is a full `view`.
+      x-agentd-scope: read
+      parameters:
+        - $ref: "#/components/parameters/LastEventID"
+        - name: tail
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 5000, default: 500 }
+      responses:
+        "200":
+          description: Event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: "SSE frames; `data` payloads: View | ViewStreamPatch | Event."
+              x-sse-events:
+                view: { $ref: "#/components/schemas/View" }
+                view.patch: { $ref: "#/components/schemas/ViewStreamPatch" }
+                status.changed: { $ref: "#/components/schemas/Event" }
+                input.changed: { $ref: "#/components/schemas/Event" }
+                session.exited: { $ref: "#/components/schemas/Event" }
+                session.removed: { $ref: "#/components/schemas/Event" }
+                resync: { $ref: "#/components/schemas/Event" }
+                bye: { $ref: "#/components/schemas/Event" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /v1/sessions/{name}/terminal:
+    parameters:
+      - $ref: "#/components/parameters/SessionName"
+    get:
+      tags: [terminal]
+      operationId: getTerminal
+      summary: L0 raw terminal snapshot (daemon `dump`)
+      description: |
+        Rendered at the PTY's size; clients scroll, they never resize. `format=ansi` with
+        `scrollback=true` is rejected (400). `Accept: text/plain` returns only the text.
+      x-agentd-scope: read
+      parameters:
+        - name: format
+          in: query
+          schema: { type: string, enum: [text, ansi], default: text }
+        - name: scrollback
+          in: query
+          schema: { type: boolean, default: false }
+        - name: ghost
+          in: query
+          schema: { type: boolean, default: false }
+          description: Keep the harness's ghost text (raw screen). ANSI is always raw.
+      responses:
+        "200":
+          description: Snapshot
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TerminalSnapshot" }
+            text/plain:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /v1/events:
+    get:
+      tags: [events]
+      operationId: streamEvents
+      summary: SSE stream of host-wide events
+      description: |
+        Daemon events (daemon-ops.md §6: `session.*`, `status.changed`, `view.changed`,
+        `input.changed`, `mail.*`; unknown names forwarded unchanged) plus gateway events `hello`,
+        `resync`, `bye`. The first event is `hello` (`data`: epoch, seq, last_id, api_version).
+        Event id = `<epoch>:<seq>` (resync carries the current head id; hello, bye have none).
+        Resume with `Last-Event-ID`: buffered events after it are replayed (`event_buffer`
+        events); if the id is no longer buffered, unknown, or from another daemon epoch, `resync`
+        is sent after `hello`. A client too slow for its bounded queue also gets `resync`
+        (reason `overflow`) and continues. Heartbeat comment `: ping` every `sse_heartbeat`;
+        `bye` (reason `shutdown`) when the gateway drains.
+      x-agentd-scope: read
+      parameters:
+        - $ref: "#/components/parameters/LastEventID"
+        - name: session
+          in: query
+          schema: { type: string }
+          description: Comma-separated session names to include (`sessions` is an alias).
+        - name: kind
+          in: query
+          schema: { type: string }
+          description: |
+            Comma-separated event kinds: exact (`status.changed`), prefix (`mail`) or glob
+            (`mail.*`). `kinds` and `types` are aliases. hello, resync and bye are always sent.
+      responses:
+        "200":
+          description: Event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: "SSE frames; every `data` payload is an Event."
+              x-sse-events:
+                "*": { $ref: "#/components/schemas/Event" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /v1/mailbox:
+    get:
+      tags: [mailbox]
+      operationId: listMailbox
+      summary: Messages of the gateway's human mailbox, or a peek at another mailbox
+      description: |
+        Own mailbox: unread only unless `all`; listed messages become `delivered`. With `mailbox`,
+        another mailbox is peeked at without any state change and requires the `admin` scope.
+      x-agentd-scope: read
+      parameters:
+        - name: all
+          in: query
+          schema: { type: boolean, default: false }
+        - name: mailbox
+          in: query
+          schema: { $ref: "#/components/schemas/Recipient" }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: before
+          in: query
+          schema: { type: integer, format: int64, minimum: 1 }
+          description: Return messages with id lower than this (cursor from `next_before`).
+      responses:
+        "200":
+          description: A page of messages, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [messages]
+                properties:
+                  messages:
+                    type: array
+                    items: { $ref: "#/components/schemas/Message" }
+                  next_before:
+                    type: integer
+                    format: int64
+                    description: Absent on the last page.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /v1/mailbox/messages:
+    post:
+      tags: [mailbox]
+      operationId: sendMessage
+      summary: Send a message as the gateway's human identity
+      x-agentd-scope: write
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SendRequest" }
+      responses:
+        "201":
+          description: Message queued
+          headers:
+            Idempotent-Replayed: { $ref: "#/components/headers/IdempotentReplayed" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Message" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "422": { $ref: "#/components/responses/IdempotencyMismatch" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /v1/mailbox/messages/{id}:
+    parameters:
+      - $ref: "#/components/parameters/MessageID"
+    get:
+      tags: [mailbox]
+      operationId: getMessage
+      summary: One message, without changing its state
+      description: |
+        Never marks the message read (use the POST). For the gateway's own mailbox the daemon has
+        no peek, so the message is found through `inbox`, which may move `queued` to `delivered`
+        like listing does; another mailbox (`mailbox`, admin scope) is a true peek.
+      x-agentd-scope: read
+      parameters:
+        - name: mailbox
+          in: query
+          schema: { $ref: "#/components/schemas/Recipient" }
+          description: Mailbox to read from (default the gateway's own).
+      responses:
+        "200":
+          description: The message
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Message" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /v1/mailbox/messages/{id}/read:
+    parameters:
+      - $ref: "#/components/parameters/MessageID"
+    post:
+      tags: [mailbox]
+      operationId: markMessageRead
+      summary: Mark a message of the gateway's mailbox as read
+      x-agentd-scope: write
+      responses:
+        "200":
+          description: The message, now `read`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Message" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /v1/mailbox/messages/{id}/reply:
+    parameters:
+      - $ref: "#/components/parameters/MessageID"
+    post:
+      tags: [mailbox]
+      operationId: replyMessage
+      summary: Reply to a message addressed to the gateway's human identity
+      x-agentd-scope: write
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [body]
+              properties:
+                body: { type: string, minLength: 1 }
+      responses:
+        "201":
+          description: Reply queued (may carry `warning`)
+          headers:
+            Idempotent-Replayed: { $ref: "#/components/headers/IdempotentReplayed" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Message" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "422": { $ref: "#/components/responses/IdempotencyMismatch" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+components:
+  securitySchemes:
+    deviceToken:
+      type: http
+      scheme: bearer
+      description: |
+        Device token from pairing (security-remote.md). Scopes `read`, `write`, `admin` are bound
+        to the token, not requested per call; see `x-agentd-scope` on each operation.
+
+  parameters:
+    SessionName:
+      name: name
+      in: path
+      required: true
+      description: Session name, percent-encoded.
+      schema: { $ref: "#/components/schemas/SessionName" }
+    MessageID:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      schema: { type: string, pattern: "^[A-Za-z0-9._:-]{1,128}$" }
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      schema: { type: string }
+    LastEventID:
+      name: Last-Event-ID
+      in: header
+      schema: { type: string }
+
+  headers:
+    ETag:
+      description: '`"e<epoch>-i<instance>-r<revision>"` for views; weak ETag for lists.'
+      schema: { type: string }
+    IdempotentReplayed:
+      description: Present (`true`) when the response is a stored idempotent replay.
+      schema: { type: string, enum: ["true"] }
+
+  responses:
+    BadRequest:
+      description: Invalid argument
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Unauthenticated:
+      description: Missing, unknown or revoked token
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Forbidden:
+      description: Scope too small, ACL or identity rule
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    NotFound:
+      description: Session, message or route not found
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Conflict:
+      description: |
+        `already_exists`, `still_running`, `starting` (Retry-After), `exited`, `stale_revision`,
+        `option_mismatch`, `human_draft`, `in_progress`
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    PreconditionFailed:
+      description: If-Match revision mismatch
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    PayloadTooLarge:
+      description: Body larger than `[api] max_body_kb`
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    IdempotencyMismatch:
+      description: Same Idempotency-Key reused with a different body
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Unavailable:
+      description: "`daemon_unavailable`, `paste_unverified`, `shutting_down` (Retry-After)"
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Timeout:
+      description: |
+        Daemon call exceeded the request deadline. For side-effecting operations the code is
+        `outcome_unknown` (`retryable: false`): the daemon may have executed the request.
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    MisdirectedRequest:
+      description: |
+        `misdirected_request`: the `Host` header is not in the allow-list (bind address, hostname, `tls_hosts`,
+        `[api] allowed_hosts`). Answered before authentication on every route.
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    TooManyRequests:
+      description: |
+        `rate_limited` (per-device token bucket; `act` has a stricter one; 10 failed authentications per minute
+        per remote address) or `too_many_streams`. Carries `Retry-After`.
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    UnsupportedMediaType:
+      description: "A request with a body must be `Content-Type: application/json`"
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    BadGateway:
+      description: "`outcome_unknown`: the request reached the daemon but its result was lost (not retryable)"
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Stable snake_case code (daemon-ops.md codes pass through unchanged).
+              examples: [not_found, stale_revision, human_draft, daemon_unavailable]
+            message: { type: string }
+            retryable: { type: boolean, default: false }
+            details: { type: object, additionalProperties: true }
+
+    SessionName:
+      type: string
+      pattern: "^[a-zA-Z0-9._@-]+$"
+      examples: ["codex@webapp"]
+
+    Recipient:
+      type: string
+      description: A session name or `human:<name>`.
+      pattern: "^([a-zA-Z0-9._@-]+|human:[a-zA-Z0-9._-]{1,64})$"
+
+    Info:
+      type: object
+      required: [host, gateway, daemon, identity, scopes, harnesses, profiles, aliases]
+      properties:
+        api_version: { type: string, description: "Gateway API version, e.g. `1.0` (ADR-A16); absent on older gateways." }
+        features:
+          type: array
+          description: Optional capabilities of this gateway (ADR-A16), e.g. `events`, `view_stream`, `mail`.
+          items: { type: string }
+        host: { type: string, description: Hostname of the daemon host }
+        gateway:
+          type: object
+          required: [version]
+          properties:
+            version: { type: string }
+        daemon:
+          type: object
+          required: [version, pid, epoch]
+          properties:
+            version: { type: string }
+            pid: { type: integer }
+            epoch: { type: string, description: Changes on every daemon restart. }
+        identity: { type: string, examples: ["human:jose"] }
+        scopes:
+          type: array
+          items: { $ref: "#/components/schemas/Scope" }
+        harnesses:
+          type: array
+          description: Values POST /v1/sessions accepts for `harness` with the `write` scope.
+          items: { type: string }
+        profiles:
+          type: array
+          items:
+            type: object
+            required: [name, builtin]
+            properties:
+              name: { type: string }
+              builtin: { type: boolean }
+        aliases:
+          type: array
+          items:
+            type: object
+            required: [name, dir, source]
+            properties:
+              name: { type: string, pattern: "^[a-zA-Z0-9._-]+$" }
+              dir: { type: string, description: Absolute directory on the daemon host }
+              source: { type: string, enum: [file, env] }
+        limits:
+          type: object
+          properties:
+            max_body_kb: { type: integer }
+            prompt_max_chars: { type: integer }
+
+    Scope:
+      type: string
+      enum: [read, write, admin]
+
+    Status:
+      type: string
+      description: Owned by semantic-model.md.
+      enum: [starting, working, idle, waiting, exited]
+
+    SessionSummary:
+      type: object
+      description: proto.SessionInfo plus semantic summary fields from the daemon.
+      required: [name, state, cwd, cmd, profile, started_at, idle_ms, unread, attached, cols, rows]
+      properties:
+        name: { $ref: "#/components/schemas/SessionName" }
+        state: { type: string, enum: [starting, running, exited] }
+        pid: { type: integer }
+        cwd: { type: string }
+        cmd:
+          type: array
+          items: { type: string }
+        profile: { type: string }
+        exit_code: { type: integer }
+        started_at: { type: string, format: date-time }
+        last_output: { type: string, format: date-time }
+        idle_ms: { type: integer, format: int64 }
+        unread: { type: integer }
+        attached: { type: integer, description: Local terminal clients attached. }
+        cols: { type: integer }
+        rows: { type: integer }
+        title: { type: string }
+        input_state: { type: string, enum: [empty, draft, suggestion] }
+        status: { $ref: "#/components/schemas/Status" }
+        attention: { type: boolean }
+        revision: { type: integer, format: int64 }
+        preview:
+          type: string
+          maxLength: 200
+          description: Last non-empty transcript logical line.
+
+    RunRequest:
+      type: object
+      additionalProperties: false
+      required: [target]
+      properties:
+        target:
+          type: string
+          description: Alias name or absolute directory on the daemon host.
+        harness:
+          type: string
+          default: claude
+          description: Harness binary; outside `[api] run_harnesses` requires admin.
+        name: { $ref: "#/components/schemas/SessionName" }
+        profile: { type: string }
+        args:
+          type: array
+          items: { type: string }
+          description: Extra arguments appended to the harness binary. Admin only.
+        cmd:
+          type: array
+          minItems: 1
+          items: { type: string }
+          description: Full argv replacing harness + args. Admin only.
+        env:
+          type: object
+          additionalProperties: { type: string }
+          description: Extra environment. Admin only.
+
+    Line:
+      type: object
+      description: Logical (reflowed) line. Owned by semantic-model.md.
+      required: [text]
+      properties:
+        text: { type: string }
+        role:
+          type: string
+          enum: [transcript, status, dialog, gap]
+
+    Input:
+      type: object
+      description: Input line. Owned by semantic-model.md.
+      properties:
+        text: { type: string }
+        ghost: { type: string }
+        state: { type: string, enum: [empty, suggestion, draft] }
+
+    Option:
+      type: object
+      description: Detected choice. Owned by semantic-model.md.
+      required: [id, label]
+      properties:
+        id: { type: string }
+        label: { type: string }
+        index: { type: integer }
+        kind: { type: string, enum: [numbered, pointer, checkbox, yesno] }
+        selected: { type: boolean }
+        checked: { type: boolean }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+
+    View:
+      type: object
+      description: |
+        Semantic view (L1), the daemon's `view` result as is (proto.View, owned by
+        semantic-model.md); unknown fields must be ignored.
+      required: [name, epoch, revision, status, lines]
+      properties:
+        name: { $ref: "#/components/schemas/SessionName" }
+        epoch: { type: string, description: Daemon epoch the revision belongs to. }
+        revision: { type: integer, format: int64 }
+        status: { $ref: "#/components/schemas/Status" }
+        status_reason: { type: string }
+        attention:
+          type: object
+          required: [set]
+          properties:
+            set: { type: boolean }
+            reason: { type: string, enum: [turn_done, waiting, bell, notify] }
+            since: { type: string, format: date-time }
+        title: { type: string }
+        cwd: { type: string }
+        first_line:
+          type: integer
+          description: Absolute index of lines[0] (lines are tail-truncated).
+        lines:
+          type: array
+          items: { $ref: "#/components/schemas/Line" }
+        input: { $ref: "#/components/schemas/Input" }
+        options:
+          type: array
+          items: { $ref: "#/components/schemas/Option" }
+        hints:
+          type: array
+          items:
+            type: object
+            properties:
+              key: { type: string }
+              action: { type: string }
+        dialog:
+          type: object
+          properties:
+            question: { type: string }
+        idle_ms: { type: integer, format: int64 }
+        exit_code: { type: integer }
+
+    ViewPatch:
+      type: object
+      description: |
+        Gateway-computed diff between two revisions: one splice on `lines` (absolute indices) plus
+        replaced scalar fields. Absent fields are unchanged; `input` and `options` are replaced whole.
+      required: [base, revision]
+      properties:
+        base: { type: integer, format: int64 }
+        revision: { type: integer, format: int64 }
+        status: { $ref: "#/components/schemas/Status" }
+        attention: { type: boolean }
+        title: { type: string }
+        lines:
+          type: object
+          required: [start, delete, insert]
+          properties:
+            start: { type: integer, minimum: 0 }
+            delete: { type: integer, minimum: 0 }
+            insert:
+              type: array
+              items: { $ref: "#/components/schemas/Line" }
+        input: { $ref: "#/components/schemas/Input" }
+        options:
+          type: array
+          items: { $ref: "#/components/schemas/Option" }
+
+    ViewStreamPatch:
+      type: object
+      description: |
+        `data` of SSE `view.patch`. Apply to the view of revision `from_revision` (same `epoch`):
+        1. drop the lines whose absolute index is below `first_line` (the head scrolled out);
+        2. if `splice`: delete `delete` lines at relative index `at`, insert `insert` there;
+        3. set `first_line` and `revision`; replace every field named in `set` (`null` clears
+           `dialog` / `exit_code`).
+      required: [from_revision, revision, epoch, first_line]
+      properties:
+        from_revision: { type: integer, format: int64 }
+        revision: { type: integer, format: int64 }
+        epoch: { type: string }
+        first_line: { type: integer, minimum: 0 }
+        splice:
+          type: object
+          required: [at, delete, insert]
+          properties:
+            at: { type: integer, minimum: 0 }
+            delete: { type: integer, minimum: 0 }
+            insert:
+              type: array
+              items: { $ref: "#/components/schemas/Line" }
+        set:
+          type: object
+          description: >-
+            Changed scalar fields among status, status_reason, attention, title, cwd, input,
+            options, hints, dialog, idle_ms, exit_code (input/options/hints replaced whole).
+          additionalProperties: true
+
+    ViewPatchResponse:
+      allOf:
+        - $ref: "#/components/schemas/ViewPatch"
+        - type: object
+          required: [patch]
+          properties:
+            patch: { type: boolean, const: true }
+
+    ViewUnchanged:
+      type: object
+      required: [unchanged, revision]
+      properties:
+        unchanged: { type: boolean, const: true }
+        revision: { type: integer, format: int64 }
+        epoch: { type: string }
+
+    ActRequest:
+      type: object
+      description: Arguments of daemon op `act` (owned by daemon-ops.md §3).
+      additionalProperties: false
+      required: [action]
+      properties:
+        action: { type: string, enum: [prompt, choose, keys, interrupt, cancel] }
+        revision:
+          type: integer
+          format: int64
+          description: View revision the client acted on; required for `choose`; optional for the other actions, where a change of the interaction state (status, menu, dialog, draft; not transcript text) since it is `conflict`. Needs `epoch` (or `If-Match`).
+        epoch: { type: string, description: Daemon epoch of `revision` (View.epoch); required whenever `revision` is set. }
+        text: { type: string, description: For `prompt`. }
+        submit: { type: boolean, default: true, description: For `prompt`. }
+        option_id: { type: string, description: For `choose`. }
+        label: { type: string, description: For `choose`; the label the client saw, re-checked by the daemon. }
+        force:
+          type: boolean
+          default: false
+          description: Skip status preconditions; never skips a pending human draft, paste verification or option re-verification.
+        keys:
+          type: array
+          items: { type: string }
+          description: For `keys`; key names per daemon-ops.md.
+      allOf:
+        - if: { properties: { action: { const: prompt } } }
+          then: { required: [text] }
+        - if: { properties: { action: { const: choose } } }
+          then: { required: [option_id] }
+        - if: { properties: { action: { const: keys } } }
+          then: { required: [keys] }
+
+    ActResult:
+      type: object
+      description: Result of `act` (owned by daemon-ops.md §3).
+      required: [action, revision, status, result]
+      properties:
+        action: { type: string }
+        result:
+          type: string
+          enum: [submitted, pasted, selected, keys_sent, interrupted, cancelled]
+        submitted: { type: boolean, description: "`prompt`: the submit sequence was written." }
+        revision: { type: integer, format: int64, description: View revision after the action settled. }
+        status: { $ref: "#/components/schemas/Status" }
+        warning: { type: string }
+
+    TerminalSnapshot:
+      type: object
+      required: [format, text, cols, rows]
+      properties:
+        format: { type: string, enum: [text, ansi] }
+        text: { type: string }
+        ghost: { type: string }
+        ghost_hidden: { type: boolean }
+        cols: { type: integer }
+        rows: { type: integer }
+
+    Event:
+      type: object
+      description: |
+        SSE `data` payload. `type` repeats the SSE event name. `data` is event-specific
+        (daemon-ops.md §6 for daemon events; `hello` = {epoch, last_id}; `resync` = {reason}).
+      required: [type, ts]
+      properties:
+        type:
+          type: string
+          examples: [session.started, session.exited, status.changed, view.changed, input.changed,
+                     mail.received, hello, resync, bye]
+        session: { $ref: "#/components/schemas/SessionName" }
+        ts: { type: string, format: date-time }
+        data: { type: object, additionalProperties: true }
+
+    SendRequest:
+      type: object
+      additionalProperties: false
+      required: [to, body]
+      properties:
+        to: { $ref: "#/components/schemas/Recipient" }
+        subject: { type: string }
+        body: { type: string, minLength: 1 }
+        reply_to: { type: integer, format: int64 }
+
+    Message:
+      type: object
+      description: proto.Message.
+      required: [id, sender, recipient, subject, body, state, attempts, created_at]
+      properties:
+        id: { type: integer, format: int64 }
+        sender: { type: string }
+        recipient: { type: string }
+        subject: { type: string }
+        body: { type: string }
+        reply_to: { type: integer, format: int64 }
+        state: { type: string, enum: [queued, delivered, read, replied] }
+        attempts: { type: integer }
+        created_at: { type: string, format: date-time }
+        delivered_at: { type: string, format: date-time }
+        read_at: { type: string, format: date-time }
+        replied_at: { type: string, format: date-time }
+        warning: { type: string }

@@ -111,7 +111,7 @@ func (f *fakeTarget) Paste(text string) error {
 	if f.dropPastes > 0 {
 		f.dropPastes--
 	} else {
-		f.input = text
+		f.input += text // a paste appends to what is already in the input line
 	}
 	return nil
 }

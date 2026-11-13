@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -161,6 +163,78 @@ func TestPurgeCmdFlags(t *testing.T) {
 		{"extra-arg", "--all"},
 	} {
 		if _, _, err := run(bad...); err == nil {
+			t.Errorf("%v accepted", bad)
+		}
+	}
+}
+
+func TestParseSize(t *testing.T) {
+	for _, tt := range []struct {
+		in         string
+		cols, rows uint16
+		bad        bool
+	}{
+		{"", 0, 0, false}, {"200x60", 200, 60, false}, {"80X24", 80, 24, false},
+		{"0x10", 0, 0, true}, {"80", 0, 0, true}, {"axb", 0, 0, true}, {"70000x1", 0, 0, true},
+	} {
+		c, r, err := parseSize(tt.in)
+		if (err != nil) != tt.bad || c != tt.cols || r != tt.rows {
+			t.Errorf("parseSize(%q) = %d,%d,%v", tt.in, c, r, err)
+		}
+	}
+}
+
+func TestRunHint(t *testing.T) {
+	old := errors.New(`invalid run args: json: unknown field "target"`)
+	if got := runHint(old); !strings.Contains(got.Error(), "agentd shutdown") || !errors.Is(got, old) {
+		t.Fatalf("hint missing: %v", got)
+	}
+	other := errors.New("boom")
+	if runHint(other) != other || runHint(nil) != nil {
+		t.Fatal("unrelated errors must pass through")
+	}
+}
+
+func TestViewText(t *testing.T) {
+	code := 0
+	got := viewText(proto.View{
+		Status: "waiting", StatusReason: "options", Revision: 9, ExitCode: &code,
+		Attention: proto.ViewAttention{Set: true, Reason: "waiting"},
+		Lines:     []proto.ViewLine{{Text: "hello", Role: "transcript"}},
+		Input:     proto.ViewInput{State: "suggestion", Ghost: "try"},
+		Dialog:    &proto.ViewDialog{Question: "Proceed?"},
+		Options:   []proto.ViewOption{{Index: 1, Label: "Yes", Selected: true}, {Index: 2, Label: "No"}},
+	})
+	for _, want := range []string{"hello\n", "[agentd: waiting (options) exit 0 · attention: waiting · rev 9]", `ghost: "try"`, "dialog: Proceed?", "[1]* Yes", "[2] No"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("viewText missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestActCmdArgs(t *testing.T) {
+	var got proto.ActArgs
+	cmd := newActCmd(func(a proto.ActArgs) (proto.ActResult, error) {
+		got = a
+		return proto.ActResult{Result: "keys_sent", Status: "idle", Revision: 3}, nil
+	})
+	run := func(args ...string) error {
+		cmd.SetArgs(args)
+		cmd.SetOut(io.Discard)
+		return cmd.Execute()
+	}
+	if err := run("s1", "keys", "down", "enter"); err != nil || got.Name != "s1" || got.Action != "keys" || len(got.Keys) != 2 {
+		t.Errorf("keys: %+v, %v", got, err)
+	}
+	if err := run("s1", "prompt", "hello", "there", "--no-submit"); err != nil || got.Text != "hello there" || got.Submit == nil || *got.Submit {
+		t.Errorf("prompt: %+v, %v", got, err)
+	}
+	if err := run("s1", "choose", "o1234", "--label", "Yes", "--revision", "7", "--force"); err != nil ||
+		got.OptionID != "o1234" || got.Label != "Yes" || got.Revision != 7 || !got.Force {
+		t.Errorf("choose: %+v, %v", got, err)
+	}
+	for _, bad := range [][]string{{"s1", "choose"}, {"s1", "interrupt", "x"}, {"s1", "teleport"}, {"s1", "prompt"}} {
+		if err := run(bad...); err == nil {
 			t.Errorf("%v accepted", bad)
 		}
 	}

@@ -1,0 +1,16 @@
+{
+  "Cols": 120,
+  "Rows": 40,
+  "CursorX": 31,
+  "CursorY": 1,
+  "CursorHidden": false,
+  "AltScreen": false,
+  "AppCursor": false,
+  "BracketedPaste": true,
+  "Bells": 0,
+  "Notifies": 0,
+  "Lines": [
+    "fakeagent ready",
+    "Proceed with the change? (y/n)"
+  ]
+}

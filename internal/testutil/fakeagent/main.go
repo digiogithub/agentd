@@ -20,6 +20,25 @@
 //     (the harness behaviour agentd must never trigger);
 //   - -droppaste ignores the content of the first bracketed paste (no echo,
 //     the ghost stays), simulating a paste the TUI lost.
+//
+// Widget modes (semantic-model §8; see widgets.go) replace the line prompt by
+// one interactive widget, resolve it, print "chose: <label>" (or "cancelled"),
+// emit the turn-end signals and exit 0 (-loop redraws instead):
+//
+//   - -menu "A|B|C": pointer menu, "❯ " marks the selected item, Up/Down move
+//     it, Enter selects. -numbered: items are numbered and digits select
+//     (-digitmove: a digit only moves the pointer). -yesno "Proceed?": prints
+//     "Proceed? (y/n)", y or n answers. -dialog [-title T]: the menu inside a
+//     "╭─╮" frame with an "Esc to cancel" footer (digits select, Esc cancels).
+//   - -box: Claude-like input box (rule, "❯"+NBSP prompt, rule, hint); with
+//     -ghost the placeholder is faint. Enter prints "GOT: <message>".
+//   - -appcursor enables DECCKM (ESC[?1h): widgets then accept only SS3
+//     arrows (ESC O A); without it only CSI arrows (ESC [ A).
+//   - -bell / -osc9 "text": after each turn (message, selection) emit BEL /
+//     "OSC 9;text" (works in the plain prompt too).
+//   - -redraw: scripted Claude-like alt-screen repainting TUI (see redraw.go).
+//   - -wrap: print long paragraphs once at startup, relying on the terminal's
+//     autowrap; -wrapat N hard-wraps them at N columns (Ink-like) instead.
 package main
 
 import (
@@ -45,6 +64,8 @@ func main() {
 	query := flag.Bool("query", false, "query the cursor position at startup")
 	ghostText := flag.String("ghost", "", "faint suggested prompt shown on an empty input line")
 	dropPaste := flag.Bool("droppaste", false, "ignore the first bracketed paste")
+	registerWidgetFlags()
+	registerRedrawFlags()
 	flag.Parse()
 
 	fd := int(os.Stdin.Fd())
@@ -86,6 +107,9 @@ func main() {
 		out.WriteString("\x1b[?1049h\x1b[H\x1b[2J")
 	}
 	out.WriteString("\x1b[?2004h")
+	if *wAppCursor {
+		out.WriteString("\x1b[?1h")
+	}
 
 	if *query {
 		out.WriteString("\x1b[6n")
@@ -110,6 +134,17 @@ func main() {
 	}
 
 	out.WriteString("fakeagent ready\r\n")
+	if *wWrap || *wWrapAt > 0 {
+		writeParagraphs(out, *wWrapAt)
+	}
+	if *rdOn {
+		runRedraw(out)
+		exit(0)
+	}
+	if widgetMode() {
+		runWidget(out, in, *ghostText, exit)
+		exit(0)
+	}
 	prompt()
 	flush()
 
@@ -178,6 +213,7 @@ func main() {
 				}
 				out.WriteString("\r\n")
 			}
+			turnEnd(out)
 			prompt()
 		case c == 0x03:
 			exit(130)

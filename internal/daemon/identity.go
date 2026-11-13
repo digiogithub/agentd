@@ -26,8 +26,6 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
-	"errors"
-	"fmt"
 	"os/user"
 	"strconv"
 	"strings"
@@ -207,9 +205,9 @@ func (s *Server) resolveCaller(p peerInfo, auth *proto.Auth) (caller, error) {
 			return caller{}, err
 		}
 		if c.session {
-			return caller{}, fmt.Errorf("identity mismatch: AGENTD_ID=%q, but this process runs inside session %q", a.ID, c.id)
+			return caller{}, proto.Errorf(proto.CodeForbidden, "identity mismatch: AGENTD_ID=%q, but this process runs inside session %q", a.ID, c.id)
 		}
-		return caller{}, fmt.Errorf("identity mismatch: AGENTD_ID=%q, but this process is not running inside that session "+
+		return caller{}, proto.Errorf(proto.CodeForbidden, "identity mismatch: AGENTD_ID=%q, but this process is not running inside that session "+
 			"(the daemon sees it as %q). AGENTD_ID is set by agentd inside sessions; do not set it by hand", a.ID, c.id)
 	}
 }
@@ -221,13 +219,13 @@ func (s *Server) resolveOnce(p peerInfo, a proto.Auth) (caller, error) {
 		switch {
 		case !ok:
 			if !procOK {
-				return caller{}, errors.New("invalid AGENTD_TOKEN: no session has this token (stale environment from a removed session?)")
+				return caller{}, proto.Errorf(proto.CodeForbidden, "invalid AGENTD_TOKEN: no session has this token (stale environment from a removed session?)")
 			}
 			// Kernel-verified ancestry wins over an unknown token.
 		case procOK && name != byProc:
-			return caller{}, fmt.Errorf("identity mismatch: AGENTD_TOKEN belongs to session %q, but this process runs inside session %q", name, byProc)
+			return caller{}, proto.Errorf(proto.CodeForbidden, "identity mismatch: AGENTD_TOKEN belongs to session %q, but this process runs inside session %q", name, byProc)
 		case !procOK && !running:
-			return caller{}, fmt.Errorf("session %q has exited: its AGENTD_TOKEN is no longer valid", name)
+			return caller{}, proto.Errorf(proto.CodeForbidden, "session %q has exited: its AGENTD_TOKEN is no longer valid", name)
 		case !procOK:
 			return caller{id: name, session: true, via: viaToken}, nil
 		}

@@ -53,3 +53,45 @@ func TestHumanDraftTracking(t *testing.T) {
 		t.Fatal("non-human input must not create a draft")
 	}
 }
+
+// WriteAct never counts as a real human keystroke (LastHumanInput) but is
+// activity (LastActInput / LastInput) and clears drafts like human input.
+func TestWriteActIsNotHumanInput(t *testing.T) {
+	s := start(t, session.Spec{Name: "wa", Cmd: []string{"sh", "-c", "stty raw -echo; exec cat"}})
+	time.Sleep(200 * time.Millisecond)
+	if _, err := s.WriteAct([]byte("\x1b[A")); err != nil {
+		t.Fatal(err)
+	}
+	if !s.LastHumanInput().IsZero() {
+		t.Errorf("WriteAct set LastHumanInput: %v", s.LastHumanInput())
+	}
+	if s.LastActInput().IsZero() || s.LastInput() != s.LastActInput() {
+		t.Errorf("act=%v input=%v", s.LastActInput(), s.LastInput())
+	}
+	// A real keystroke is the latest input, and only it moves LastHumanInput.
+	time.Sleep(5 * time.Millisecond)
+	if _, err := s.Write([]byte("x"), true); err != nil {
+		t.Fatal(err)
+	}
+	if s.LastHumanInput().IsZero() || !s.LastInput().Equal(s.LastHumanInput()) || !s.LastHumanInput().After(s.LastActInput()) {
+		t.Errorf("human=%v act=%v input=%v", s.LastHumanInput(), s.LastActInput(), s.LastInput())
+	}
+	// WriteAct Enter clears a draft; MarkDraft / ClearDraft round-trip.
+	if s.HumanDraftSince().IsZero() {
+		t.Fatal("typed text should be a draft")
+	}
+	if _, err := s.WriteAct([]byte("\r")); err != nil {
+		t.Fatal(err)
+	}
+	if !s.HumanDraftSince().IsZero() {
+		t.Error("act Enter did not clear the draft")
+	}
+	s.MarkDraft()
+	if s.HumanDraftSince().IsZero() {
+		t.Error("MarkDraft")
+	}
+	s.ClearDraft()
+	if !s.HumanDraftSince().IsZero() {
+		t.Error("ClearDraft")
+	}
+}

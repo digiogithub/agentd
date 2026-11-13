@@ -115,3 +115,12 @@ func (s *Session) trackDraft(p []byte) {
 // uncommitted (not followed by \r, \n or Ctrl-C), or the zero time if there is
 // no pending draft.
 func (s *Session) HumanDraftSince() time.Time { return unixNano(s.draftAt.Load()) }
+
+// MarkDraft records text that was pasted into the input line but not
+// submitted (a prompt with submit=false, or a submit aborted by a guard) as a
+// pending draft, so delivery and acts treat the session as busy until a
+// submit, Ctrl-C or the draft timeout.
+func (s *Session) MarkDraft() { s.draftAt.Store(time.Now().UnixNano()) }
+
+// ClearDraft forgets the pending draft (the pasted text was submitted).
+func (s *Session) ClearDraft() { s.draftAt.Store(0) }

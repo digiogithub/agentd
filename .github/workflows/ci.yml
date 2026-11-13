@@ -35,6 +35,12 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      - name: OpenAPI contract and spec lint
+        # Handlers vs docs/api/openapi.yaml (request/response/SSE validation,
+        # route table, spec lint). Also part of the full run below; named here
+        # so a spec drift is easy to spot.
+        run: go test -race -count=1 -run 'Contract|OpenAPI' ./internal/httpapi
+
       - name: go test -race
         # Tests run shells in real PTYs (/bin/sh, bash, cat); they never start
         # real agent CLIs.

@@ -1,0 +1,33 @@
+{
+  "Cols": 60,
+  "Rows": 6,
+  "CursorX": 2,
+  "CursorY": 2,
+  "CursorHidden": false,
+  "AltScreen": false,
+  "Title": "� Prueba de agentd",
+  "AppCursor": false,
+  "BracketedPaste": false,
+  "Bells": 0,
+  "Notifies": 0,
+  "Lines": [
+    "────────────",
+    "",
+    "❯ ",
+    "────────────"
+  ],
+  "Styled": [
+    {
+      "row": 0,
+      "col": 0,
+      "text": "────────────",
+      "fg": "244"
+    },
+    {
+      "row": 3,
+      "col": 0,
+      "text": "────────────",
+      "fg": "244"
+    }
+  ]
+}

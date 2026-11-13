@@ -1,0 +1,14 @@
+{
+  "cols": 120,
+  "rows": 40,
+  "profile": "default",
+  "description": "Claude-like input box with a faint ghost suggestion",
+  "cmd": [
+    "fakeagent",
+    "-box",
+    "-ghost",
+    "Try \"fix lint errors\"",
+    "-osc9",
+    "turn done"
+  ]
+}

@@ -21,6 +21,11 @@ import (
 const timeout = 10 * time.Second
 
 func TestMain(m *testing.M) {
+	// Session-scoped variables must not leak in when run inside an agentd
+	// session.
+	for _, k := range []string{"AGENTD_TOKEN", "AGENTD_ID", "AGENTD_SOCKET"} {
+		os.Unsetenv(k)
+	}
 	code := m.Run()
 	testutil.CleanupFakeAgent()
 	os.Exit(code)
@@ -117,7 +122,7 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	if info.State != "running" || info.Pid == 0 || info.Profile != "claude" || info.Cwd != cwd ||
-		info.Cols != 120 || info.Rows != 40 {
+		info.Cols != 160 || info.Rows != 50 {
 		t.Fatalf("run info %+v", info)
 	}
 	if _, err := c.Run(proto.RunArgs{Name: "fake@a", Cmd: []string{bin}}); err == nil {

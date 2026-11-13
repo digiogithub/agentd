@@ -85,29 +85,29 @@ var agentPurgeStates = []mailbox.State{mailbox.StateRead, mailbox.StateReplied}
 // read/replied messages of its own mailbox, without vacuum.
 func (s *Server) purge(ctx context.Context, who caller, a proto.PurgeArgs) (proto.PurgeResult, error) {
 	if !a.All && a.Before == "" && a.OlderThan == "" && a.Recipient == "" && len(a.States) == 0 {
-		return proto.PurgeResult{}, errors.New("purge: give a filter (before, older_than, recipient, states) or all=true to purge everything you may")
+		return proto.PurgeResult{}, proto.Errorf(proto.CodeInvalid, "purge: give a filter (before, older_than, recipient, states) or all=true to purge everything you may")
 	}
 	var o mailbox.PurgeOptions
 	switch {
 	case a.Before != "" && a.OlderThan != "":
-		return proto.PurgeResult{}, errors.New("purge: before and older_than are mutually exclusive")
+		return proto.PurgeResult{}, proto.Errorf(proto.CodeInvalid, "purge: before and older_than are mutually exclusive")
 	case a.Before != "":
 		t, err := time.Parse(time.RFC3339Nano, a.Before)
 		if err != nil {
-			return proto.PurgeResult{}, fmt.Errorf("purge: before %q is not an RFC 3339 time", a.Before)
+			return proto.PurgeResult{}, proto.Errorf(proto.CodeInvalid, "purge: before %q is not an RFC 3339 time", a.Before)
 		}
 		o.Before = t
 	case a.OlderThan != "":
 		d, err := config.ParseDuration(a.OlderThan)
 		if err != nil {
-			return proto.PurgeResult{}, fmt.Errorf("purge: older_than: %w", err)
+			return proto.PurgeResult{}, proto.Errorf(proto.CodeInvalid, "purge: older_than: %w", err)
 		}
 		o.Before = s.clock().Now().Add(-d)
 	}
 	for _, st := range a.States {
 		ms := mailbox.State(st)
 		if !ms.Valid() {
-			return proto.PurgeResult{}, fmt.Errorf("purge: unknown state %q (want queued, delivered, read or replied)", st)
+			return proto.PurgeResult{}, proto.Errorf(proto.CodeInvalid, "purge: unknown state %q (want queued, delivered, read or replied)", st)
 		}
 		if !slices.Contains(o.States, ms) {
 			o.States = append(o.States, ms)
@@ -118,7 +118,7 @@ func (s *Server) purge(ctx context.Context, who caller, a proto.PurgeArgs) (prot
 
 	if who.session {
 		if a.Recipient != "" && a.Recipient != who.id {
-			return proto.PurgeResult{}, fmt.Errorf("purge: session %q can only purge its own mailbox", who.id)
+			return proto.PurgeResult{}, proto.Errorf(proto.CodeForbidden, "purge: session %q can only purge its own mailbox", who.id)
 		}
 		o.Recipient = who.id
 		if len(o.States) == 0 {
@@ -126,11 +126,11 @@ func (s *Server) purge(ctx context.Context, who caller, a proto.PurgeArgs) (prot
 		}
 		for _, st := range o.States {
 			if !slices.Contains(agentPurgeStates, st) {
-				return proto.PurgeResult{}, fmt.Errorf("purge: session %q may only purge read or replied messages, not %s", who.id, st)
+				return proto.PurgeResult{}, proto.Errorf(proto.CodeForbidden, "purge: session %q may only purge read or replied messages, not %s", who.id, st)
 			}
 		}
 		if a.Vacuum {
-			return proto.PurgeResult{}, errors.New("purge: vacuum is for humans only")
+			return proto.PurgeResult{}, proto.Errorf(proto.CodeForbidden, "purge: vacuum is for humans only")
 		}
 	}
 

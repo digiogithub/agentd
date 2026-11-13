@@ -256,3 +256,31 @@ func TestDirLabel(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadAliasesEnvUsesGivenEnvironment(t *testing.T) {
+	home, dir := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "p"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	xdg := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(xdg, "agentd"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(xdg, "agentd", "aliases.toml"), []byte("f = \"~/p\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	get := EnvLookup([]string{"HOME=" + home, "XDG_CONFIG_HOME=" + xdg, "AGENTD_ALIASES=e=" + dir, "BAD", "HOME=" + home})
+	a, err := LoadAliasesEnv(get)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if al, ok := a.Lookup("f"); !ok || al.Dir != filepath.Join(home, "p") || al.Source != AliasSourceFile {
+		t.Fatalf("file alias with ~ against env HOME: %+v", al)
+	}
+	if al, ok := a.Lookup("e"); !ok || al.Dir != dir || al.Source != AliasSourceEnv {
+		t.Fatalf("env alias: %+v", al)
+	}
+	if p, _ := AliasesPathEnv(EnvLookup([]string{"AGENTD_ALIASES_FILE=/x/y.toml", "XDG_CONFIG_HOME=" + xdg})); p != "/x/y.toml" {
+		t.Fatalf("path = %q", p)
+	}
+}

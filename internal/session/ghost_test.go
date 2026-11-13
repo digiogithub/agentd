@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/vt"
 
 	"github.com/digiogithub/agentd/internal/termcolor"
@@ -143,5 +144,25 @@ func TestFilterScreenWideAndDisabled(t *testing.T) {
 	raw, ghost := filterScreen(e, ScreenOpts{HideGhost: true})
 	if ghost != "" || !strings.Contains(raw, "日本 ok") {
 		t.Fatalf("disabled rules: ghost %q screen %q", ghost, raw)
+	}
+}
+
+// ghostCells must reject without a visible cell at or right of the cursor and
+// for a cursor outside the screen, before copying the row; real ghost is still
+// found.
+func TestGhostCellsCheapRejection(t *testing.T) {
+	e := emu(t, 20, 3, "\x1b[1;1H❯ typed")
+	if got := ghostCells(e, uv.Position{X: 9, Y: 0}, claudeRules); got != nil {
+		t.Errorf("nothing right of the cursor: %v", got)
+	}
+	if got := ghostCells(e, uv.Position{X: 20, Y: 0}, claudeRules); got != nil {
+		t.Errorf("cursor outside: %v", got)
+	}
+	if got := ghostCells(e, uv.Position{X: -1, Y: 0}, claudeRules); got != nil {
+		t.Errorf("negative cursor: %v", got)
+	}
+	e = emu(t, 20, 3, "\x1b[1;1H❯ \x1b[2mTry it\x1b[0m\x1b[1;3H")
+	if got := ghostCells(e, e.CursorPosition(), claudeRules); len(got) == 0 {
+		t.Error("faint ghost after the marker not found")
 	}
 }

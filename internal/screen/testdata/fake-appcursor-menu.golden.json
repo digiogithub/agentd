@@ -1,0 +1,19 @@
+{
+  "Cols": 120,
+  "Rows": 40,
+  "CursorX": 0,
+  "CursorY": 5,
+  "CursorHidden": true,
+  "AltScreen": false,
+  "AppCursor": true,
+  "BracketedPaste": true,
+  "Bells": 0,
+  "Notifies": 0,
+  "Lines": [
+    "fakeagent ready",
+    "Pick one:",
+    "  Alpha",
+    "❯ Beta",
+    "  Gamma"
+  ]
+}

@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"os"
@@ -18,6 +17,7 @@ import (
 
 	"github.com/digiogithub/agentd/internal/config"
 	"github.com/digiogithub/agentd/internal/delivery"
+	"github.com/digiogithub/agentd/internal/inject"
 	"github.com/digiogithub/agentd/internal/mailbox"
 	"github.com/digiogithub/agentd/internal/proto"
 	"github.com/digiogithub/agentd/internal/session"
@@ -57,7 +57,23 @@ func (s *Server) handleConn(conn net.Conn) {
 			}
 			continue
 		}
-		data, err := s.dispatch(req, peer)
+		if req.Op == proto.OpSubscribe {
+			if s.handleSubscribe(conn, codec, req, peer) {
+				return
+			}
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		stop := func() {}
+		if req.Op == proto.OpAct {
+			// An act holds the input lock and types into a terminal: it must
+			// not outlive a client that went away.
+			ctx, stop = s.cancelOnDisconnect(ctx, conn, codec)
+		}
+		data, err := s.dispatch(ctx, req, peer)
+		stop()
+		cancel()
+		err = classifyError(err)
 		var resp proto.Response
 		if err != nil {
 			s.Log.Debug("op failed", "op", req.Op, "err", err)
@@ -75,12 +91,37 @@ func (s *Server) handleConn(conn net.Conn) {
 	}
 }
 
-func (s *Server) dispatch(req proto.Request, peer peerInfo) (any, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
-	defer cancel()
+// cancelOnDisconnect returns ctx cancelled as soon as the client's connection
+// is closed or fails. It watches with a Peek on the codec's reader, so a
+// pipelined next request is not consumed; stop ends the watch (it returns
+// once the watcher goroutine is gone and the read deadline is cleared).
+func (s *Server) cancelOnDisconnect(parent context.Context, conn net.Conn, codec *proto.Codec) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(parent)
+	res := make(chan struct{})
+	go func() {
+		defer close(res)
+		if _, err := codec.Reader().Peek(1); err != nil && !errors.Is(err, os.ErrDeadlineExceeded) {
+			cancel()
+		}
+	}()
+	return ctx, func() {
+		_ = conn.SetReadDeadline(time.Unix(1, 0)) // unblock the Peek
+		<-res
+		_ = conn.SetReadDeadline(time.Time{})
+		cancel()
+	}
+}
+
+func (s *Server) dispatch(ctx context.Context, req proto.Request, peer peerInfo) (any, error) {
 	switch req.Op {
 	case proto.OpPing:
-		return proto.PingResult{Version: Version, Pid: os.Getpid()}, nil
+		return s.ping(), nil
+	case proto.OpInfo:
+		var a proto.InfoArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		return s.infoOp(a), nil
 	case proto.OpRun:
 		var a proto.RunArgs
 		if err := req.DecodeArgs(&a); err != nil {
@@ -88,7 +129,12 @@ func (s *Server) dispatch(req proto.Request, peer peerInfo) (any, error) {
 		}
 		return s.run(ctx, a)
 	case proto.OpLs:
-		return s.ls(ctx)
+		// A session caller without agent_view must not read other sessions'
+		// transcript preview through ls. An unresolvable identity is treated
+		// the same way (no error: ls stays usable).
+		who, err := s.resolveCaller(peer, req.Auth)
+		strip := err != nil || (who.session && !s.Cfg.Security.AgentView)
+		return s.ls(ctx, who.id, strip)
 	case proto.OpKill:
 		var a proto.KillArgs
 		if err := req.DecodeArgs(&a); err != nil {
@@ -167,6 +213,36 @@ func (s *Server) dispatch(req proto.Request, peer peerInfo) (any, error) {
 			return nil, err
 		}
 		return s.purge(ctx, who, a)
+	case proto.OpView:
+		var a proto.ViewArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.viewOp(who, a)
+	case proto.OpViewAck:
+		var a proto.NameArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.viewAck(who, a.Name)
+	case proto.OpAct:
+		var a proto.ActArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.actOp(ctx, who, a)
 	case proto.OpPeers:
 		return s.peers(), nil
 	case proto.OpWhoami:
@@ -178,34 +254,41 @@ func (s *Server) dispatch(req proto.Request, peer peerInfo) (any, error) {
 	case proto.OpShutdown:
 		return nil, nil
 	case "":
-		return nil, errors.New("missing op")
+		return nil, proto.Errorf(proto.CodeInvalid, "missing op")
 	default:
-		return nil, fmt.Errorf("unknown op %q", req.Op)
+		return nil, proto.Errorf(proto.CodeInvalid, "unknown op %q", req.Op)
 	}
 }
 
 // ---- Sessions ----
 
 func (s *Server) run(ctx context.Context, a proto.RunArgs) (proto.SessionInfo, error) {
-	if err := config.ValidName(a.Name); err != nil {
+	a, err := s.resolveRun(a)
+	if err != nil {
 		return proto.SessionInfo{}, err
 	}
+	if err := config.ValidName(a.Name); err != nil {
+		return proto.SessionInfo{}, proto.WithCode(proto.CodeInvalid, err)
+	}
 	if len(a.Cmd) == 0 || a.Cmd[0] == "" {
-		return proto.SessionInfo{}, errors.New("run: empty command")
+		return proto.SessionInfo{}, proto.Errorf(proto.CodeInvalid, "run: empty command")
 	}
 	if a.Cwd != "" {
 		if !filepath.IsAbs(a.Cwd) {
-			return proto.SessionInfo{}, fmt.Errorf("run: cwd %q is not absolute", a.Cwd)
+			return proto.SessionInfo{}, proto.Errorf(proto.CodeInvalid, "run: cwd %q is not absolute", a.Cwd)
 		}
 		if fi, err := os.Stat(a.Cwd); err != nil || !fi.IsDir() {
-			return proto.SessionInfo{}, fmt.Errorf("run: cwd %q is not a directory", a.Cwd)
+			return proto.SessionInfo{}, proto.Errorf(proto.CodeInvalid, "run: cwd %q is not a directory", a.Cwd)
 		}
 	}
+	// Fixed size policy (ADR-A02): without an explicit size the session gets
+	// its profile's cols/rows, never the caller's terminal size.
+	profile := s.Cfg.Profile(a.Profile)
 	if a.Cols == 0 {
-		a.Cols = session.DefaultCols
+		a.Cols = uint16(profile.Cols)
 	}
 	if a.Rows == 0 {
-		a.Rows = session.DefaultRows
+		a.Rows = uint16(profile.Rows)
 	}
 	logPath, err := config.SessionLogPath(a.Name)
 	if err != nil {
@@ -223,25 +306,25 @@ func (s *Server) run(ctx context.Context, a proto.RunArgs) (proto.SessionInfo, e
 	env[EnvID] = a.Name
 	env[EnvSocket] = sock
 	env[EnvToken] = newToken() // identity.go; kept in memory only (in the session's Spec)
-	profile := s.Cfg.Profile(a.Profile)
 
 	// Reserve the name, then start without holding the registry lock (a slow
 	// fork/exec must not stall every other op).
 	s.mu.Lock()
 	if s.closing {
 		s.mu.Unlock()
-		return proto.SessionInfo{}, errors.New("daemon is shutting down")
+		return proto.SessionInfo{}, proto.Errorf(proto.CodeNotReady, "daemon is shutting down")
 	}
 	_, exists := s.sessions[a.Name]
 	_, starting := s.starting[a.Name]
 	if exists || starting {
 		s.mu.Unlock()
-		return proto.SessionInfo{}, fmt.Errorf("session %q already exists", a.Name)
+		return proto.SessionInfo{}, proto.Errorf(proto.CodeExists, "session %q already exists", a.Name)
 	}
 	s.starting[a.Name] = proto.SessionInfo{
 		Name: a.Name, State: StateStarting, Cwd: a.Cwd, Cmd: a.Cmd, Profile: profile.Name,
 		Cols: a.Cols, Rows: a.Rows, StartedAt: time.Now(),
 	}
+	created := s.starting[a.Name]
 	s.mu.Unlock()
 
 	sess, err := session.Start(session.Spec{
@@ -258,10 +341,21 @@ func (s *Server) run(ctx context.Context, a proto.RunArgs) (proto.SessionInfo, e
 	if s.closing { // Shutdown already collected the sessions to close
 		s.mu.Unlock()
 		_ = sess.Close()
-		return proto.SessionInfo{}, errors.New("daemon is shutting down")
+		return proto.SessionInfo{}, proto.Errorf(proto.CodeNotReady, "daemon is shutting down")
 	}
-	e := &entry{sess: sess, profile: profile}
+	e := &entry{sess: sess, profile: profile, baseCols: a.Cols, baseRows: a.Rows, restore: s.Cfg.Run.RestoreSize(),
+		exitPub: make(chan struct{})}
+	e.view = newViewState(s, e, a.Name)
 	s.sessions[a.Name] = e
+	// session.created only for a session that really started (a failed start
+	// or a shutdown race publishes nothing, so no session.removed is owed);
+	// both before the watcher starts, so they precede any view event.
+	s.publish(proto.EvSessionCreated, a.Name, created)
+	s.publish(proto.EvSessionStarted, a.Name, proto.SessionInfo{
+		Name: a.Name, State: sess.State(), Pid: sess.Pid(), Cwd: a.Cwd, Cmd: a.Cmd, Profile: profile.Name,
+		StartedAt: sess.StartedAt(), Cols: a.Cols, Rows: a.Rows,
+	})
+	e.view.start() // under the lock: Shutdown must find a started watcher
 	s.mu.Unlock()
 
 	s.Log.Info("session started", "name", a.Name, "pid", sess.Pid(), "cmd", a.Cmd, "cwd", a.Cwd, "profile", profile.Name)
@@ -269,6 +363,8 @@ func (s *Server) run(ctx context.Context, a proto.RunArgs) (proto.SessionInfo, e
 		<-sess.Done()
 		code, _ := sess.ExitCode()
 		s.Log.Info("session exited", "name", a.Name, "code", code)
+		s.publish(proto.EvSessionExited, a.Name, proto.ExitedData{ExitCode: code})
+		close(e.exitPub) // rm waits for this before it publishes session.removed
 	}()
 	s.kick(a.Name) // messages may have been queued before it started
 	return s.info(ctx, e), nil
@@ -300,16 +396,26 @@ func (s *Server) info(ctx context.Context, e *entry) proto.SessionInfo {
 		last = info.StartedAt
 	}
 	info.IdleMS = time.Since(last).Milliseconds()
+	if e.view != nil {
+		info.Status, info.Attention, info.Revision, info.Preview = e.view.summary()
+	}
 	if n, err := s.Store.UnreadCount(ctx, info.Name); err == nil {
 		info.Unread = n
 	}
 	return info
 }
 
-func (s *Server) ls(ctx context.Context) (proto.LsResult, error) {
+// ls lists the sessions. With stripPreview the transcript preview of every
+// session other than self is blanked (status and attention stay: peers need
+// them).
+func (s *Server) ls(ctx context.Context, self string, stripPreview bool) (proto.LsResult, error) {
 	res := proto.LsResult{Sessions: []proto.SessionInfo{}}
 	for _, e := range s.sortedEntries() {
-		res.Sessions = append(res.Sessions, s.info(ctx, e))
+		info := s.info(ctx, e)
+		if stripPreview && info.Name != self {
+			info.Preview = ""
+		}
+		res.Sessions = append(res.Sessions, info)
 	}
 	if starting := s.startingInfos(); len(starting) > 0 {
 		res.Sessions = append(res.Sessions, starting...)
@@ -337,7 +443,7 @@ func ParseSignal(v string) (syscall.Signal, error) {
 	}
 	if n, err := strconv.Atoi(v); err == nil {
 		if n <= 0 || n > 64 {
-			return 0, fmt.Errorf("invalid signal %q", v)
+			return 0, proto.Errorf(proto.CodeInvalid, "invalid signal %q", v)
 		}
 		return syscall.Signal(n), nil
 	}
@@ -347,7 +453,7 @@ func ParseSignal(v string) (syscall.Signal, error) {
 	}
 	sig := unix.SignalNum(name)
 	if sig == 0 {
-		return 0, fmt.Errorf("unknown signal %q", v)
+		return 0, proto.Errorf(proto.CodeInvalid, "unknown signal %q", v)
 	}
 	return sig, nil
 }
@@ -363,7 +469,7 @@ func (s *Server) killSession(a proto.KillArgs) error {
 	}
 	if err := e.sess.Signal(sig); err != nil {
 		if errors.Is(err, session.ErrExited) {
-			return fmt.Errorf("session %q has already exited", a.Name)
+			return proto.Errorf(proto.CodeExited, "session %q has already exited", a.Name)
 		}
 		return err
 	}
@@ -373,16 +479,35 @@ func (s *Server) killSession(a proto.KillArgs) error {
 
 func (s *Server) rm(name string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	e, ok := s.sessions[name]
 	if !ok {
-		return fmt.Errorf("no such session %q", name)
+		s.mu.Unlock()
+		return proto.Errorf(proto.CodeNotFound, "no such session %q", name)
 	}
 	if e.sess.State() != session.StateExited {
-		return fmt.Errorf("session %q is still running (kill it first)", name)
+		s.mu.Unlock()
+		return proto.Errorf(proto.CodeConflict, "session %q is still running (kill it first)", name)
+	}
+	s.mu.Unlock()
+	// session.exited is published by a goroutine that may lag the state
+	// change: wait for it, so session.removed never precedes it.
+	if e.exitPub != nil {
+		select {
+		case <-e.exitPub:
+		case <-time.After(5 * time.Second):
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sessions[name] != e { // removed (and maybe re-created) meanwhile
+		return proto.Errorf(proto.CodeNotFound, "no such session %q", name)
 	}
 	delete(s.sessions, name)
+	if e.view != nil {
+		e.view.stopOnce.Do(func() { close(e.view.stop) })
+	}
 	s.Log.Info("session removed", "name", name)
+	s.publish(proto.EvSessionRemoved, name, nil)
 	return nil
 }
 
@@ -396,7 +521,7 @@ func (s *Server) dump(a proto.DumpArgs) (proto.DumpResult, error) {
 	var res proto.DumpResult
 	switch {
 	case a.Scrollback && a.ANSI:
-		return proto.DumpResult{}, errors.New("dump: ansi output is not supported with scrollback")
+		return proto.DumpResult{}, proto.Errorf(proto.CodeInvalid, "dump: ansi output is not supported with scrollback")
 	case a.Scrollback:
 		res.Text, res.Ghost = e.sess.ScrollbackFiltered(opts)
 	case a.ANSI:
@@ -423,9 +548,9 @@ func (s *Server) dump(a proto.DumpArgs) (proto.DumpResult, error) {
 func mailboxErr(err error, id int64, who string) error {
 	switch {
 	case errors.Is(err, mailbox.ErrNotFound):
-		return fmt.Errorf("message %d not found", id)
+		return proto.Errorf(proto.CodeNotFound, "message %d not found", id)
 	case errors.Is(err, mailbox.ErrForbidden):
-		return fmt.Errorf("message %d is not addressed to %q", id, who)
+		return proto.Errorf(proto.CodeForbidden, "message %d is not addressed to %q", id, who)
 	}
 	return err
 }
@@ -436,4 +561,22 @@ func toWire(m mailbox.Message) proto.Message {
 		ReplyTo: m.ReplyTo, State: string(m.State), Attempts: m.Attempts, CreatedAt: m.CreatedAt,
 		DeliveredAt: m.DeliveredAt, ReadAt: m.ReadAt, RepliedAt: m.RepliedAt,
 	}
+}
+
+// classifyError gives an uncoded error from a lower layer its stable code:
+// a PTY write timeout is `timeout`, a paste that never showed up is
+// `verify_failed`, a pending human draft is `busy`. Errors that already carry
+// a code are untouched; the message wording never changes.
+func classifyError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, session.ErrWriteTimeout):
+		return proto.WithCode(proto.CodeTimeout, err)
+	case errors.Is(err, inject.ErrPasteNotVisible):
+		return proto.WithCode(proto.CodeVerifyFailed, err)
+	case errors.Is(err, inject.ErrDraft):
+		return proto.WithCode(proto.CodeBusy, err)
+	}
+	return err
 }

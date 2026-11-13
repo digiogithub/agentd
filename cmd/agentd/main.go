@@ -47,9 +47,9 @@ func newRootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.AddCommand(
-		daemonCmd(), runCmd(), lsCmd(), attachCmd(), dumpCmd(), typeCmd(), killCmd(), rmCmd(),
+		daemonCmd(), runCmd(), lsCmd(), attachCmd(), dumpCmd(), viewCmd(), eventsCmd(), typeCmd(), actCmd(), killCmd(), rmCmd(),
 		sendCmd(), inboxCmd(), readCmd(), replyCmd(), peersCmd(), aliasesCmd(), shutdownCmd(),
-		versionCmd(), mcpCmd(), whoamiCmd(), purgeCmd(),
+		versionCmd(), mcpCmd(), whoamiCmd(), purgeCmd(), serveCmd(),
 	)
 	return root
 }
@@ -135,14 +135,17 @@ func daemonCmd() *cobra.Command {
 }
 
 func runCmd() *cobra.Command {
-	var harness, name, profile string
+	var harness, name, profile, size string
 	var envs []string
 	cmd := &cobra.Command{
-		Use:   "run [alias|path] [--harness claude|codex|pando|<bin>] [--name NAME] [--profile P] [-- cmd...]",
+		Use:   "run [alias|path] [--harness claude|codex|pando|<bin>] [--name NAME] [--profile P] [--size COLSxROWS] [-- cmd...]",
 		Short: "Start an agent session in a project directory",
 		Long: `Start a session. The target is a project alias (see 'agentd aliases') or a
-directory (default "."). The command defaults to the harness binary; the name
-defaults to <harness>@<label> and the profile to the harness name.`,
+directory (default "."), resolved by the daemon. The command defaults to the
+harness binary; the name defaults to <harness>@<label> and the profile to the
+harness name. The session gets the profile's fixed terminal size (160x50 by
+default, profile cols/rows) unless --size is given; this terminal's size is
+never sent (attaching resizes it, see restore_size_on_detach).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pos, argv := args, []string(nil)
 			if dash := cmd.ArgsLenAtDash(); dash >= 0 {
@@ -155,29 +158,13 @@ defaults to <harness>@<label> and the profile to the harness name.`,
 			if len(pos) == 1 {
 				target = pos[0]
 			}
-			aliases, err := config.LoadDefaultAliases()
+			cols, rows, err := parseSize(size)
 			if err != nil {
 				return err
 			}
-			dir, label, err := aliases.ResolveTarget(target)
+			cwd, err := os.Getwd()
 			if err != nil {
 				return err
-			}
-			if harness == "" {
-				harness = "claude"
-				if len(argv) > 0 {
-					harness = argv[0]
-				}
-			}
-			hname := filepath.Base(harness)
-			if len(argv) == 0 {
-				argv = []string{harness}
-			}
-			if name == "" {
-				name = hname + "@" + label
-			}
-			if profile == "" {
-				profile = hname
 			}
 			env := map[string]string{}
 			for _, kv := range envs {
@@ -187,17 +174,19 @@ defaults to <harness>@<label> and the profile to the harness name.`,
 				}
 				env[k] = v
 			}
-			cols, rows := termSize()
 			c, err := connect()
 			if err != nil {
 				return err
 			}
 			defer c.Close()
+			// The daemon resolves target + harness (aliases, label, default
+			// name/command/profile) so the CLI and the API share one path.
 			info, err := c.Run(proto.RunArgs{
-				Name: name, Cwd: dir, Cmd: argv, EnvBase: os.Environ(), Env: env, Profile: profile, Cols: cols, Rows: rows,
+				Name: name, Target: target, Harness: harness, Cwd: cwd, Cmd: argv,
+				EnvBase: os.Environ(), Env: env, Profile: profile, Cols: cols, Rows: rows,
 			})
 			if err != nil {
-				return err
+				return runHint(err)
 			}
 			fmt.Printf("started %s (pid %d, profile %s) in %s\n", info.Name, info.Pid, info.Profile, info.Cwd)
 			return nil
@@ -207,8 +196,33 @@ defaults to <harness>@<label> and the profile to the harness name.`,
 	f.StringVar(&harness, "harness", "", "agent harness: claude, codex, pando or a binary (default claude, or the command after --)")
 	f.StringVar(&name, "name", "", "session name (default <harness>@<label>)")
 	f.StringVar(&profile, "profile", "", "harness profile for idle detection/injection (default: harness name)")
+	f.StringVar(&size, "size", "", "terminal size COLSxROWS (default: the profile's cols/rows, 160x50)")
 	f.StringArrayVarP(&envs, "env", "e", nil, "extra environment variable KEY=VALUE (repeatable)")
 	return cmd
+}
+
+// runHint adds a restart hint when a daemon started before an upgrade rejects
+// the target field of run (it predates daemon-side alias resolution).
+func runHint(err error) error {
+	if err != nil && strings.Contains(err.Error(), `unknown field "target"`) {
+		return fmt.Errorf("%w\nhint: the running daemon is older than this agentd binary; "+
+			"restart it with 'agentd shutdown' (this stops all sessions) and run again", err)
+	}
+	return err
+}
+
+// parseSize parses "COLSxROWS" ("" = no explicit size, 0x0).
+func parseSize(s string) (cols, rows uint16, err error) {
+	if s == "" {
+		return 0, 0, nil
+	}
+	c, r, ok := strings.Cut(strings.ToLower(s), "x")
+	cn, cerr := strconv.ParseUint(c, 10, 16)
+	rn, rerr := strconv.ParseUint(r, 10, 16)
+	if !ok || cerr != nil || rerr != nil || cn == 0 || rn == 0 {
+		return 0, 0, fmt.Errorf("invalid --size %q (want COLSxROWS, e.g. 200x60)", s)
+	}
+	return uint16(cn), uint16(rn), nil
 }
 
 func lsCmd() *cobra.Command {
@@ -301,6 +315,172 @@ func cellsText(d proto.CellsDump) string {
 		}
 		fmt.Fprintf(&b, "x=%-3d %s %-4s fg=%-8s bg=%-8s attrs=%s w=%d\n",
 			c.X, c.Rune, strconv.Quote(c.Content), orDefault(c.Fg), orDefault(c.Bg), attrs, c.Width)
+	}
+	return b.String()
+}
+
+// viewCmd prints the semantic view of a session (op view).
+func eventsCmd() *cobra.Command {
+	var (
+		asJSON   bool
+		sessions []string
+		kinds    []string
+		since    uint64
+		epoch    string
+	)
+	cmd := &cobra.Command{
+		Use:   "events",
+		Short: "Stream daemon events (debugging aid for op subscribe)",
+		Long: `Subscribe to the daemon event bus and print events until interrupted or the
+daemon shuts down. --session and --kind (exact kind or prefix: session, status,
+view, input, attention, mail) filter; --json prints one JSON object per line.
+Humans see every session; an agent session only its own events and mail.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := connect()
+			if err != nil {
+				return err
+			}
+			sub, err := c.Subscribe(proto.SubscribeArgs{Sessions: sessions, Kinds: kinds, SinceSeq: since, Epoch: epoch}, 0)
+			if err != nil {
+				_ = c.Close()
+				return err
+			}
+			defer sub.Close()
+			go func() { // interrupt: close the stream, which ends the loop below
+				ch := make(chan os.Signal, 1)
+				signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
+				<-ch
+				_ = sub.Close()
+			}()
+			for ev := range sub.Events {
+				if asJSON {
+					b, _ := json.Marshal(ev)
+					if _, err := fmt.Fprintf(os.Stdout, "%s\n", b); err != nil {
+						return err
+					}
+					continue
+				}
+				fmt.Fprintf(os.Stdout, "%s #%d %s %s %s\n", ev.Time.Local().Format("15:04:05.000"), ev.Seq, ev.Kind, ev.Session, ev.Data)
+			}
+			return sub.Err()
+		},
+	}
+	f := cmd.Flags()
+	f.BoolVar(&asJSON, "json", false, "one JSON event per line")
+	f.StringSliceVar(&sessions, "session", nil, "only events of this session (repeatable)")
+	f.StringSliceVar(&kinds, "kind", nil, "only this event kind or prefix (repeatable)")
+	f.Uint64Var(&since, "since-seq", 0, "replay events after this seq when still buffered")
+	f.StringVar(&epoch, "epoch", "", "daemon epoch the --since-seq belongs to")
+	return cmd
+}
+
+func viewCmd() *cobra.Command {
+	var (
+		asJSON     bool
+		since      uint64
+		epoch      string
+		lines      int
+		scrollback bool
+	)
+	cmd := &cobra.Command{
+		Use:   "view [NAME]",
+		Short: "Print a session's semantic view (status, transcript, input, options)",
+		Long: `Print the daemon's interpretation of a session's screen: status (starting,
+working, idle, waiting, exited), the attention flag, the reflowed transcript
+lines, the input line and the options of a menu or dialog on screen.
+
+NAME defaults to $AGENTD_ID, or to the only session when there is just one.
+--since N prints nothing (and exits 0) when the revision is still N.
+Humans may view any session; an agent session only itself unless
+[security] agent_view = true.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := connect()
+			if err != nil {
+				return err
+			}
+			defer c.Close()
+			name := os.Getenv(daemon.EnvID)
+			if len(args) == 1 {
+				name = args[0]
+			}
+			if name == "" {
+				ss, err := c.Ls()
+				if err != nil {
+					return err
+				}
+				if len(ss) != 1 {
+					return fmt.Errorf("view: %d sessions; give a NAME", len(ss))
+				}
+				name = ss[0].Name
+			}
+			v, err := c.View(proto.ViewArgs{Name: name, SinceRevision: since, Epoch: epoch, LinesLimit: lines, Scrollback: scrollback})
+			if err != nil {
+				return err
+			}
+			if asJSON {
+				if v.NotModified {
+					return printJSON(os.Stdout, proto.ViewNotModified{NotModified: true, Epoch: v.Epoch, Revision: v.Revision})
+				}
+				return printJSON(os.Stdout, v)
+			}
+			if v.NotModified {
+				return nil
+			}
+			_, err = io.WriteString(os.Stdout, viewText(v))
+			return err
+		},
+	}
+	f := cmd.Flags()
+	f.BoolVar(&asJSON, "json", false, "JSON output")
+	f.Uint64Var(&since, "since", 0, "print nothing when the view revision is still N (needs --epoch)")
+	f.StringVar(&epoch, "epoch", "", "daemon epoch the --since revision belongs to (view/not_modified needs it)")
+	f.IntVarP(&lines, "lines", "n", 0, "newest N transcript lines (default 500, max 10000)")
+	f.BoolVar(&scrollback, "scrollback", false, "include the main-screen scrollback")
+	return cmd
+}
+
+// viewText renders a View as text: transcript, then a status footer, the
+// input line and the numbered options.
+func viewText(v proto.View) string {
+	var b strings.Builder
+	for _, l := range v.Lines {
+		b.WriteString(l.Text)
+		b.WriteByte('\n')
+	}
+	status := v.Status
+	if v.StatusReason != "" {
+		status += " (" + v.StatusReason + ")"
+	}
+	if v.ExitCode != nil {
+		status += fmt.Sprintf(" exit %d", *v.ExitCode)
+	}
+	attn := ""
+	if v.Attention.Set {
+		attn = " · attention: " + v.Attention.Reason
+	}
+	fmt.Fprintf(&b, "[agentd: %s%s · rev %d]\n", status, attn, v.Revision)
+	if v.Input.Text != "" || v.Input.Ghost != "" || v.Input.State != "empty" {
+		fmt.Fprintf(&b, "input (%s): %q", v.Input.State, v.Input.Text)
+		if v.Input.Ghost != "" {
+			fmt.Fprintf(&b, " ghost: %q", v.Input.Ghost)
+		}
+		b.WriteByte('\n')
+	}
+	if v.Dialog != nil && v.Dialog.Question != "" {
+		fmt.Fprintf(&b, "dialog: %s\n", strings.ReplaceAll(v.Dialog.Question, "\n", " / "))
+	}
+	if len(v.Options) > 0 {
+		b.WriteString("options:")
+		for _, o := range v.Options {
+			mark := ""
+			if o.Selected {
+				mark = "*"
+			}
+			fmt.Fprintf(&b, " [%d]%s %s ", o.Index, mark, o.Label)
+		}
+		b.WriteByte('\n')
 	}
 	return b.String()
 }
@@ -691,7 +871,12 @@ func aliasesCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "aliases",
 		Short: "List project aliases and their source (file/env)",
-		Args:  cobra.NoArgs,
+		Long: `List the project aliases and where each comes from. Aliases are read here
+from this process's environment (AGENTD_ALIASES, AGENTD_ALIASES_FILE,
+XDG_CONFIG_HOME, HOME), which is exactly what 'agentd run' sends the daemon
+(env_base) to resolve its target, so both always agree for the same caller.
+The daemon's info op accepts the same env_base for other clients.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			a, err := config.LoadDefaultAliases()
 			if err != nil {

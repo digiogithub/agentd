@@ -1,0 +1,10 @@
+{
+  "cols": 80,
+  "rows": 24,
+  "profile": "default",
+  "description": "long paragraphs wrapped by the terminal autowrap at 80x24",
+  "cmd": [
+    "fakeagent",
+    "-wrap"
+  ]
+}

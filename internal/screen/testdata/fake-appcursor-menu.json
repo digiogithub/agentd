@@ -1,0 +1,15 @@
+{
+  "cols": 120,
+  "rows": 40,
+  "profile": "default",
+  "description": "menu with DECCKM on, pointer moved with an SS3 arrow",
+  "frames": [
+    91
+  ],
+  "cmd": [
+    "fakeagent",
+    "-menu",
+    "Alpha|Beta|Gamma",
+    "-appcursor"
+  ]
+}

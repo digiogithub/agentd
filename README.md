@@ -271,6 +271,20 @@ retention = "5d"               # delete messages older than this (Go duration or
 purge_interval = "1h"          # how often the retention purge runs (>= 1m)
 ```
 
+## Remote access
+
+`agentd serve` listens on loopback over plain HTTP by default. Non-loopback binds require TLS
+(`[api] tls = "self-signed"` or `"files"`); the gateway refuses to start otherwise.
+
+- **Tailscale (recommended)**: keep the gateway on loopback and let Tailscale terminate TLS:
+  `agentd serve` then `tailscale serve --bg https / http://127.0.0.1:7477`. Add the MagicDNS name to
+  `[api] allowed_hosts`. Never use Funnel; Tailscale identity headers are not trusted, tokens stay required.
+- **Self-signed + pin**: `tls = "self-signed"` creates a certificate once; `agentd serve pair` puts its SPKI
+  pin in the QR and the app trusts only that key. Extra names: `tls_hosts = ["box.example.net"]` (then
+  `agentd serve tls rotate`). `agentd serve tls show` prints pin, names and expiry.
+- **Files**: `tls = "files"` with `tls_cert`/`tls_key` (e.g. `tailscale cert` output); renewed files are
+  picked up on SIGHUP or automatically.
+
 ## Security
 
 The socket is user-only (`0700` dir, `0600` socket, peer uid checked). Senders are verified by the

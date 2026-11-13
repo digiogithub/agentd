@@ -69,6 +69,7 @@ func Main(ctx context.Context, opts Options) error {
 	// Listen first: it takes the daemon lock, so a losing concurrent starter
 	// exits with ErrAlreadyRunning before touching the mailbox.
 	srv := New(cfg, aliases, nil, log)
+	srv.AliasesLoader = config.LoadAliasesEnv
 	if err := srv.Listen(); err != nil {
 		log.Error("listen", "err", err)
 		return err

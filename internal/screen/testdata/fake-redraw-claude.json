@@ -1,0 +1,17 @@
+{
+  "cols": 60,
+  "rows": 14,
+  "profile": "claude",
+  "description": "Claude-like alt-screen TUI repainting everything per token; 9 transcript rows visible of a 40-line conversation (history fixture)",
+  "cmd": [
+    "fakeagent",
+    "-alt",
+    "-redraw",
+    "-redrawturns",
+    "5",
+    "-redrawlines",
+    "3",
+    "-redrawwords",
+    "5"
+  ]
+}

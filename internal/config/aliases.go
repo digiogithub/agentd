@@ -35,18 +35,42 @@ var genericBasenames = map[string]bool{"devops": true, "app": true, "src": true,
 
 // AliasesPath returns the aliases file path: $AGENTD_ALIASES_FILE if set,
 // else $XDG_CONFIG_HOME/agentd/aliases.toml, else ~/.config/agentd/aliases.toml.
-func AliasesPath() (string, error) {
-	if p := os.Getenv(EnvAliasesFile); p != "" {
+func AliasesPath() (string, error) { return AliasesPathEnv(os.Getenv) }
+
+// AliasesPathEnv is AliasesPath reading the variables through getenv
+// (AGENTD_ALIASES_FILE, XDG_CONFIG_HOME, HOME) instead of the process
+// environment. A missing HOME falls back to the OS user's home.
+func AliasesPathEnv(getenv func(string) string) (string, error) {
+	if p := getenv(EnvAliasesFile); p != "" {
 		return p, nil
 	}
-	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
+	if d := getenv("XDG_CONFIG_HOME"); d != "" {
 		return filepath.Join(d, appDirName, aliasesName), nil
 	}
-	home, err := os.UserHomeDir()
+	home, err := homeEnv(getenv)
 	if err != nil {
 		return "", fmt.Errorf("config: resolve aliases path: %w", err)
 	}
 	return filepath.Join(home, ".config", appDirName, aliasesName), nil
+}
+
+func homeEnv(getenv func(string) string) (string, error) {
+	if h := getenv("HOME"); h != "" {
+		return h, nil
+	}
+	return os.UserHomeDir()
+}
+
+// EnvLookup returns a getenv function over a "KEY=VALUE" list (as in
+// os.Environ; the last duplicate wins).
+func EnvLookup(env []string) func(string) string {
+	m := make(map[string]string, len(env))
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok {
+			m[k] = v
+		}
+	}
+	return func(k string) string { return m[k] }
 }
 
 // Alias maps a short project name to a working directory.
@@ -59,6 +83,7 @@ type Alias struct {
 // Aliases is a set of project aliases. A nil *Aliases is valid and empty.
 type Aliases struct {
 	byName map[string]Alias
+	getenv func(string) string // for "~" expansion; nil = process environment
 }
 
 // ValidAliasName reports whether s is a valid alias name: the session-name
@@ -88,12 +113,25 @@ func LoadAliases(path string, env string) (*Aliases, error) {
 }
 
 // LoadDefaultAliases loads aliases from AliasesPath() and $AGENTD_ALIASES.
-func LoadDefaultAliases() (*Aliases, error) {
-	p, err := AliasesPath()
+func LoadDefaultAliases() (*Aliases, error) { return LoadAliasesEnv(os.Getenv) }
+
+// LoadAliasesEnv is LoadDefaultAliases reading AGENTD_ALIASES_FILE,
+// AGENTD_ALIASES, XDG_CONFIG_HOME and HOME (also for "~" expansion) through
+// getenv. The daemon uses it with the caller's env_base so a run resolves
+// aliases like the CLI that sent it.
+func LoadAliasesEnv(getenv func(string) string) (*Aliases, error) {
+	p, err := AliasesPathEnv(getenv)
 	if err != nil {
 		return nil, err
 	}
-	return LoadAliases(p, os.Getenv(EnvAliases))
+	a := &Aliases{byName: map[string]Alias{}, getenv: getenv}
+	if err := a.loadFile(p); err != nil {
+		return nil, err
+	}
+	if err := a.loadEnv(getenv(EnvAliases)); err != nil {
+		return nil, err
+	}
+	return a, nil
 }
 
 func (a *Aliases) loadFile(path string) error {
@@ -137,7 +175,7 @@ func (a *Aliases) add(name, dir, source string) error {
 	if err := ValidAliasName(name); err != nil {
 		return err
 	}
-	d, err := expandAliasDir(dir)
+	d, err := expandAliasDir(dir, a.getenv)
 	if err != nil {
 		return fmt.Errorf("alias %q: %w", name, err)
 	}
@@ -147,12 +185,15 @@ func (a *Aliases) add(name, dir, source string) error {
 
 // expandAliasDir expands a leading "~" or "~/" to the home directory and
 // requires the result to be absolute. The result is cleaned.
-func expandAliasDir(p string) (string, error) {
+func expandAliasDir(p string, getenv func(string) string) (string, error) {
+	if getenv == nil {
+		getenv = os.Getenv
+	}
 	if p == "" {
 		return "", errors.New("empty path")
 	}
 	if p == "~" || strings.HasPrefix(p, "~/") {
-		home, err := os.UserHomeDir()
+		home, err := homeEnv(getenv)
 		if err != nil {
 			return "", fmt.Errorf("expand %q: %w", p, err)
 		}
@@ -194,6 +235,15 @@ func (a *Aliases) List() []Alias {
 // basename, with generic basenames (devops, app, src, repo) turned into
 // "<parent>-<base>". Labels are sanitized to the alias-name charset.
 func (a *Aliases) ResolveTarget(arg string) (dir, label string, err error) {
+	return a.ResolveTargetIn(arg, "")
+}
+
+// ResolveTargetIn is ResolveTarget with an explicit base directory: a
+// relative path (not an alias) is resolved against base instead of the
+// process's current directory. An empty base means the current directory.
+// The daemon uses it to resolve a client's relative target against the
+// client's working directory.
+func (a *Aliases) ResolveTargetIn(arg, base string) (dir, label string, err error) {
 	if arg == "" {
 		return "", "", errors.New("config: empty target: want an alias or a directory")
 	}
@@ -202,6 +252,12 @@ func (a *Aliases) ResolveTarget(arg string) (dir, label string, err error) {
 			return "", "", fmt.Errorf("config: alias %q: %w", arg, err)
 		}
 		return al.Dir, al.Name, nil
+	}
+	if base != "" && !filepath.IsAbs(arg) {
+		if !filepath.IsAbs(base) {
+			return "", "", fmt.Errorf("config: base directory %q must be absolute", base)
+		}
+		arg = filepath.Join(base, arg)
 	}
 	dir, err = filepath.Abs(arg)
 	if err != nil {

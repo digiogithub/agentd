@@ -4,3 +4,5 @@
 *.db
 *.db-*
 /build/
+/cmd/agentd/agentd
+/.pando/

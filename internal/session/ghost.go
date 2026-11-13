@@ -1,14 +1,12 @@
 package session
 
 import (
-	"image/color"
 	"strings"
 
 	uv "github.com/charmbracelet/ultraviolet"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/vt"
 
-	"github.com/digiogithub/agentd/internal/termcolor"
+	"github.com/digiogithub/agentd/internal/screen"
 )
 
 // Ghost text: harnesses such as Claude Code and Codex draw a placeholder or a
@@ -17,29 +15,9 @@ import (
 // by readers of the screen (agents dumping it) or by the delivery loop. See
 // docs/ghost-text.md for the captures the rules below are based on.
 
-// GhostRules classifies ghost cells. The scope is always the input line: the
-// cursor's row, from the cursor column to the right edge (every capture put
-// the cursor on the first cell of the ghost text). Rules are never applied to
-// the rest of the screen: Codex, for one, draws ordinary secondary text faint.
-type GhostRules struct {
-	// Faint: faint (SGR 2) cells in scope are ghost.
-	Faint bool
-	// Colors: cells in scope whose foreground matches one of these are ghost.
-	Colors []termcolor.Spec
-	// RightOfCursor: the text in scope is ghost only when the cursor sits right
-	// after PromptMarker (the text left of the cursor, ignoring spaces and
-	// no-break spaces, ends with it; an empty marker always passes). If no
-	// style rule (Faint, Colors) is set, every non-blank cell in scope is ghost;
-	// otherwise a cell must match a style rule too.
-	RightOfCursor bool
-	// PromptMarker is the harness's prompt glyph, e.g. "❯" or "›".
-	PromptMarker string
-}
-
-func (r GhostRules) styleRules() bool { return r.Faint || len(r.Colors) > 0 }
-
-// enabled reports whether the rules can classify anything.
-func (r GhostRules) enabled() bool { return r.styleRules() || r.RightOfCursor }
+// GhostRules classifies ghost cells; the implementation lives in
+// internal/screen so Snapshot-based region splitting shares it.
+type GhostRules = screen.GhostRules
 
 // ScreenOpts selects how ScreenFiltered renders the screen.
 type ScreenOpts struct {
@@ -115,61 +93,23 @@ type cellGrid interface {
 
 // ghostCells returns the set of x positions on row cur.Y classified as ghost.
 func ghostCells(g cellGrid, cur uv.Position, r GhostRules) map[int]bool {
-	if !r.enabled() || cur.Y < 0 || cur.Y >= g.Height() || cur.X < 0 || cur.X >= g.Width() {
+	if !r.Enabled() || cur.Y < 0 || cur.Y >= g.Height() || cur.X < 0 || cur.X >= g.Width() {
 		return nil
 	}
-	if r.RightOfCursor && r.PromptMarker != "" {
-		left := strings.TrimRight(rowText(g, cur.Y, 0, cur.X), "  \t")
-		if !strings.HasSuffix(left, r.PromptMarker) {
-			return nil
+	// Cheap rejection before copying the row: ghost needs at least one
+	// visible cell at or right of the cursor (the common case, an input line
+	// with the cursor at the end of the text, has none).
+	visible := false
+	for x := cur.X; x < g.Width() && !visible; x++ {
+		if c := g.CellAt(x, cur.Y); c != nil && c.Content != "" && strings.TrimSpace(c.Content) != "" {
+			visible = true
 		}
 	}
-	var out map[int]bool
-	for x := cur.X; x < g.Width(); x++ {
-		c := g.CellAt(x, cur.Y)
-		if c == nil || c.IsZero() || isBlank(c.Content) {
-			continue
-		}
-		ghost := r.RightOfCursor
-		if r.styleRules() {
-			ghost = styleGhost(c, r)
-		}
-		if ghost {
-			if out == nil {
-				out = map[int]bool{}
-			}
-			out[x] = true
-		}
+	if !visible {
+		return nil
 	}
-	return out
-}
-
-func isBlank(content string) bool {
-	return strings.Trim(content, "  \t") == ""
-}
-
-func styleGhost(c *uv.Cell, r GhostRules) bool {
-	if r.Faint && c.Style.Attrs&uv.AttrFaint != 0 {
-		return true
-	}
-	return len(r.Colors) > 0 && colorMatches(c.Style.Fg, r.Colors)
-}
-
-func colorMatches(c color.Color, specs []termcolor.Spec) bool {
-	switch v := c.(type) {
-	case nil:
-		return false
-	case ansi.BasicColor:
-		return termcolor.MatchIndex(specs, int(v))
-	case ansi.IndexedColor:
-		return termcolor.MatchIndex(specs, int(v))
-	default:
-		r, g, b, a := c.RGBA()
-		if a == 0 {
-			return false
-		}
-		return termcolor.MatchRGB(specs, (r>>8)<<16|(g>>8)<<8|b>>8)
-	}
+	row := screen.Row{Cells: copyRow(g.Width(), func(x int) *uv.Cell { return g.CellAt(x, cur.Y) })}
+	return screen.GhostColumns(row, cur.X, g.Width(), r)
 }
 
 // rowText returns the text of cells [from, to) of row y (wide-character

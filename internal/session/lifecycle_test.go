@@ -32,9 +32,15 @@ func TestWriteTimesOutWhenChildStopsReading(t *testing.T) {
 	if d := time.Since(begin); d > 5*time.Second {
 		t.Fatalf("write took %v", d)
 	}
-	// The input lock was released: a further write fails fast too.
-	if _, err := s.Write([]byte("y"), false); !errors.Is(err, session.ErrWriteTimeout) {
+	// The input lock was released: a further write fails fast too. It must
+	// be larger than any room the tty may have freed meanwhile, or a short
+	// write can slip through and succeed.
+	begin = time.Now()
+	if _, err := s.Write([]byte(strings.Repeat("y", 1<<20)), false); !errors.Is(err, session.ErrWriteTimeout) {
 		t.Fatalf("second write err = %v", err)
+	}
+	if d := time.Since(begin); d > 5*time.Second {
+		t.Fatalf("second write took %v", d)
 	}
 }
 

@@ -45,6 +45,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/vt"
 	"github.com/creack/pty"
+
+	"github.com/digiogithub/agentd/internal/screen"
 )
 
 const (
@@ -139,11 +141,37 @@ type Session struct {
 	cols     uint16
 	rows     uint16
 	decModes map[int]bool // DEC private modes the child set/reset (via callbacks)
-	title    string
-	exited   bool
+	// Synchronized output (DEC 2026), guarded by outMu: syncSince is when the
+	// open update began (zero = none open), syncFrames counts completed ones.
+	// Updated in order by trackMode, so a set and reset inside one PTY chunk
+	// still count one frame.
+	syncSince  time.Time
+	syncFrames uint64
+	title      string
+	exited     bool
+
+	// Interpretation state (snapshot.go); written under outMu by the emulator
+	// callbacks and handleOutput.
+	oscCwd     string // last OSC 7 directory
+	bells      uint64
+	lastBell   time.Time
+	notifies   uint64
+	lastNotify screen.Notify
+
+	outputGen atomic.Uint64 // PTY output chunks fed to the emulator (OutputGen)
+	chMu      sync.Mutex
+	changed   chan struct{} // closed and replaced after every chunk (Changed)
+	snapCache snapshotCache // last emulator-derived Snapshot (snapshot.go)
 
 	strFilter stringFilter // fixes UTF-8 inside OSC/DCS strings before the emulator (oscfix.go)
 	emuBuf    []byte       // reused filter output buffer
+
+	// Frame-aligned chunking for children that use synchronized updates
+	// (syncgate.go): readMu serializes handleOutput between readLoop and the
+	// hold timer; held is the trailing, still open frame kept back.
+	readMu    sync.Mutex
+	held      []byte
+	holdTimer *time.Timer
 
 	inMu sync.Mutex // serializes PTY input
 
@@ -154,7 +182,8 @@ type Session struct {
 	inputClosed bool
 
 	lastOutput atomic.Int64 // unix nanos
-	lastHuman  atomic.Int64 // unix nanos
+	lastHuman  atomic.Int64 // unix nanos; real human keystrokes (attach clients) only
+	lastAct    atomic.Int64 // unix nanos; draft-neutral keys written by the act op (WriteAct)
 	draftAt    atomic.Int64 // unix nanos of the last uncommitted human input; 0 = none (draft.go)
 
 	replyMu  sync.Mutex
@@ -239,14 +268,19 @@ func Start(spec Spec) (*Session, error) {
 		logSize:    logSize,
 		readerDone: make(chan struct{}),
 		done:       make(chan struct{}),
+		changed:    make(chan struct{}),
 	}
 	s.replyW, _ = s.emu.InputPipe().(*io.PipeWriter)
 	// Callbacks fire inside emu.Write, i.e. under outMu's write lock.
 	s.emu.SetCallbacks(vt.Callbacks{
-		Title:       func(t string) { s.title = t },
-		EnableMode:  func(m ansi.Mode) { s.trackMode(m, true) },
-		DisableMode: func(m ansi.Mode) { s.trackMode(m, false) },
+		Title:            func(t string) { s.title = t },
+		Bell:             s.onBell,
+		WorkingDirectory: s.onWorkingDirectory,
+		EnableMode:       func(m ansi.Mode) { s.trackMode(m, true) },
+		DisableMode:      func(m ansi.Mode) { s.trackMode(m, false) },
 	})
+
+	s.registerNotifyHandlers()
 
 	go s.readLoop()
 	go s.replyPump()
@@ -311,7 +345,37 @@ func cloneSpec(s Spec) Spec {
 func (s *Session) trackMode(m ansi.Mode, on bool) {
 	if d, ok := m.(ansi.DECMode); ok {
 		s.decModes[int(d)] = on
+		if d == 2026 {
+			switch {
+			case on && s.syncSince.IsZero():
+				s.syncSince = time.Now()
+			case !on && !s.syncSince.IsZero():
+				s.syncSince = time.Time{}
+				s.syncFrames++
+			}
+		}
 	}
+}
+
+// SyncTimeout is how long an unterminated synchronized update (DEC 2026) is
+// honoured; terminals give up on a stuck BSU too.
+const SyncTimeout = time.Second
+
+// InSyncUpdate reports whether the child has an open synchronized update
+// (BSU seen, ESU not yet) younger than SyncTimeout: the screen is then a
+// half-drawn frame.
+func (s *Session) InSyncUpdate() bool {
+	s.outMu.RLock()
+	defer s.outMu.RUnlock()
+	return !s.syncSince.IsZero() && time.Since(s.syncSince) < SyncTimeout
+}
+
+// SyncFrames is the number of completed synchronized updates (BSU..ESU) the
+// child has drawn; 0 means it does not use DEC 2026.
+func (s *Session) SyncFrames() uint64 {
+	s.outMu.RLock()
+	defer s.outMu.RUnlock()
+	return s.syncFrames
 }
 
 // writeLog appends chunk to the log file, rotating it to LogPath+".1" first
@@ -341,9 +405,10 @@ func (s *Session) readLoop() {
 	for {
 		n, err := s.ptmx.Read(buf)
 		if n > 0 {
-			s.handleOutput(append([]byte(nil), buf[:n]...))
+			s.feed(append([]byte(nil), buf[:n]...))
 		}
 		if err != nil {
+			s.flushHeld()
 			return
 		}
 	}
@@ -356,6 +421,11 @@ func (s *Session) handleOutput(chunk []byte) {
 	defer s.outMu.Unlock()
 	s.emuBuf = s.strFilter.filter(s.emuBuf[:0], chunk)
 	_, _ = s.emu.Write(s.emuBuf)
+	s.outputGen.Add(1)
+	// Stamp again now that the screen shows the chunk: an observer that ran
+	// between the first stamp and the emulator write saw the old screen with
+	// the new timestamp and must still see this output as newer (AGED-US-0037).
+	s.lastOutput.Store(time.Now().UnixNano())
 	s.ring.Write(chunk)
 	for id, ch := range s.subs {
 		select {
@@ -366,6 +436,7 @@ func (s *Session) handleOutput(chunk []byte) {
 			delete(s.subs, id)
 		}
 	}
+	s.signalChanged()
 }
 
 // replyPump drains the emulator's reply pipe into a bounded queue. It never
@@ -440,6 +511,7 @@ func (s *Session) wait() {
 	s.exitCode, s.hasExit = code, true
 	s.exitMu.Unlock()
 	close(s.done)
+	s.signalChanged()
 }
 
 // exitCodeOf returns the exit status, or 128+signal if the child was killed by
@@ -514,6 +586,17 @@ func (s *Session) Unsubscribe(id int) {
 // reading stdin), Write returns the bytes written so far and an error
 // wrapping ErrWriteTimeout. Close aborts a pending Write (ErrExited).
 func (s *Session) Write(p []byte, human bool) (int, error) {
+	return s.write(p, human, false)
+}
+
+// WriteAct is Write for keys typed by the act op on behalf of an API caller:
+// like human input it clears the attention flag, holds back delivery and
+// tracks drafts (Enter / Ctrl-C clear one), but it records the time in
+// LastActInput, never in LastHumanInput, so an act is never mistaken for a
+// person typing.
+func (s *Session) WriteAct(p []byte) (int, error) { return s.write(p, false, true) }
+
+func (s *Session) write(p []byte, human, act bool) (int, error) {
 	select {
 	case <-s.done:
 		return 0, ErrExited
@@ -523,6 +606,10 @@ func (s *Session) Write(p []byte, human bool) (int, error) {
 	defer s.inMu.Unlock()
 	if human {
 		s.lastHuman.Store(time.Now().UnixNano())
+		s.trackDraft(p)
+	}
+	if act {
+		s.lastAct.Store(time.Now().UnixNano())
 		s.trackDraft(p)
 	}
 	written := 0
@@ -628,6 +715,7 @@ func (s *Session) Resize(cols, rows uint16) error {
 	}
 	s.emu.Resize(int(cols), int(rows))
 	s.cols, s.rows = cols, rows
+	s.snapCache.reset() // a resize changes the screen without any output
 	return nil
 }
 
@@ -741,8 +829,20 @@ func (s *Session) Redraw() []byte {
 // LastOutput returns when the child last produced output (zero if never).
 func (s *Session) LastOutput() time.Time { return unixNano(s.lastOutput.Load()) }
 
-// LastHumanInput returns when a human last wrote input (zero if never).
+// LastHumanInput returns when a real human (an attached client) last wrote
+// input (zero if never). Keys written by the act op are not included: see
+// LastActInput and LastInput.
 func (s *Session) LastHumanInput() time.Time { return unixNano(s.lastHuman.Load()) }
+
+// LastActInput returns when WriteAct last wrote (zero if never).
+func (s *Session) LastActInput() time.Time { return unixNano(s.lastAct.Load()) }
+
+// LastInput is the later of LastHumanInput and LastActInput: the activity
+// that holds back delivery and clears the attention flag.
+func (s *Session) LastInput() time.Time {
+	h, a := s.lastHuman.Load(), s.lastAct.Load()
+	return unixNano(max(h, a))
+}
 
 // StartedAt returns when the child was started.
 func (s *Session) StartedAt() time.Time { return s.startedAt }

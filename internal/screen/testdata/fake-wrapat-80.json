@@ -1,0 +1,11 @@
+{
+  "cols": 80,
+  "rows": 24,
+  "profile": "default",
+  "description": "paragraphs hard-wrapped by the app at 60 columns (Ink-like), 80x24",
+  "cmd": [
+    "fakeagent",
+    "-wrapat",
+    "60"
+  ]
+}

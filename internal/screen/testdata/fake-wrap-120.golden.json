@@ -1,0 +1,24 @@
+{
+  "Cols": 120,
+  "Rows": 40,
+  "CursorX": 2,
+  "CursorY": 9,
+  "CursorHidden": false,
+  "AltScreen": false,
+  "AppCursor": false,
+  "BracketedPaste": true,
+  "Bells": 0,
+  "Notifies": 0,
+  "Lines": [
+    "fakeagent ready",
+    "The quick brown fox jumps over the lazy dog while the build pipeline compiles every package, runs the race detector and",
+    "reports a summary of the results for the whole repository without any failure.",
+    "",
+    "Wrapped output has no newline where the terminal autowrap continued the line, so a reader that joins rows must decide by",
+    " indentation, punctuation and the width of the previous row whether two rows belong together.",
+    "",
+    "Short paragraph.",
+    "",
+    "\u003e"
+  ]
+}

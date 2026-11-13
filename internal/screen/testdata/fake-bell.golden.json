@@ -1,0 +1,18 @@
+{
+  "Cols": 80,
+  "Rows": 24,
+  "CursorX": 2,
+  "CursorY": 3,
+  "CursorHidden": false,
+  "AltScreen": false,
+  "AppCursor": false,
+  "BracketedPaste": true,
+  "Bells": 1,
+  "Notifies": 0,
+  "Lines": [
+    "fakeagent ready",
+    "\u003e hello",
+    "GOT: hello",
+    "\u003e"
+  ]
+}

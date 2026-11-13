@@ -1,0 +1,9 @@
+{
+  "cols": 60,
+  "rows": 6,
+  "profile": "claude",
+  "description": "Claude Code turn end with an empty input line",
+  "cmd": [
+    "converted from internal/testutil/claude_fixtures.go"
+  ]
+}

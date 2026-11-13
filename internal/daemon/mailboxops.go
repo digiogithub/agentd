@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -17,7 +16,7 @@ import (
 // an agent only into its own unless [security] agent_type = true.
 func (s *Server) typeText(who caller, a proto.TypeArgs) error {
 	if who.session && who.id != a.Name && !s.Cfg.Security.AgentType {
-		return fmt.Errorf("type: session %q may not type into session %q "+
+		return proto.Errorf(proto.CodeForbidden, "type: session %q may not type into session %q "+
 			"(agents message each other with send; set [security] agent_type = true to allow)", who.id, a.Name)
 	}
 	e, err := s.lookup(a.Name)
@@ -56,13 +55,13 @@ func (s *Server) knownRecipient(to string) bool {
 
 func (s *Server) send(ctx context.Context, who caller, a proto.SendArgs) (proto.Message, error) {
 	if a.To == "" {
-		return proto.Message{}, errors.New("send: missing recipient")
+		return proto.Message{}, proto.Errorf(proto.CodeInvalid, "send: missing recipient")
 	}
 	if !s.knownRecipient(a.To) {
-		return proto.Message{}, fmt.Errorf("send: unknown recipient %q (want a session name or human:<name> with [a-zA-Z0-9._-])", a.To)
+		return proto.Message{}, proto.Errorf(proto.CodeInvalid, "send: unknown recipient %q (want a session name or human:<name> with [a-zA-Z0-9._-])", a.To)
 	}
 	if !s.Cfg.Allowed(a.To, who.id) {
-		return proto.Message{}, fmt.Errorf("send: %q is not allowed to message %q", who.id, a.To)
+		return proto.Message{}, proto.Errorf(proto.CodeForbidden, "send: %q is not allowed to message %q", who.id, a.To)
 	}
 	m, err := s.Store.Send(ctx, mailbox.Message{
 		Sender: who.id, Recipient: a.To, Subject: a.Subject, Body: a.Body, ReplyTo: a.ReplyTo,
@@ -71,6 +70,7 @@ func (s *Server) send(ctx context.Context, who caller, a proto.SendArgs) (proto.
 		return proto.Message{}, err
 	}
 	s.Log.Info("message queued", "id", m.ID, "from", m.Sender, "to", m.Recipient, "via", who.via)
+	s.publishMail(proto.EvMailQueued, m.ID, m.Sender, m.Recipient)
 	s.kick(m.Recipient)
 	return toWire(m), nil
 }
@@ -82,10 +82,10 @@ func (s *Server) mailboxOf(op string, who caller, as string) (string, bool, erro
 		return who.id, true, nil
 	}
 	if !who.human() {
-		return "", false, fmt.Errorf("%s: session %q can only access its own mailbox", op, who.id)
+		return "", false, proto.Errorf(proto.CodeForbidden, "%s: session %q can only access its own mailbox", op, who.id)
 	}
 	if !s.knownRecipient(as) {
-		return "", false, fmt.Errorf("%s: unknown mailbox %q", op, as)
+		return "", false, proto.Errorf(proto.CodeInvalid, "%s: unknown mailbox %q", op, as)
 	}
 	return as, false, nil
 }
@@ -109,6 +109,7 @@ func (s *Server) inbox(ctx context.Context, who caller, a proto.InboxArgs) (prot
 				if fresh, err := s.Store.Get(ctx, m.ID); err == nil {
 					m = fresh
 				}
+				s.publishMail(proto.EvMailDelivered, m.ID, m.Sender, m.Recipient)
 			}
 		}
 		res.Messages = append(res.Messages, toWire(m))
@@ -128,6 +129,7 @@ func (s *Server) read(ctx context.Context, who caller, a proto.ReadArgs) (proto.
 		if err != nil {
 			return proto.Message{}, mailboxErr(err, a.ID, box)
 		}
+		s.publishMail(proto.EvMailRead, m.ID, m.Sender, m.Recipient)
 		return toWire(m), nil
 	}
 	m, err := s.Store.Get(ctx, a.ID)
@@ -150,13 +152,14 @@ func (s *Server) reply(ctx context.Context, who caller, a proto.ReplyArgs) (prot
 		return proto.Message{}, mailboxErr(err, a.ID, who.id)
 	}
 	if orig.Recipient == who.id && !s.Cfg.Allowed(orig.Sender, who.id) {
-		return proto.Message{}, fmt.Errorf("reply: %q is not allowed to message %q", who.id, orig.Sender)
+		return proto.Message{}, proto.Errorf(proto.CodeForbidden, "reply: %q is not allowed to message %q", who.id, orig.Sender)
 	}
 	m, err := s.Store.Reply(ctx, who.id, a.ID, a.Body)
 	if err != nil {
 		return proto.Message{}, mailboxErr(err, a.ID, who.id)
 	}
 	s.Log.Info("reply queued", "id", m.ID, "from", m.Sender, "to", m.Recipient, "reply_to", a.ID, "via", who.via)
+	s.publishMail(proto.EvMailQueued, m.ID, m.Sender, m.Recipient)
 	s.kick(m.Recipient)
 	w := toWire(m)
 	if !s.knownRecipient(m.Recipient) {

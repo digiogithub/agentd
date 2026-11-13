@@ -1,0 +1,14 @@
+[?2004hfakeagent ready
+The quick brown fox jumps over the lazy dog while the build
+pipeline compiles every package, runs the race detector and
+reports a summary of the results for the whole repository
+without any failure.
+
+Wrapped output has no newline where the terminal autowrap
+continued the line, so a reader that joins rows must decide
+by indentation, punctuation and the width of the previous
+row whether two rows belong together.
+
+Short paragraph.
+
+> 

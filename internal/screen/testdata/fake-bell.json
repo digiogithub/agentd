@@ -1,0 +1,13 @@
+{
+  "cols": 80,
+  "rows": 24,
+  "profile": "default",
+  "description": "plain prompt, one message submitted, BEL after the turn",
+  "frames": [
+    27
+  ],
+  "cmd": [
+    "fakeagent",
+    "-bell"
+  ]
+}

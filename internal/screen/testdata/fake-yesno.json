@@ -1,0 +1,11 @@
+{
+  "cols": 120,
+  "rows": 40,
+  "profile": "default",
+  "description": "yes/no prompt waiting for an answer",
+  "cmd": [
+    "fakeagent",
+    "-yesno",
+    "Proceed with the change?"
+  ]
+}
