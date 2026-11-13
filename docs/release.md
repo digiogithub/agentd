@@ -83,6 +83,55 @@ Not supported yet: agentd relies on Unix PTYs, `setsid` and peer credentials
 `if: false` (and an actionlint ignore in `.github/actionlint.yaml`); enable it after the port
 described in [ROADMAP.md](../ROADMAP.md).
 
+## Client app
+
+The Flutter client (`app/`) has its own pipeline,
+[`.github/workflows/app-release.yml`](../.github/workflows/app-release.yml), triggered by an
+`app-v*` tag (independent of the Go `v*` tag). `app.yml` stays the PR/main check.
+
+```sh
+git tag -a app-v0.1.0 -m "agentd app v0.1.0"      # or app-v0.1.0-rc.1
+git push origin app-v0.1.0
+```
+
+- Version: tag without `app-v`. `--build-name` is the numeric core (`0.1.0`, also for
+  `-rc.N`), `--build-number` is the workflow run number (monotonic; Android `versionCode`).
+- A tag run builds, signs and creates a **draft** GitHub release (review, then publish by hand).
+  Manual run (Actions -> App release -> Run workflow, optional `version`) is a **dry run**: unsigned
+  artifacts named `dryrun-app-*` (Android `-debugsigned`, macOS `-unsigned`, Windows `-unsigned`),
+  no release. Only `dist-app-*` artifacts can reach the release job, which also refuses names
+  containing `unsigned`/`debugsigned`.
+
+| Job | Runner | Output |
+|---|---|---|
+| `linux` | ubuntu-latest | `agentd-app_<v>_linux_x64.tar.gz`, `agentd-app_<v>_amd64.deb` (nfpm, `packaging/app/nfpm.yaml`), `agentd-app_<v>_linux_x86_64.AppImage` (appimagetool, `packaging/app/linux/build-appimage.sh`) |
+| `android` | ubuntu-latest | `agentd-app_<v>_android_<abi>.apk` (split per ABI), `agentd-app_<v>_android.aab` |
+| `macos` | macos-latest | `agentd-app_<v>_macos_universal.dmg` (app signed + notarized + stapled, DMG signed + notarized + stapled) |
+| `windows-build` / `windows-sign` | windows-latest | `agentd-app_<v>_windows_x64_setup.exe` (Inno Setup; app exe/dll and installer Authenticode-signed) |
+| `release` | ubuntu-latest | draft release: every `dist-app-*` file + `SHA256SUMS` |
+
+Metadata: Linux `.desktop` / AppStream (`app/linux/packaging/dev.digio.agentd_app.*`, app id
+`dev.digio.agentd_app`, `MimeType=x-scheme-handler/agentd;`); macOS `CFBundleURLTypes` (`agentd`) in
+`app/macos/Runner/Info.plist`; Windows `agentd://` registered by the installer
+(`packaging/app/windows/agentd-app.iss`, `HKA\Software\Classes\agentd`); Android intent filter in
+`AndroidManifest.xml`. Windows uses Inno Setup rather than MSIX: MSIX must be signed by a
+certificate whose subject equals the manifest `Publisher`, needs extra packaging tooling and
+sideloading setup, while Inno gives a single signable `.exe` that registers the URL scheme and
+installs per-user without admin.
+
+Secrets and variables (none stored in the repo):
+
+| Kind | Name | Used by |
+|---|---|---|
+| Secret | `ANDROID_KEYSTORE_BASE64` (base64 of the upload `.jks`), `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` | `android` (tag runs fail without them) |
+| Secret | `MACOS_SIGNING_BUNDLE` (same bundle as the Go release) | `macos` |
+| Environment + Variables | `release`, `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_SIGNING_CERT_PROFILE` | `windows-sign` (OIDC, no secret) |
+
+Local Android signed build: copy `app/android/key.properties.example` to `app/android/key.properties`
+(gitignored); without it (or the `ANDROID_KEY*` env vars) release builds are debug-signed.
+Local checks: `flutter build linux --release`, `flutter build apk --release --split-per-abi`,
+`actionlint .github/workflows/*.yml`, and the `nfpm package -p deb -f packaging/app/nfpm.yaml` dry run.
+
 ## Local checks
 
 ```sh

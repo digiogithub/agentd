@@ -1,0 +1,505 @@
+name: App release
+
+# Client app (Flutter, app/) release pipeline. Separate from the Go release
+# (release.yml, `v*` tags): push an `app-v*` tag, e.g. app-v0.1.0 or
+# app-v0.1.0-rc.1.
+#
+#   linux    : flutter build linux --release -> tar.gz, .deb (nfpm), AppImage;
+#              desktop file registers x-scheme-handler/agentd
+#   android  : apk (split per ABI) + aab, signed with the upload keystore from
+#              secrets; without it the build is debug-signed and NOT releasable
+#   macos    : .app signed (Developer ID, hardened runtime) + notarized, DMG
+#              signed + notarized + stapled (digiogithub/ci-actions)
+#   windows  : build (unsigned) -> windows-sign (Authenticode via Azure
+#              Artifact Signing, OIDC, environment `release`) -> Inno Setup
+#              installer (registers agentd://), installer signed too
+#   release  : SHA256SUMS + DRAFT GitHub release, tag runs only
+#
+# workflow_dispatch is a DRY RUN: unsigned artifacts named dryrun-app-*, never
+# a release. Only artifacts named dist-app-* reach the release job.
+#
+# Signing material (see docs/release.md, "Client app"):
+#   secrets.MACOS_SIGNING_BUNDLE, ANDROID_KEYSTORE_BASE64,
+#   ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+#   vars.AZURE_* (Windows, OIDC, no secret)
+
+on:
+  push:
+    tags:
+      - 'app-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version for the dry run, e.g. 0.1.0 (no release is created).'
+        required: false
+        type: string
+        default: '0.0.0'
+
+permissions:
+  contents: read
+
+env:
+  # Keep in sync with app.yml: one pinned stable Flutter.
+  FLUTTER_VERSION: "3.50.0"
+  NFPM_VERSION: v2.48.0
+  APPIMAGETOOL_VERSION: "1.9.0"
+  # dist-app-* is publishable (tag runs); dryrun-app-* never is.
+  ART: ${{ github.event_name == 'push' && 'dist-app' || 'dryrun-app' }}
+
+jobs:
+  meta:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      build_name: ${{ steps.v.outputs.build_name }}
+      build_number: ${{ steps.v.outputs.build_number }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - id: v
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = push ]; then
+            case "$REF_NAME" in app-v*) ;; *) echo "::error::Tag '$REF_NAME' does not start with app-v"; exit 1 ;; esac
+            version="${REF_NAME#app-v}"
+            tag="$REF_NAME"
+          else
+            version="${INPUT_VERSION:-0.0.0}"
+            tag=""
+          fi
+          # Full version (may carry -rc.1); build name = numeric x.y.z core
+          # (Windows file versions and macOS CFBundleShortVersionString need it).
+          core="${version%%-*}"
+          echo "$core" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::Bad version '$version'"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "build_name=$core" >> "$GITHUB_OUTPUT"
+          # Monotonic build number (Android versionCode); one per workflow run.
+          echo "build_number=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  linux:
+    name: Linux x64
+    needs: meta
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      BUILD_NAME: ${{ needs.meta.outputs.build_name }}
+      BUILD_NUMBER: ${{ needs.meta.outputs.build_number }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux desktop dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
+            libsecret-1-dev libayatana-appindicator3-dev libnotify-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Build
+        working-directory: app
+        run: |
+          set -euo pipefail
+          flutter pub get
+          flutter build linux --release --build-name "$BUILD_NAME" --build-number "$BUILD_NUMBER"
+      - name: Package tar.gz
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          stage="$(mktemp -d)/agentd-app"
+          mkdir -p "$stage"
+          cp -a app/build/linux/x64/release/bundle/. "$stage/"
+          cp app/linux/packaging/dev.digio.agentd_app.* LICENSE "$stage/"
+          tar -C "$(dirname "$stage")" -czf "dist/agentd-app_${VERSION}_linux_x64.tar.gz" agentd-app
+          tar -tzf "dist/agentd-app_${VERSION}_linux_x64.tar.gz" | head -20
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Package .deb
+        run: |
+          set -euo pipefail
+          go install "github.com/goreleaser/nfpm/v2/cmd/nfpm@${NFPM_VERSION}"
+          nfpm package --packager deb --config packaging/app/nfpm.yaml --target "dist/agentd-app_${VERSION}_amd64.deb"
+          dpkg-deb --info "dist/agentd-app_${VERSION}_amd64.deb"
+          dpkg-deb --contents "dist/agentd-app_${VERSION}_amd64.deb"
+      - name: Package AppImage
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/bin"
+          curl -fsSL -o "$HOME/bin/appimagetool" \
+            "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-x86_64.AppImage"
+          chmod +x "$HOME/bin/appimagetool"
+          export PATH="$HOME/bin:$PATH"
+          packaging/app/linux/build-appimage.sh app/build/linux/x64/release/bundle "dist/agentd-app_${VERSION}_linux_x86_64.AppImage"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ART }}-linux
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.AppImage
+          if-no-files-found: error
+
+  android:
+    name: Android (apk + aab)
+    needs: meta
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      BUILD_NAME: ${{ needs.meta.outputs.build_name }}
+      BUILD_NUMBER: ${{ needs.meta.outputs.build_number }}
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Keystore
+        id: ks
+        run: |
+          set -euo pipefail
+          if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ] && [ -n "${ANDROID_KEYSTORE_PASSWORD:-}" ] \
+             && [ -n "${ANDROID_KEY_ALIAS:-}" ] && [ -n "${ANDROID_KEY_PASSWORD:-}" ]; then
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload-keystore.jks"
+            echo "ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/upload-keystore.jks" >> "$GITHUB_ENV"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            if [ "${{ github.event_name }}" = push ]; then
+              echo "::error::Android signing secrets are missing; a tag release must be signed."
+              exit 1
+            fi
+            echo "::warning::Android signing secrets absent: dry run, debug-signed artifacts (not releasable)."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build
+        working-directory: app
+        run: |
+          set -euo pipefail
+          flutter pub get
+          flutter build apk --release --split-per-abi --build-name "$BUILD_NAME" --build-number "$BUILD_NUMBER"
+          flutter build appbundle --release --build-name "$BUILD_NAME" --build-number "$BUILD_NUMBER"
+      - name: Verify signature and collect
+        env:
+          SIGNED: ${{ steps.ks.outputs.signed }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          suffix=""; [ "$SIGNED" = true ] || suffix="-debugsigned"
+          apksigner="$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)"
+          for apk in app/build/app/outputs/flutter-apk/app-*-release.apk; do
+            abi="$(basename "$apk" -release.apk)"; abi="${abi#app-}"
+            "$apksigner" verify --print-certs "$apk"
+            cp "$apk" "dist/agentd-app_${VERSION}_android_${abi}${suffix}.apk"
+          done
+          cp app/build/app/outputs/bundle/release/app-release.aab "dist/agentd-app_${VERSION}_android${suffix}.aab"
+          if [ "$SIGNED" = true ]; then
+            jarsigner -verify "dist/agentd-app_${VERSION}_android.aab"
+          fi
+          ls -la dist
+      - name: Remove keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/upload-keystore.jks"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ART }}-android
+          path: |
+            dist/*.apk
+            dist/*.aab
+          if-no-files-found: error
+
+  macos:
+    name: macOS (universal, signed + notarized on tags)
+    needs: meta
+    runs-on: macos-latest
+    # Notarization submits with --wait.
+    timeout-minutes: 120
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      BUILD_NAME: ${{ needs.meta.outputs.build_name }}
+      BUILD_NUMBER: ${{ needs.meta.outputs.build_number }}
+      APP: app/build/macos/Build/Products/Release/agentd_app.app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Build
+        working-directory: app
+        run: |
+          set -euo pipefail
+          flutter pub get
+          flutter build macos --release --build-name "$BUILD_NAME" --build-number "$BUILD_NUMBER"
+          lipo -info "../$APP/Contents/MacOS/agentd_app" || true
+      - name: Set up the signing keychain
+        if: github.event_name == 'push'
+        # Exports SIGNING_IDENTITY, NOTARY_PROFILE, MACOS_SIGN_KEYCHAIN_*.
+        uses: digiogithub/ci-actions/macos-signing-keychain@v1
+        with:
+          signing-bundle: ${{ secrets.MACOS_SIGNING_BUNDLE }}
+          env-file: kvagerc
+          keychain-name: agentd-app-build
+          notary-profile: agentd-app-notary
+      - name: Sign the app
+        if: github.event_name == 'push'
+        # Hardened runtime + timestamp (action defaults); deep for the Flutter
+        # frameworks and plugin dylibs nested in the bundle.
+        uses: digiogithub/ci-actions/macos-codesign@v1
+        with:
+          paths: ${{ env.APP }}
+          deep: 'true'
+          entitlements: app/macos/Runner/Release.entitlements
+      - name: Notarize and staple the app
+        if: github.event_name == 'push'
+        uses: digiogithub/ci-actions/macos-notarize@v1
+        with:
+          paths: ${{ env.APP }}
+      - name: Build the DMG
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          suffix=""; [ "${{ github.event_name }}" = push ] || suffix="-unsigned"
+          packaging/app/macos/make-dmg.sh "$APP" "dist/agentd-app_${VERSION}_macos_universal${suffix}.dmg" agentd
+      - name: Sign the DMG
+        if: github.event_name == 'push'
+        uses: digiogithub/ci-actions/macos-codesign@v1
+        with:
+          paths: dist/*.dmg
+          options: ''
+      - name: Notarize and staple the DMG
+        if: github.event_name == 'push'
+        uses: digiogithub/ci-actions/macos-notarize@v1
+        with:
+          paths: dist/*.dmg
+      - name: Verify
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dv --verbose=2 "$APP" 2>&1 | tee sig.txt
+          grep -q 'flags=.*runtime' sig.txt || { echo "::error::hardened runtime missing"; exit 1; }
+          for f in dist/*.dmg; do
+            xcrun stapler validate "$f"
+            spctl --assess --type open --context context:primary-signature -vv "$f"
+          done
+      - name: Clean up the signing keychain
+        if: always() && github.event_name == 'push'
+        uses: digiogithub/ci-actions/macos-keychain-cleanup@v1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ART }}-macos
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  windows-build:
+    name: Windows build (unsigned)
+    needs: meta
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      BUILD_NAME: ${{ needs.meta.outputs.build_name }}
+      BUILD_NUMBER: ${{ needs.meta.outputs.build_number }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Build
+        shell: pwsh
+        working-directory: app
+        run: |
+          $ErrorActionPreference = 'Stop'
+          flutter pub get
+          flutter build windows --release --build-name $env:BUILD_NAME --build-number $env:BUILD_NUMBER
+      - name: Installer (unsigned)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          choco install innosetup --no-progress -y
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc "/DAppVersion=$env:VERSION" "/DSourceDir=$env:GITHUB_WORKSPACE\app\build\windows\x64\runner\Release" "/DOutputDir=$env:GITHUB_WORKSPACE\dist" packaging\app\windows\agentd-app.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-ChildItem dist | ForEach-Object { Rename-Item $_.FullName ($_.BaseName + '-unsigned' + $_.Extension) }
+      - name: Upload bundle (input of the signing job)
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-windows-bundle
+          path: app/build/windows/x64/runner/Release
+          if-no-files-found: error
+      - name: Upload unsigned installer (dry run only)
+        if: github.event_name != 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dryrun-app-windows
+          path: dist/*.exe
+          if-no-files-found: error
+
+  windows-sign:
+    name: Windows (Authenticode + installer)
+    needs: [meta, windows-build]
+    # Tag runs only: the Azure OIDC federation exists for environment `release`.
+    if: github.event_name == 'push'
+    runs-on: windows-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: unsigned-windows-bundle
+          path: bundle
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Sign the app (exe + dll)
+        # Signed BEFORE packaging into the installer. No credential inputs: the
+        # action uses the federated Azure CLI session above.
+        uses: azure/trusted-signing-action@v0
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_CERT_PROFILE }}
+          files-folder: ${{ github.workspace }}\bundle
+          files-folder-filter: exe,dll
+          files-folder-recurse: true
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Verify the app signature
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Own binary must be signed; third-party dlls are signed best-effort by the step above.
+          $sig = Get-AuthenticodeSignature bundle\agentd_app.exe
+          "-- agentd_app.exe: $($sig.Status) / $($sig.SignerCertificate.Subject)"
+          if ($sig.Status -ne 'Valid') { Write-Output "::error::agentd_app.exe not validly signed ($($sig.Status))"; exit 1 }
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          choco install innosetup --no-progress -y
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc "/DAppVersion=$env:VERSION" "/DSourceDir=$env:GITHUB_WORKSPACE\bundle" "/DOutputDir=$env:GITHUB_WORKSPACE\dist" packaging\app\windows\agentd-app.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Sign the installer
+        uses: azure/trusted-signing-action@v0
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_CERT_PROFILE }}
+          files-folder: ${{ github.workspace }}\dist
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Verify the installer signature
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-ChildItem dist\*.exe | ForEach-Object {
+            $sig = Get-AuthenticodeSignature $_.FullName
+            "-- $($_.Name): $($sig.Status) / $($sig.SignerCertificate.Subject)"
+            if ($sig.Status -ne 'Valid') { Write-Output "::error::Invalid: $($_.Name) ($($sig.Status))"; exit 1 }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-app-windows
+          path: dist/*.exe
+          if-no-files-found: error
+
+  checksums:
+    name: Checksums (dry run)
+    needs: [linux, android, macos, windows-build]
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dryrun-app-*
+          path: dist
+          merge-multiple: true
+      - name: SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dryrun-app-sha256sums
+          path: dist/SHA256SUMS
+
+  release:
+    name: Draft release
+    needs: [meta, linux, android, macos, windows-sign]
+    if: ${{ success() && github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-app-*
+          path: dist
+          merge-multiple: true
+      - name: Generate SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd dist
+          # Refuse to publish anything that is not a signed release artifact.
+          if ls | grep -Eq 'unsigned|debugsigned'; then echo "::error::unsigned artifact in dist"; exit 1; fi
+          for k in tar.gz deb AppImage apk aab dmg exe; do
+            ls *."$k" >/dev/null 2>&1 || { echo "::error::missing *.$k"; exit 1; }
+          done
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+      - name: Draft release
+        uses: digiogithub/ci-actions/github-release@v1
+        with:
+          tag: ${{ needs.meta.outputs.tag }}
+          title: agentd app ${{ needs.meta.outputs.version }}
+          files: |
+            dist/*
+          draft: true
+          prerelease: auto
+          latest: 'false'
+          notes-header: |
+            agentd client app ${{ needs.meta.outputs.version }}.
+
+            - Linux: `.AppImage`, `.deb`, `.tar.gz` (x64).
+            - Android: per-ABI `.apk` and `.aab`.
+            - macOS: signed, notarized `.dmg` (universal).
+            - Windows: Authenticode-signed installer `.exe`.
+            - `SHA256SUMS` lists the SHA-256 of every file.
+          token: ${{ github.token }}

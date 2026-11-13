@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=agentd
+GenericName=Agent session client
+Comment=Monitor and drive your coding agents from agentd
+Exec=agentd-app %u
+Icon=dev.digio.agentd_app
+Terminal=false
+Categories=Development;
+StartupNotify=true
+StartupWMClass=dev.digio.agentd_app
+MimeType=x-scheme-handler/agentd;
