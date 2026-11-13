@@ -54,6 +54,17 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       enable the gated `windows` job in `.github/workflows/release.yml` (Authenticode via Azure
       Artifact Signing)
 
+## Phase 6 — API gateway and native frontends
+Plan: `docs/plans/api-gateway-plan.md` (decisions ADR-A01…A11, stories API-S01…S27); design pages in
+`docs/design/api/`.
+- [ ] Semantic view in the daemon (`internal/screen`): reflowed text, status, input line, options;
+      ops `view`, `act`, `subscribe`; fixed PTY size (API never resizes)
+- [ ] `agentd serve` HTTP gateway: REST + SSE, OpenAPI contract, loopback default
+- [ ] Device tokens, QR pairing, TLS / Tailscale, audit log, webhook notifications
+- [ ] Flutter app in `app/` (desktop Linux/macOS/Windows + Android): hosts, pairing, agent list,
+      session view, launch; validation with real harnesses (ADR-A18)
+Backlog: gintrack project `AGED` (`docs/.pmngr`).
+
 ## Later
 - [ ] Session persistence across daemon restarts (re-exec with fd passing, or at least log replay)
 - [ ] Broadcast / group addresses (`@all`, `@project:*`)
