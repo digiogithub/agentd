@@ -26,6 +26,17 @@ peer credentials; see [ROADMAP.md](ROADMAP.md)). Download the files from the
 [releases page](https://github.com/digiogithub/agentd/releases); `SHA256SUMS` lists the SHA-256 of
 every file (`sha256sum -c SHA256SUMS --ignore-missing`).
 
+### Install script (Linux and macOS)
+
+```sh
+curl -fsSL https://github.com/digiogithub/agentd/releases/latest/download/install.sh | sh
+```
+
+Installs the latest release into `~/.local/bin` (`/usr/local/bin` as root) without sudo, after
+checking the download against `SHA256SUMS`; on Linux it also writes the systemd user unit to
+`~/.config/systemd/user/` unless one exists. `AGENTD_VERSION=0.4.0` pins a version,
+`AGENTD_INSTALL_DIR` changes the directory.
+
 ### Debian / Ubuntu (.deb)
 
 ```sh

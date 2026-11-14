@@ -14,7 +14,7 @@ name: Release
 #              credentials). The signing job is kept below, gated with
 #              `if: false`, so it can be enabled after the port (ROADMAP,
 #              "Windows support")                     -> dist-windows
-#   release  : SHA256SUMS + one GitHub release for the tag with generated
+#   release  : install.sh (from the tagged commit) + SHA256SUMS + one GitHub release for the tag with generated
 #              notes; prerelease when the tag carries a '-' suffix.
 #
 # Only artifacts named dist-* reach the release job; unsigned intermediates
@@ -376,12 +376,20 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Add the install script
+        # install.sh from the tagged commit, served as
+        # releases/latest/download/install.sh (curl | sh).
+        run: |
+          set -euo pipefail
+          sh -n install.sh
+          cp install.sh dist/install.sh
+
       - name: Generate SHA256SUMS
         run: |
           set -euo pipefail
           cd dist
           shopt -s nullglob
-          sha256sum *.tar.gz *.deb *.zip *.pkg > SHA256SUMS
+          sha256sum *.tar.gz *.deb *.zip *.pkg install.sh > SHA256SUMS
           cat SHA256SUMS
 
       - name: Publish
@@ -394,12 +402,14 @@ jobs:
             dist/*.deb
             dist/*.zip
             dist/*.pkg
+            dist/install.sh
             dist/SHA256SUMS
           draft: ${{ inputs.draft || false }}
           prerelease: auto
           notes-header: |
             Downloads:
 
+            - Install script (Linux and macOS, no sudo, checksum-verified): `curl -fsSL https://github.com/digiogithub/agentd/releases/latest/download/install.sh | sh`.
             - Debian/Ubuntu: `agentd_<version>_amd64.deb` / `_arm64.deb` (`sudo apt install ./agentd_*.deb`, then `systemctl --user enable --now agentd`).
             - Other Linux: `agentd_<version>_linux_<arch>.tar.gz`.
             - macOS (universal, Developer ID signed and notarized): `.pkg` installer (stapled, installs `/usr/local/bin/agentd`) or the bare binary in the `.zip`.

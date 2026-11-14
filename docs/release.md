@@ -23,6 +23,16 @@ git push origin v0.1.0
   manually: Actions → Release → Run workflow, `tag` = `v0.1.0` (optionally `draft`), or
   `gh workflow run release.yml -f tag=v0.1.0`. Existing assets of that release are replaced.
 
+## Install script
+
+`install.sh` (repo root) is attached to every release from the tagged commit, so
+`https://github.com/digiogithub/agentd/releases/latest/download/install.sh` always serves the latest one
+(`curl -fsSL … | sh`). It picks `agentd_<v>_linux_<arch>.tar.gz` or `agentd_<v>_darwin_universal.zip`,
+resolves "latest" from the `/releases/latest` redirect (no API rate limit), verifies the asset against
+`SHA256SUMS`, installs into `~/.local/bin` (root: `/usr/local/bin`; `AGENTD_INSTALL_DIR`), and on Linux
+writes the systemd user unit unless one exists. Check it locally against a published release:
+`AGENTD_VERSION=0.1.0 AGENTD_INSTALL_DIR=/tmp/x sh install.sh`.
+
 ## Jobs and artifacts
 
 | Job | Runner | Output artifact | Contents |
@@ -30,7 +40,7 @@ git push origin v0.1.0
 | `linux` (matrix `amd64`, `arm64`) | ubuntu-latest | `dist-linux-<arch>` | `agentd_<v>_linux_<arch>.tar.gz` (binary, README, LICENSE, systemd user unit), `agentd_<v>_<arch>.deb` |
 | `macos` | macos-latest | `dist-macos` | `agentd_<v>_darwin_universal.zip` (signed binary), `agentd_<v>_darwin_universal.pkg` (signed, notarized, stapled) |
 | `windows` | windows-latest | `dist-windows` | disabled (`if: false`) until Windows is supported |
-| `release` | ubuntu-latest | GitHub release | every `dist-*` file + `SHA256SUMS`, generated notes since the previous tag |
+| `release` | ubuntu-latest | GitHub release | every `dist-*` file + `install.sh` + `SHA256SUMS`, generated notes since the previous tag |
 
 Only artifacts named `dist-*` are downloaded by the release job, so an unsigned intermediate can
 never be published by mistake.
