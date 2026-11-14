@@ -63,13 +63,22 @@ func (s *Server) handleAttach(conn net.Conn, codec *proto.Codec, req proto.Reque
 		_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 		return write()
 	}
-	c := &attachClient{cols: a.Cols, rows: a.Rows}
+	c := &attachClient{cols: a.Cols, rows: a.Rows, observe: a.Observe, passive: a.Passive}
 	e.addClient(c)
 	defer e.removeClient(c)
 	s.Log.Info("client attached", "name", a.Name, "cols", a.Cols, "rows", a.Rows)
 	defer s.Log.Info("client detached", "name", a.Name)
 
-	redraw, id, ch := sess.SubscribeWithRedraw()
+	var (
+		redraw []byte
+		id     int
+		ch     <-chan []byte
+	)
+	if a.History > 0 {
+		redraw, id, ch = sess.SubscribeWithHistory(min(a.History, proto.MaxAttachHistory))
+	} else {
+		redraw, id, ch = sess.SubscribeWithRedraw()
+	}
 	var subMu sync.Mutex
 	subID := id
 	stop := make(chan struct{})
@@ -143,7 +152,29 @@ loop:
 		if err != nil {
 			break
 		}
+		if c.observe && f.Type != proto.FrameDetach {
+			continue // watch only: never types, resizes or takes focus
+		}
 		switch f.Type {
+		case proto.FrameAuto:
+			// Tagged at the source as terminal replies: written unchanged
+			// (duplicates from several clients included), never human input,
+			// no size ownership.
+			_ = replies.push(f.Payload)
+		case proto.FrameFocus:
+			gained := len(f.Payload) > 0 && f.Payload[0] == 1
+			if gained {
+				e.activate(c)
+			}
+			// Focus reports reach the child only if it asked for them (DEC
+			// 1004) and only from the active client.
+			if e.isActive(c) && sess.DECMode(1004) {
+				if gained {
+					_ = replies.push([]byte("\x1b[I"))
+				} else {
+					_ = replies.push([]byte("\x1b[O"))
+				}
+			}
 		case proto.FrameData:
 			input, reply := splitTermReplies(f.Payload)
 			if len(input) > 0 {

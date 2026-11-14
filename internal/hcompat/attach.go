@@ -24,6 +24,10 @@ func terminalAttach(c *conn, params json.RawMessage) (any, func(), *rpcError) {
 		Cols     uint16 `json:"cols"`
 		Rows     uint16 `json:"rows"`
 		Observe  bool   `json:"observe"`
+		Resumed  bool   `json:"resumed"`
+		History  int    `json:"history"`
+		// display/FACTS: agentd does not answer display queries itself; the
+		// viewers do (as AUTOMATIC_INPUT), so display facts are not needed.
 	}
 	if err := decode(params, &p); err != nil {
 		return nil, nil, err
@@ -47,7 +51,7 @@ func terminalAttach(c *conn, params json.RawMessage) (any, func(), *rpcError) {
 	}
 	a := &attachment{c: c, name: si.Name, observe: p.Observe, cols: cols, rows: rows, max: c.s.MaxPending}
 	a.cond = sync.NewCond(&a.mu)
-	dc, err := a.dial()
+	dc, err := a.dial(p.Resumed, max(p.History, 0))
 	if err != nil {
 		return nil, nil, fromDaemon(err)
 	}
@@ -65,7 +69,7 @@ func terminalAttach(c *conn, params json.RawMessage) (any, func(), *rpcError) {
 		"channel":              a.st.ch,
 		"terminal":             c.s.record(si),
 		"resize_notifications": false,
-		"automatic_input":      false,
+		"automatic_input":      true,
 	}
 	// The pumps start once the reply is on the wire: the reply precedes
 	// every stream frame.
@@ -97,7 +101,9 @@ type attachment struct {
 	repaints int
 }
 
-func (a *attachment) dial() (net.Conn, error) {
+// dial opens a daemon attach. passive: take the size only once active (hc
+// resumed, and every repaint, so a lagging viewer never steals the size).
+func (a *attachment) dial(passive bool, history int) (net.Conn, error) {
 	cl, err := a.c.s.Dial()
 	if err != nil {
 		return nil, err
@@ -106,7 +112,8 @@ func (a *attachment) dial() (net.Conn, error) {
 	cols, rows := a.cols, a.rows
 	a.first = true
 	a.mu.Unlock()
-	dc, err := cl.Attach(a.name, cols, rows)
+	dc, err := cl.AttachWith(proto.AttachArgs{Name: a.name, Cols: cols, Rows: rows,
+		Observe: a.observe, Passive: passive, History: history})
 	if err != nil {
 		_ = cl.Close()
 		return nil, err
@@ -178,7 +185,7 @@ func (a *attachment) queue(dc net.Conn, p []byte) bool {
 	a.repaints++
 	a.mu.Unlock()
 	_ = dc.Close()
-	ndc, err := a.dial()
+	ndc, err := a.dial(true, 0)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if err != nil {
@@ -265,10 +272,14 @@ func (a *attachment) input(f Frame) {
 		if a.observe {
 			return
 		}
+		typ := proto.FrameData
+		if f.Kind == KindAutomaticInput {
+			typ = proto.FrameAuto
+		}
 		dc := a.conn()
 		for p := f.Payload; len(p) > 0; {
 			n := min(len(p), proto.MaxFrameSize)
-			if err := proto.WriteFrame(dc, proto.FrameData, p[:n]); err != nil {
+			if err := proto.WriteFrame(dc, typ, p[:n]); err != nil {
 				return
 			}
 			p = p[n:]
@@ -290,7 +301,12 @@ func (a *attachment) input(f Frame) {
 		a.st.close(nil)
 		_ = proto.WriteFrame(a.conn(), proto.FrameDetach, nil)
 		a.shutdown()
-	case KindFocus, KindFacts:
-		// Not forwarded yet (Phase 2: focus reports for mode 1004, display facts).
+	case KindFocus:
+		if a.observe || len(f.Payload) == 0 {
+			return
+		}
+		_ = proto.WriteFrame(a.conn(), proto.FrameFocus, f.Payload[:1])
+	case KindFacts:
+		// Ignored: viewers answer display queries themselves (see attach).
 	}
 }

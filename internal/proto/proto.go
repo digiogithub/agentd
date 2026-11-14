@@ -653,7 +653,20 @@ type AttachArgs struct {
 	Name string `json:"name"`
 	Cols uint16 `json:"cols,omitempty"`
 	Rows uint16 `json:"rows,omitempty"`
+	// Observe: watch only; input, resize and focus frames are ignored and
+	// the client never sets the size.
+	Observe bool `json:"observe,omitempty"`
+	// Passive: the client takes size ownership only once it is active
+	// (input, resize or focus), not at attach (a viewer coming back after a
+	// dropped line, or a repaint).
+	Passive bool `json:"passive,omitempty"`
+	// History is the number of scrollback lines painted before the redraw
+	// (main screen only, at most MaxAttachHistory).
+	History int `json:"history,omitempty"`
 }
+
+// MaxAttachHistory caps AttachArgs.History.
+const MaxAttachHistory = 10000
 
 // ---- View (op view) ----
 

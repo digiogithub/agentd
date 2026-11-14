@@ -487,6 +487,9 @@ type entry struct {
 
 type attachClient struct {
 	cols, rows uint16
+	// observe: watch only, never active. passive: active only once it
+	// sends input, resizes or gains focus (not at attach).
+	observe, passive bool
 }
 
 func (s *Server) lookup(name string) (*entry, error) {
@@ -553,7 +556,9 @@ func (e *entry) addClient(c *attachClient) {
 		e.clients = make(map[*attachClient]struct{})
 	}
 	e.clients[c] = struct{}{}
-	e.activateLocked(c)
+	if !c.observe && !c.passive {
+		e.activateLocked(c)
+	}
 }
 
 func (e *entry) removeClient(c *attachClient) {
@@ -590,6 +595,9 @@ func (e *entry) resize(c *attachClient, cols, rows uint16) {
 }
 
 func (e *entry) activateLocked(c *attachClient) {
+	if c.observe {
+		return
+	}
 	e.active = c
 	if c.cols == 0 || c.rows == 0 || e.sess.State() != session.StateRunning {
 		return

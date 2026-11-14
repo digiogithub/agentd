@@ -16,6 +16,13 @@ const (
 	FrameResize byte = 'R' // client → daemon: uint16 cols, uint16 rows (big-endian)
 	FrameDetach byte = 'X' // either side: detach / close
 	FrameExit   byte = 'E' // daemon → client: session exited, payload = exit code as text
+	// FrameAuto (client → daemon) carries terminal-generated replies (query
+	// answers): written to the child unchanged, never human input, never
+	// taking size ownership.
+	FrameAuto byte = 'A'
+	// FrameFocus (client → daemon): 1 byte, 1 = the client's window gained
+	// focus, 0 = lost it.
+	FrameFocus byte = 'F'
 )
 
 // FrameHeaderSize is the size of a frame header: type + big-endian length.
@@ -40,7 +47,7 @@ type Frame struct {
 
 func knownFrame(t byte) bool {
 	switch t {
-	case FrameData, FrameResize, FrameDetach, FrameExit:
+	case FrameData, FrameResize, FrameDetach, FrameExit, FrameAuto, FrameFocus:
 		return true
 	}
 	return false

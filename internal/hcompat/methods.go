@@ -24,10 +24,10 @@ var methodNames = []string{
 	"doc.get", "doc.set", "machine.list", "templates.list",
 }
 
-// features is what hello advertises. automatic_input and
-// resize_notifications are not offered yet: clients then fall back to DATA
-// and size events.
-var features = []string{"framed", "attach", "events", "status"}
+// features is what hello advertises. automatic_input: AUTOMATIC_INPUT (kind
+// 6) reaches the program as non-human input. resize_notifications is not
+// offered: observers track size through size events.
+var features = []string{"framed", "attach", "events", "status", "automatic_input"}
 
 func init() {
 	methods = map[string]handler{

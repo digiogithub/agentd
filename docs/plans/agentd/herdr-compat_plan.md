@@ -36,6 +36,13 @@ and attaches to one.
 - Decision: hc addresses stay agentd session names (stable across `hc connect` processes and readable) instead
   of `tN`; names are reused only after `rm`, when hc clients already dropped the terminal.
 
-## Phase 2..4
-See analysis §10. Next: Phase 2 (automatic input, focus, facts, `history` scrollback, observe without resize,
-reconnect with `resumed`), then Phase 3 (send/keys/interrupt, OSC 7501, `[herdr]` config + audit).
+## Phase 2 (done 2026-11-14: [[herdr-compat-phase2]])
+
+Daemon attach frames `A` (automatic input) and `F` (focus, DEC 1004 reports), attach options `observe`,
+`passive`, `history`; hcompat maps AUTOMATIC_INPUT (advertised), FOCUS, observe, resumed, history; repaints
+reattach passive. FACTS ignored; `resize_notifications` not offered (decided: observers use size events).
+
+## Phase 3..4
+See analysis §10. Next: Phase 3 (send/keys/interrupt/wait, OSC 7501 parsing, turn records with outcome/origin and
+"only my turns" notifications from [[herdrup-analysis]], `[herdr]` config + audit), then Phase 4 (official Herdr
+mobile app capture, Whip, hc socket listener).

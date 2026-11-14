@@ -251,7 +251,10 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   (hc `keep` = reserved label `agentd.hc.keep`; the first client label change materializes the defaults and sets
   `agentd.hc.labels` so deleting a default sticks; reserved labels are hidden and refused), documents to
   `doc_get`/`doc_set` (`herdr-app` holds Desktop's spaces/tabs/layout), `turn` comes from the daemon. Attach: the
-  daemon stream is always drained; output waits for credit (256 KiB window); a viewer more than
+  daemon stream is always drained; output waits for credit (256 KiB window); hc `observe` → daemon `observe`,
+  `resumed` and every repaint → `passive`, `history` → `history`, FOCUS → `F`, AUTOMATIC_INPUT (kind 6, feature
+  `automatic_input` advertised in hello and confirmed in attach) → `A`; FACTS are ignored (viewers answer
+  display queries themselves); `resize_notifications` is not offered; a viewer more than
   `Server.MaxPending` (4 MiB) behind gets a repaint (daemon stream reopened, its redraw = CAN + screen) instead of
   the backlog. Results are tested against the vendored `internal/hcompat/testdata/herdr-core-released.openrpc.json`
   (Apache-2.0, `testdata/NOTICE`). The translator connects to the daemon as the calling process, so identity rules
@@ -448,7 +451,14 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   `inject.ErrDraft` → `busy`, purge argument errors → `invalid` (session permission refusals → `forbidden`); client side: `*proto.RemoteError{Msg, Code, Data}`, `client.ErrorCode(err)`.
   Op `attach` upgrades the connection to
   binary frames `[1 byte type][4 bytes big-endian length][payload]`, types: `D` data, `R` resize
-  (`uint16 cols, uint16 rows`), `X` detach/close, `E` exit (payload = exit code as text).
+  (`uint16 cols, uint16 rows`), `X` detach/close, `E` exit (payload = exit code as text), `A` automatic input
+  (client → daemon: terminal replies tagged at the source, written unchanged as non-human input from any client,
+  no size ownership, no `termreply` heuristics), `F` focus (client → daemon, 1 byte 1/0: gaining focus makes the
+  client active; `CSI I`/`CSI O` reach the child, as non-human input, only if it set DEC 1004 and only from the
+  active client). `attach {observe, passive, history}`: `observe` = watch only (D/A/F/R ignored, never active);
+  `passive` = active (size owner) only after input, resize or focus, not at attach; `history N` (<= 10000,
+  `proto.MaxAttachHistory`) paints up to N scrollback lines first (printed then scrolled off the top, so they land
+  in the client's scrollback; main screen only; `Session.SubscribeWithHistory`).
   Op `subscribe` upgrades the connection to a server→client stream of newline-delimited JSON events
   after its OK response line (`{epoch, seq, sessions[]}`; anything the client writes is discarded, the
   client closes to unsubscribe); see "Event bus".

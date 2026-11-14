@@ -361,9 +361,14 @@ func (c *Client) Shutdown() error { return c.Call(proto.OpShutdown, nil, nil) }
 // received is the full redraw. The Client must not be used afterwards; close
 // the returned connection when done.
 func (c *Client) Attach(name string, cols, rows uint16) (net.Conn, error) {
+	return c.AttachWith(proto.AttachArgs{Name: name, Cols: cols, Rows: rows})
+}
+
+// AttachWith is Attach with every attach option (observe, passive, history).
+func (c *Client) AttachWith(a proto.AttachArgs) (net.Conn, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err := c.callLocked(proto.OpAttach, proto.AttachArgs{Name: name, Cols: cols, Rows: rows}, nil); err != nil {
+	if err := c.callLocked(proto.OpAttach, a, nil); err != nil {
 		return nil, err
 	}
 	return &frameConn{Conn: c.conn, r: c.codec.Reader()}, nil

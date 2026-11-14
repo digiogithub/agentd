@@ -28,6 +28,7 @@
 package session
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -35,6 +36,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -688,6 +690,47 @@ func (s *Session) SetReplyForwarding(enabled bool) {
 		s.replyBuf = nil
 		s.replyMu.Unlock()
 	}
+}
+
+// DECMode reports whether the child set DEC private mode m (e.g. 1004 focus
+// events).
+func (s *Session) DECMode(m int) bool {
+	s.outMu.RLock()
+	defer s.outMu.RUnlock()
+	return s.decModes[m]
+}
+
+// SubscribeWithHistory is SubscribeWithRedraw with up to n scrollback lines
+// painted first (main screen only): they are printed and scrolled off the
+// top, so they land in the client's own scrollback, then the redraw paints
+// the screen.
+func (s *Session) SubscribeWithHistory(n int) ([]byte, int, <-chan []byte) {
+	s.outMu.Lock()
+	defer s.outMu.Unlock()
+	var b bytes.Buffer
+	if e := s.emu.Emulator; n > 0 && !e.IsAltScreen() {
+		if sb := e.Scrollback(); sb != nil && sb.Len() > 0 {
+			lines := sb.Lines()
+			if len(lines) > n {
+				lines = lines[len(lines)-n:]
+			}
+			rows := e.Height()
+			b.WriteString("\x1b[?2026h\x1b[0m\x1b[r\x1b[H\x1b[2J")
+			for _, l := range lines {
+				b.WriteString(l.Render())
+				b.WriteString("\x1b[0m\r\n")
+			}
+			// The last min(len, rows-1) lines are still on screen: scroll them
+			// off from the bottom row.
+			if k := min(len(lines), rows-1); k > 0 {
+				b.WriteString("\x1b[" + strconv.Itoa(rows) + ";1H")
+				b.WriteString(strings.Repeat("\n", k))
+			}
+		}
+	}
+	b.Write(s.redrawLocked())
+	id, ch := s.subscribeLocked()
+	return b.Bytes(), id, ch
 }
 
 // BracketedPasteEnabled reports whether the child has enabled bracketed paste
