@@ -78,13 +78,16 @@ type hcClient struct {
 	ctrl   chan map[string]any
 }
 
-func newHCClient(t *testing.T, sock string) *hcClient {
+func newHCClient(t *testing.T, sock string, opts ...func(*hcompat.Server)) *hcClient {
 	t.Helper()
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	srv := &hcompat.Server{
 		Dial: func() (*client.Client, error) { return client.Dial(sock) },
 		Core: hcompat.CoreInfo{ID: "test-core", Name: "testhost"},
+	}
+	for _, o := range opts {
+		o(srv)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -264,6 +267,7 @@ func TestHelloSatisfiesHerdrClients(t *testing.T) {
 		}
 	}
 	st := result(t, c.call("server.status", map[string]any{}))
+	checkResult(t, loadSchema(t), "server.status", st)
 	if st["installed_by"] != "agentd" {
 		t.Fatalf("server.status = %v", st)
 	}
@@ -301,6 +305,7 @@ func TestPlainModeList(t *testing.T) {
 	if err := json.Unmarshal(line, &m); err != nil {
 		t.Fatal(err)
 	}
+	checkResult(t, loadSchema(t), "terminal.list", result(t, m))
 	terms := result(t, m)["terminals"].([]any)
 	if len(terms) != 1 {
 		t.Fatalf("terminals = %v", terms)
@@ -322,6 +327,7 @@ func TestSubscribeAttachInputAndClose(t *testing.T) {
 	c.helloFramed()
 
 	sub := result(t, c.call("events.subscribe", map[string]any{}))
+	checkResult(t, loadSchema(t), "events.subscribe", sub)
 	terms := sub["terminals"].([]any)
 	if len(terms) != 1 || terms[0].(map[string]any)["address"] != "cat@proj" {
 		t.Fatalf("snapshot = %v", terms)
@@ -342,6 +348,7 @@ func TestSubscribeAttachInputAndClose(t *testing.T) {
 		"terminal": "cat@proj", "cols": 80, "rows": 24, "history": 2000,
 		"display": map[string]any{"fg": "#ffffff", "bg": "#000000"},
 	}))
+	checkResult(t, loadSchema(t), "terminal.attach", att)
 	ch := uint32(att["channel"].(float64))
 	if ch == 0 || ch == evCh {
 		t.Fatalf("attach channel = %d (events %d)", ch, evCh)
@@ -363,6 +370,7 @@ func TestSubscribeAttachInputAndClose(t *testing.T) {
 
 	// Kill: the subscription reports finished.
 	k := result(t, c.call("terminal.kill", map[string]any{"terminal": "cat@proj"}))
+	checkResult(t, loadSchema(t), "terminal.kill", k)
 	if k["state"] != "finished" {
 		t.Fatalf("kill = %v", k)
 	}
@@ -407,11 +415,13 @@ func TestDocsVersionedWithEvent(t *testing.T) {
 	evCh := uint32(sub["channel"].(float64))
 
 	g := result(t, c.call("doc.get", map[string]any{"name": "herdr-app", "on": nil}))
+	checkResult(t, loadSchema(t), "doc.get", g)
 	if g["value"] != nil || g["version"].(float64) != 0 {
 		t.Fatalf("empty doc = %v", g)
 	}
 	value := map[string]any{"spaces": []any{map[string]any{"id": "s1", "name": "proj", "tabs": []any{}}}}
 	s := result(t, c.call("doc.set", map[string]any{"name": "herdr-app", "value": value, "version": 0}))
+	checkResult(t, loadSchema(t), "doc.set", s)
 	if s["version"].(float64) != 1 {
 		t.Fatalf("set = %v", s)
 	}
@@ -434,6 +444,7 @@ func TestLabelMergeAndRun(t *testing.T) {
 		"argv": []string{"sh", "-c", "sleep 30"}, "cwd": cwd, "keep": true,
 		"labels": map[string]string{"herdr.space": "sp1", "herdr.tab": "tb1", "herdr.seen": "0"},
 	}))
+	checkResult(t, loadSchema(t), "terminal.run", r)
 	addr := r["address"].(string)
 	if !strings.HasPrefix(addr, "sh@") || r["keep"] != true || r["labels"].(map[string]any)["herdr.space"] != "sp1" {
 		t.Fatalf("run = %v", r)
@@ -444,6 +455,7 @@ func TestLabelMergeAndRun(t *testing.T) {
 		t.Fatalf("second run reused %s", addr)
 	}
 	l := result(t, c.call("terminal.label", map[string]any{"terminal": addr, "labels": map[string]string{"herdr.seen": "2", "herdr.tab": ""}}))
+	checkResult(t, loadSchema(t), "terminal.label", l)
 	labels := l["labels"].(map[string]any)
 	if labels["herdr.seen"] != "2" || labels["herdr.space"] != "sp1" {
 		t.Fatalf("labels = %v", labels)

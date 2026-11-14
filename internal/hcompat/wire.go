@@ -43,6 +43,9 @@ const (
 	MaxPayload = 16 << 20
 	// Window is the credit a stream starts with.
 	Window = 256 * 1024
+	// MaxPending is how far a viewer may fall behind before it gets a fresh
+	// repaint instead of the backlog.
+	MaxPending = 4 << 20
 	// chunk is the largest stream DATA frame this package sends.
 	chunk = 16 * 1024
 )

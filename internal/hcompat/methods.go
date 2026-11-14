@@ -195,8 +195,41 @@ func terminalRm(c *conn, params json.RawMessage) (any, func(), *rpcError) {
 	if err := cl.Rm(p.Terminal); err != nil {
 		return nil, nil, fromDaemon(err)
 	}
-	c.s.forget(p.Terminal)
 	return map[string]any{"removed": true}, nil, nil
+}
+
+// setLabels merges upd into a session's daemon labels. The first client
+// change materializes the default labels and marks the session explicit, so
+// deleting a default (herdr.tab) sticks.
+func (c *conn) setLabels(si proto.SessionInfo, upd map[string]string) (proto.SessionInfo, *rpcError) {
+	merged := map[string]string{}
+	if si.Labels[labelExplicit] == "" {
+		for k, v := range visibleLabels(si) {
+			merged[k] = v
+		}
+		merged[labelExplicit] = "1"
+	}
+	for k, v := range upd {
+		if reservedLabel(k) {
+			return si, invalidParams("label " + k + " is reserved")
+		}
+		merged[k] = v
+	}
+	return c.applyLabels(si, merged)
+}
+
+func (c *conn) applyLabels(si proto.SessionInfo, upd map[string]string) (proto.SessionInfo, *rpcError) {
+	cl, err := c.s.Dial()
+	if err != nil {
+		return si, fromDaemon(err)
+	}
+	defer cl.Close()
+	labels, err := cl.Label(si.Name, upd)
+	if err != nil {
+		return si, fromDaemon(err)
+	}
+	si.Labels = labels
+	return si, nil
 }
 
 func terminalLabel(c *conn, params json.RawMessage) (any, func(), *rpcError) {
@@ -211,10 +244,10 @@ func terminalLabel(c *conn, params json.RawMessage) (any, func(), *rpcError) {
 	if err != nil {
 		return nil, nil, err
 	}
-	c.s.setLabels(si.Name, p.Labels)
-	t := c.s.record(si)
-	c.s.broadcast("labels", si.Name, map[string]any{"labels": t.Labels})
-	return t, nil, nil
+	if si, err = c.setLabels(si, p.Labels); err != nil {
+		return nil, nil, err
+	}
+	return c.s.record(si), nil, nil
 }
 
 func terminalKeep(c *conn, params json.RawMessage) (any, func(), *rpcError) {
@@ -230,10 +263,13 @@ func terminalKeep(c *conn, params json.RawMessage) (any, func(), *rpcError) {
 		return nil, nil, err
 	}
 	// Stored only: agentd has no in-place shell recovery (documented deviation).
-	c.s.mu.Lock()
-	c.s.keep[si.Name] = p.Keep
-	c.s.mu.Unlock()
-	c.s.broadcast("keep", si.Name, map[string]any{"keep": p.Keep})
+	v := ""
+	if p.Keep {
+		v = "1"
+	}
+	if si, err = c.applyLabels(si, map[string]string{labelKeep: v}); err != nil {
+		return nil, nil, err
+	}
 	return c.s.record(si), nil, nil
 }
 
@@ -303,9 +339,22 @@ func terminalRun(c *conn, params json.RawMessage) (any, func(), *rpcError) {
 	if !filepath.IsAbs(cwd) {
 		return nil, nil, invalidParams("cwd must be absolute")
 	}
+	labels := map[string]string{}
+	for k, v := range p.Labels {
+		if reservedLabel(k) {
+			return nil, nil, invalidParams("label " + k + " is reserved")
+		}
+		labels[k] = v
+	}
+	if len(labels) > 0 {
+		labels[labelExplicit] = "1"
+	}
+	if p.Keep {
+		labels[labelKeep] = "1"
+	}
 	a := proto.RunArgs{
 		Target: cwd, Cwd: cwd, Harness: filepath.Base(argv[0]), Cmd: argv,
-		EnvBase: c.s.EnvBase, Env: p.Env,
+		EnvBase: c.s.EnvBase, Env: p.Env, Labels: labels,
 	}
 	if p.Name != nil {
 		a.Name = *p.Name
@@ -328,18 +377,7 @@ func terminalRun(c *conn, params json.RawMessage) (any, func(), *rpcError) {
 	if err != nil {
 		return nil, nil, fromDaemon(err)
 	}
-	if len(p.Labels) > 0 {
-		c.s.setLabels(si.Name, p.Labels)
-	}
-	if p.Keep {
-		c.s.mu.Lock()
-		c.s.keep[si.Name] = true
-		c.s.mu.Unlock()
-	}
-	t := c.s.record(si)
-	// The created event may already have gone out without these labels.
-	c.s.broadcast("labels", si.Name, map[string]any{"labels": t.Labels})
-	return t, nil, nil
+	return c.s.record(si), nil, nil
 }
 
 func docGet(c *conn, params json.RawMessage) (any, func(), *rpcError) {
@@ -353,21 +391,17 @@ func docGet(c *conn, params json.RawMessage) (any, func(), *rpcError) {
 	if p.On != nil && *p.On != "" {
 		return nil, nil, newError("not_found", "no machine "+*p.On)
 	}
-	if p.Name == "" {
-		return nil, nil, invalidParams("name is required")
+	cl, err := c.s.Dial()
+	if err != nil {
+		return nil, nil, fromDaemon(err)
 	}
-	c.s.mu.Lock()
-	d := c.s.docs[p.Name]
-	c.s.mu.Unlock()
-	value := d.Value
-	if value == nil {
-		value = json.RawMessage("null")
+	defer cl.Close()
+	r, err := cl.DocGet(p.Name)
+	if err != nil {
+		return nil, nil, fromDaemon(err)
 	}
-	return map[string]any{"value": value, "version": d.Version}, nil, nil
+	return map[string]any{"value": r.Value, "version": r.Version}, nil, nil
 }
-
-// maxDoc is herdr-core's document size limit (serialized JSON).
-const maxDoc = 1 << 20
 
 func docSet(c *conn, params json.RawMessage) (any, func(), *rpcError) {
 	var p struct {
@@ -382,29 +416,16 @@ func docSet(c *conn, params json.RawMessage) (any, func(), *rpcError) {
 	if p.On != nil && *p.On != "" {
 		return nil, nil, newError("not_found", "no machine "+*p.On)
 	}
-	if p.Name == "" {
-		return nil, nil, invalidParams("name is required")
+	cl, err := c.s.Dial()
+	if err != nil {
+		return nil, nil, fromDaemon(err)
 	}
-	if len(p.Value) > maxDoc {
-		return nil, nil, invalidParams("document larger than 1 MiB")
+	defer cl.Close()
+	v, err := cl.DocSet(p.Name, p.Value, p.Version)
+	if err != nil {
+		return nil, nil, fromDaemon(err)
 	}
-	c.s.mu.Lock()
-	d := c.s.docs[p.Name]
-	if p.Version != d.Version {
-		c.s.mu.Unlock()
-		e := newError("conflict", "document "+p.Name+" is at version "+itoa(d.Version))
-		e.Data.Hint = "read it again before writing"
-		return nil, nil, e
-	}
-	d.Version++
-	d.Value = append(json.RawMessage(nil), p.Value...)
-	if string(d.Value) == "null" {
-		d.Value = nil
-	}
-	c.s.docs[p.Name] = d
-	c.s.mu.Unlock()
-	c.s.broadcast("doc", "", map[string]any{"name": p.Name, "version": d.Version})
-	return map[string]any{"version": d.Version}, nil, nil
+	return map[string]any{"version": v}, nil, nil
 }
 
 func machineList(*conn, json.RawMessage) (any, func(), *rpcError) {

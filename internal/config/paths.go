@@ -24,6 +24,7 @@ const (
 	mailboxName   = "mailbox.db"
 	logDirName    = "logs"
 	daemonLogName = "daemon.log"
+	docsName      = "docs.json"
 	configName    = "config.toml"
 	appDirName    = "agentd"
 )
@@ -86,6 +87,9 @@ func inStateDir(elem ...string) (string, error) {
 
 // MailboxPath returns <state>/mailbox.db.
 func MailboxPath() (string, error) { return inStateDir(mailboxName) }
+
+// DocsPath returns the path of the document store (ops doc_get/doc_set).
+func DocsPath() (string, error) { return inStateDir(docsName) }
 
 // LogDir returns <state>/logs.
 func LogDir() (string, error) { return inStateDir(logDirName) }

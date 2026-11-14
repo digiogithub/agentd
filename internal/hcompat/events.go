@@ -2,6 +2,7 @@ package hcompat
 
 import (
 	"encoding/json"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -11,7 +12,7 @@ import (
 )
 
 // subscription is one events.subscribe: a daemon subscribe stream translated
-// into hc event notifications, plus local events (labels, keep, doc).
+// into hc notifications (event, heartbeat, missed).
 type subscription struct {
 	c    *conn
 	st   *stream // framed mode; nil in plain mode (notifications on the connection)
@@ -23,12 +24,15 @@ type subscription struct {
 
 	mu      sync.Mutex
 	seq     uint64
-	visible map[string]bool   // session names in this subscriber's view
-	profile map[string]string // session name -> profile (status app)
+	known   map[string]proto.SessionInfo // every session seen (for filters and status app)
+	visible map[string]bool              // session names in this subscriber's view
 	out     chan []byte
 	done    chan struct{}
 	quit    sync.Once
 }
+
+// subscribeKinds are the daemon event kinds hc events are built from.
+var subscribeKinds = []string{"session", "status", "doc"}
 
 func eventsSubscribe(c *conn, params json.RawMessage) (any, func(), *rpcError) {
 	var p struct {
@@ -43,13 +47,13 @@ func eventsSubscribe(c *conn, params json.RawMessage) (any, func(), *rpcError) {
 	if err != nil {
 		return nil, nil, fromDaemon(err)
 	}
-	ds, err := cl.Subscribe(proto.SubscribeArgs{Kinds: []string{"session", "status"}}, 0)
+	ds, err := cl.Subscribe(proto.SubscribeArgs{Kinds: subscribeKinds}, 0)
 	if err != nil {
 		_ = cl.Close()
 		return nil, nil, fromDaemon(err)
 	}
 	sub := &subscription{c: c, labels: p.Labels, docs: p.Docs,
-		visible: map[string]bool{}, profile: map[string]string{},
+		known: map[string]proto.SessionInfo{}, visible: map[string]bool{},
 		out: make(chan []byte, 1024), done: make(chan struct{})}
 	if p.Terminal != nil {
 		sub.terminal = *p.Terminal
@@ -60,13 +64,8 @@ func eventsSubscribe(c *conn, params json.RawMessage) (any, func(), *rpcError) {
 		sub.st = c.newStream()
 		result["channel"] = sub.st.ch
 	} else {
-		// Plain mode: the connection now carries only notifications; a
-		// placeholder stream keeps it open until the subscription ends.
 		sub.hold = c.newStream()
 	}
-	c.s.mu.Lock()
-	c.s.subs[sub] = struct{}{}
-	c.s.mu.Unlock()
 	after := func() {
 		go sub.writer()
 		go sub.pump(ds)
@@ -88,19 +87,23 @@ func (sub *subscription) snapshot(all []proto.SessionInfo) []Terminal {
 	sub.mu.Lock()
 	defer sub.mu.Unlock()
 	sub.visible = map[string]bool{}
-	if sub.docsOnly() {
-		return terms
-	}
+	sub.known = map[string]proto.SessionInfo{}
 	for _, si := range all {
-		sub.profile[si.Name] = si.Profile
-		t := sub.c.s.record(si)
-		if sub.terminal != "" && si.Name != sub.terminal || !matchLabels(t, sub.labels) {
-			continue
+		sub.known[si.Name] = si
+		if t := sub.c.s.record(si); sub.matches(si.Name, t) {
+			sub.visible[si.Name] = true
+			terms = append(terms, t)
 		}
-		sub.visible[si.Name] = true
-		terms = append(terms, t)
 	}
 	return terms
+}
+
+// matches applies the terminal and label filters.
+func (sub *subscription) matches(name string, t Terminal) bool {
+	if sub.docsOnly() || sub.terminal != "" && name != sub.terminal {
+		return false
+	}
+	return matchLabels(t, sub.labels)
 }
 
 // docsOnly: naming documents and no terminal or label asks for documents
@@ -109,6 +112,8 @@ func (sub *subscription) docsOnly() bool {
 	return len(sub.docs) > 0 && sub.terminal == "" && len(sub.labels) == 0
 }
 
+// wantsDoc: unfiltered subscribers hear every document; terminal and label
+// filters exclude documents unless documents are named.
 func (sub *subscription) wantsDoc(name string) bool {
 	if len(sub.docs) == 0 {
 		return sub.terminal == "" && len(sub.labels) == 0
@@ -127,9 +132,6 @@ func (sub *subscription) stop() {
 		if sub.hold != nil {
 			sub.hold.close(nil)
 		}
-		sub.c.s.mu.Lock()
-		delete(sub.c.s.subs, sub)
-		sub.c.s.mu.Unlock()
 	})
 }
 
@@ -155,23 +157,6 @@ func (sub *subscription) event(typ, terminal string, data any) {
 		params["terminal"] = terminal
 	}
 	sub.emitLocked("event", params)
-}
-
-// local delivers a Server-generated event (labels, keep, doc).
-func (sub *subscription) local(typ, terminal string, data any) {
-	sub.mu.Lock()
-	defer sub.mu.Unlock()
-	if typ == "doc" {
-		if m, ok := data.(map[string]any); ok {
-			if name, _ := m["name"].(string); sub.wantsDoc(name) {
-				sub.event("doc", "", data)
-			}
-		}
-		return
-	}
-	if sub.visible[terminal] {
-		sub.event(typ, terminal, data)
-	}
 }
 
 func (sub *subscription) writer() {
@@ -211,10 +196,7 @@ func (sub *subscription) pump(ds *client.Subscription) {
 		case <-sub.done:
 			return
 		case ev, ok := <-ds.Events:
-			if !ok {
-				return
-			}
-			if !sub.translate(ev) {
+			if !ok || !sub.translate(ev) {
 				return
 			}
 		}
@@ -222,7 +204,6 @@ func (sub *subscription) pump(ds *client.Subscription) {
 }
 
 func (sub *subscription) translate(ev proto.Event) bool {
-	s := sub.c.s
 	switch ev.Kind {
 	case proto.EvHeartbeat:
 		sub.mu.Lock()
@@ -231,24 +212,34 @@ func (sub *subscription) translate(ev proto.Event) bool {
 	case proto.EvBye:
 		return false
 	case proto.EvResync:
-		all, err := s.sessions()
+		all, err := sub.c.s.sessions()
 		if err != nil {
 			return false
 		}
 		terms := sub.snapshot(all)
 		sub.mu.Lock()
-		sub.seq++ // drop events whose seq is not above the snapshot's
+		sub.seq++ // clients drop events whose seq is not above the snapshot's
 		sub.emitLocked("missed", map[string]any{"terminals": terms})
+		sub.mu.Unlock()
+	case proto.EvDocChanged:
+		var d proto.DocChangedData
+		if json.Unmarshal(ev.Data, &d) != nil {
+			return true
+		}
+		sub.mu.Lock()
+		if sub.wantsDoc(d.Name) {
+			sub.event("doc", "", map[string]any{"name": d.Name, "version": d.Version})
+		}
 		sub.mu.Unlock()
 	case proto.EvSessionStarted:
 		var si proto.SessionInfo
 		if json.Unmarshal(ev.Data, &si) != nil {
 			return true
 		}
-		t := s.record(si)
+		t := sub.c.s.record(si)
 		sub.mu.Lock()
-		sub.profile[si.Name] = si.Profile
-		if !sub.docsOnly() && (sub.terminal == "" || sub.terminal == si.Name) && matchLabels(t, sub.labels) {
+		sub.known[si.Name] = si
+		if sub.matches(si.Name, t) {
 			sub.visible[si.Name] = true
 			sub.event("created", si.Name, t)
 		}
@@ -257,6 +248,11 @@ func (sub *subscription) translate(ev proto.Event) bool {
 		var d proto.ExitedData
 		_ = json.Unmarshal(ev.Data, &d)
 		sub.mu.Lock()
+		if si, ok := sub.known[ev.Session]; ok {
+			code := d.ExitCode
+			si.State, si.ExitCode = "exited", &code
+			sub.known[ev.Session] = si
+		}
 		if sub.visible[ev.Session] {
 			sub.event("status", ev.Session, map[string]any{"status": nil, "records": map[string]any{}, "reported": true})
 			sub.event("finished", ev.Session, map[string]any{
@@ -266,27 +262,40 @@ func (sub *subscription) translate(ev proto.Event) bool {
 		sub.mu.Unlock()
 	case proto.EvSessionRemoved:
 		sub.mu.Lock()
+		delete(sub.known, ev.Session)
 		if sub.visible[ev.Session] {
 			delete(sub.visible, ev.Session)
 			sub.event("removed", ev.Session, map[string]any{})
 		}
+		sub.mu.Unlock()
+	case proto.EvSessionLabels:
+		var d proto.LabelsData
+		if json.Unmarshal(ev.Data, &d) != nil {
+			return true
+		}
+		sub.mu.Lock()
+		sub.labelsChanged(ev.Session, d.Labels)
 		sub.mu.Unlock()
 	case proto.EvStatusChanged:
 		var d proto.StatusChangedData
 		if json.Unmarshal(ev.Data, &d) != nil {
 			return true
 		}
-		turn, ended := s.noteStatus(ev, d)
 		sub.mu.Lock()
+		si := sub.known[ev.Session]
+		si.Status, si.Turn = d.Status, d.Turn
+		if si.Name != "" {
+			sub.known[ev.Session] = si
+		}
 		if sub.visible[ev.Session] && d.Status != "exited" {
-			st := mapStatus(proto.SessionInfo{Status: d.Status, Profile: sub.profile[ev.Session]})
+			st := mapStatus(proto.SessionInfo{Status: d.Status, Profile: si.Profile})
 			sub.event("status", ev.Session, map[string]any{"status": st, "records": map[string]any{}, "reported": st != nil})
-			if ended {
+			if d.From == "working" && d.Status != "working" {
 				word := ""
 				if st != nil {
 					word = st.State
 				}
-				sub.event("turn", ev.Session, map[string]any{"turn": turn, "state": word})
+				sub.event("turn", ev.Session, map[string]any{"turn": d.Turn, "state": word})
 			}
 		}
 		sub.mu.Unlock()
@@ -294,19 +303,36 @@ func (sub *subscription) translate(ev proto.Event) bool {
 	return true
 }
 
-// noteStatus advances a session's turn counter when its status leaves
-// working. Several subscriptions see the same daemon event: the counter
-// moves once per daemon event (by seq).
-func (s *Server) noteStatus(ev proto.Event, d proto.StatusChangedData) (turn uint64, ended bool) {
-	ended = d.From == "working" && d.Status != "working"
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.turnSeq == nil {
-		s.turnSeq = map[string]uint64{}
+// labelsChanged turns a daemon session.labels into hc labels / keep events,
+// following herdr-core's filter rules: a terminal that newly matches a label
+// filter comes with its whole record; one that stops matching still gets the
+// event, then leaves the view.
+func (sub *subscription) labelsChanged(name string, labels map[string]string) {
+	si, ok := sub.known[name]
+	if !ok {
+		return
 	}
-	if ended && ev.Seq > s.turnSeq[ev.Session] {
-		s.turnSeq[ev.Session] = ev.Seq
-		s.turns[ev.Session]++
+	oldKeep := si.Labels[labelKeep] != ""
+	oldVisible := visibleLabels(si)
+	si.Labels = labels
+	sub.known[name] = si
+	t := sub.c.s.record(si)
+	was, now := sub.visible[name], sub.matches(name, t)
+	if !was && !now {
+		return
 	}
-	return s.turns[ev.Session], ended
+	if !maps.Equal(oldVisible, t.Labels) || !was {
+		data := map[string]any{"labels": t.Labels}
+		if !was {
+			data["record"] = t
+		}
+		sub.event("labels", name, data)
+	}
+	if was && t.Keep != oldKeep {
+		sub.event("keep", name, map[string]any{"keep": t.Keep})
+	}
+	sub.visible[name] = now
+	if !now {
+		delete(sub.visible, name)
+	}
 }

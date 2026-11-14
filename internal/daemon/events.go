@@ -254,6 +254,7 @@ var knownKinds = []string{
 	proto.EvSessionCreated, proto.EvSessionStarted, proto.EvSessionExited, proto.EvSessionRemoved,
 	proto.EvStatusChanged, proto.EvViewChanged, proto.EvInputChanged, proto.EvAttentionChanged,
 	proto.EvMailQueued, proto.EvMailDelivered, proto.EvMailRead,
+	proto.EvSessionLabels, proto.EvDocChanged,
 }
 
 func validKind(k string) bool {

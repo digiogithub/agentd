@@ -1,0 +1,8 @@
+herdr-core-released.openrpc.json is copied unmodified from herdr-core
+(https://github.com/herdrdev/herdr-core, schema/released.openrpc.json,
+commit c84d6e7, herdr-core 0.1.21).
+
+Copyright the herdr-core authors. Licensed under the Apache License,
+Version 2.0 (https://www.apache.org/licenses/LICENSE-2.0). It is used only
+by tests that check agentd's hc compatibility layer against the published
+protocol; it is not compiled into agentd.

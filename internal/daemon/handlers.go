@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -243,6 +244,32 @@ func (s *Server) dispatch(ctx context.Context, req proto.Request, peer peerInfo)
 			return nil, err
 		}
 		return s.actOp(ctx, who, a)
+	case proto.OpLabel:
+		var a proto.LabelArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.label(who, a)
+	case proto.OpDocGet:
+		var a proto.DocGetArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		return s.docGet(a)
+	case proto.OpDocSet:
+		var a proto.DocSetArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.docSet(who, a)
 	case proto.OpPeers:
 		return s.peers(), nil
 	case proto.OpWhoami:
@@ -272,6 +299,13 @@ func (s *Server) run(ctx context.Context, a proto.RunArgs) (proto.SessionInfo, e
 	}
 	if len(a.Cmd) == 0 || a.Cmd[0] == "" {
 		return proto.SessionInfo{}, proto.Errorf(proto.CodeInvalid, "run: empty command")
+	}
+	labels, err := mergeLabels(nil, a.Labels)
+	if err != nil {
+		return proto.SessionInfo{}, err
+	}
+	if len(labels) == 0 {
+		labels = nil
 	}
 	if a.Cwd != "" {
 		if !filepath.IsAbs(a.Cwd) {
@@ -322,7 +356,7 @@ func (s *Server) run(ctx context.Context, a proto.RunArgs) (proto.SessionInfo, e
 	}
 	s.starting[a.Name] = proto.SessionInfo{
 		Name: a.Name, State: StateStarting, Cwd: a.Cwd, Cmd: a.Cmd, Profile: profile.Name,
-		Cols: a.Cols, Rows: a.Rows, StartedAt: time.Now(),
+		Cols: a.Cols, Rows: a.Rows, StartedAt: time.Now(), Labels: labels,
 	}
 	created := s.starting[a.Name]
 	s.mu.Unlock()
@@ -344,7 +378,7 @@ func (s *Server) run(ctx context.Context, a proto.RunArgs) (proto.SessionInfo, e
 		return proto.SessionInfo{}, proto.Errorf(proto.CodeNotReady, "daemon is shutting down")
 	}
 	e := &entry{sess: sess, profile: profile, baseCols: a.Cols, baseRows: a.Rows, restore: s.Cfg.Run.RestoreSize(),
-		exitPub: make(chan struct{})}
+		exitPub: make(chan struct{}), labels: labels}
 	e.view = newViewState(s, e, a.Name)
 	s.sessions[a.Name] = e
 	// session.created only for a session that really started (a failed start
@@ -353,7 +387,7 @@ func (s *Server) run(ctx context.Context, a proto.RunArgs) (proto.SessionInfo, e
 	s.publish(proto.EvSessionCreated, a.Name, created)
 	s.publish(proto.EvSessionStarted, a.Name, proto.SessionInfo{
 		Name: a.Name, State: sess.State(), Pid: sess.Pid(), Cwd: a.Cwd, Cmd: a.Cmd, Profile: profile.Name,
-		StartedAt: sess.StartedAt(), Cols: a.Cols, Rows: a.Rows,
+		StartedAt: sess.StartedAt(), Cols: a.Cols, Rows: a.Rows, Labels: maps.Clone(labels),
 	})
 	e.view.start() // under the lock: Shutdown must find a started watcher
 	s.mu.Unlock()
@@ -384,6 +418,7 @@ func (s *Server) info(ctx context.Context, e *entry) proto.SessionInfo {
 		LastOutput: sess.LastOutput(),
 		Attached:   e.attachedCount(),
 		Title:      sess.Title(),
+		Labels:     e.labelsCopy(),
 	}
 	info.Cols, info.Rows = sess.Size()
 	if code, ok := sess.ExitCode(); ok {
@@ -397,7 +432,7 @@ func (s *Server) info(ctx context.Context, e *entry) proto.SessionInfo {
 	}
 	info.IdleMS = time.Since(last).Milliseconds()
 	if e.view != nil {
-		info.Status, info.Attention, info.Revision, info.Preview = e.view.summary()
+		info.Status, info.Attention, info.Revision, info.Preview, info.Turn = e.view.summary()
 	}
 	if n, err := s.Store.UnreadCount(ctx, info.Name); err == nil {
 		info.Unread = n

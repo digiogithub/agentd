@@ -8,8 +8,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"maps"
-	"os"
 	"sync"
 	"time"
 
@@ -17,10 +15,9 @@ import (
 	"github.com/digiogithub/agentd/internal/proto"
 )
 
-// Server translates hc connections into daemon ops. One Server may serve
-// several connections; the state it keeps (label overlay, keep flags, turn
-// counters, documents) is shared by them and lives only as long as the
-// Server (proof of concept: the daemon will own it, see the plan).
+// Server translates hc connections into daemon ops. It keeps no state of its
+// own: labels, documents and turn counters live in the daemon, so every
+// connection (and every `hc connect` process) sees the same terminals.
 type Server struct {
 	// Dial opens a new daemon connection (each attach and subscription uses
 	// its own, since the daemon upgrades the connection).
@@ -31,34 +28,22 @@ type Server struct {
 	Version string
 	// EnvBase is the environment terminal.run passes as the child's base.
 	EnvBase []string
+	// MaxPending is how far (bytes) an attach may fall behind before it gets
+	// a fresh repaint instead of the backlog (default MaxPending).
+	MaxPending int
 	// Log receives diagnostics (default: discard). Never terminal contents.
 	Log *slog.Logger
 
 	started time.Time
 	once    sync.Once
-
-	mu      sync.Mutex
-	labels  map[string]map[string]string // overlay per session name
-	keep    map[string]bool
-	turns   map[string]uint64
-	turnSeq map[string]uint64 // daemon seq of the last counted turn end
-	docs    map[string]doc
-	subs    map[*subscription]struct{}
-}
-
-type doc struct {
-	Value   json.RawMessage
-	Version uint64
 }
 
 func (s *Server) init() {
 	s.once.Do(func() {
 		s.started = time.Now()
-		s.labels = map[string]map[string]string{}
-		s.keep = map[string]bool{}
-		s.turns = map[string]uint64{}
-		s.docs = map[string]doc{}
-		s.subs = map[*subscription]struct{}{}
+		if s.MaxPending <= 0 {
+			s.MaxPending = MaxPending
+		}
 		if s.Version == "" {
 			s.Version = CompatVersion
 		}
@@ -363,33 +348,45 @@ func (c *conn) closeAll() {
 	}
 }
 
-// ---- shared state ----
+// ---- records ----
 
-// record builds the hc record of a session.
-func (s *Server) record(si proto.SessionInfo) Terminal {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.recordLocked(si)
-}
+// Reserved labels: kept in the daemon, never shown to hc clients.
+const (
+	// labelKeep stores hc's keep flag (agentd has no in-place recovery).
+	labelKeep = "agentd.hc.keep"
+	// labelExplicit marks a session whose labels a client set: the default
+	// herdr.space/herdr.tab are then not added (a client may delete them).
+	labelExplicit = "agentd.hc.labels"
+)
 
-func (s *Server) recordLocked(si proto.SessionInfo) Terminal {
-	name := si.Name
-	labels := map[string]string{LabelSpace: projectLabel(si), LabelTab: si.Name}
-	if si.Profile != "" {
-		labels[LabelHarness] = si.Profile
+func reservedLabel(k string) bool { return k == labelKeep || k == labelExplicit }
+
+// visibleLabels are a session's labels as hc clients see them.
+func visibleLabels(si proto.SessionInfo) map[string]string {
+	labels := map[string]string{}
+	if si.Labels[labelExplicit] == "" {
+		labels[LabelSpace] = projectLabel(si)
+		labels[LabelTab] = si.Name
+		if si.Profile != "" {
+			labels[LabelHarness] = si.Profile
+		}
 	}
-	for k, v := range s.labels[si.Name] {
-		if v == "" {
-			delete(labels, k)
-		} else {
+	for k, v := range si.Labels {
+		if !reservedLabel(k) {
 			labels[k] = v
 		}
 	}
+	return labels
+}
+
+// record builds the hc record of a session.
+func (s *Server) record(si proto.SessionInfo) Terminal {
+	name := si.Name
 	t := Terminal{
-		Address: si.Name, Name: &name, Labels: labels, Argv: si.Cmd, Cwd: si.Cwd,
+		Address: si.Name, Name: &name, Labels: visibleLabels(si), Argv: si.Cmd, Cwd: si.Cwd,
 		State: "live", CreatedMS: si.StartedAt.UnixMilli(), Screen: "exact",
 		Cols: si.Cols, Rows: si.Rows, Title: si.Title, Records: map[string]Status{},
-		Turn: s.turns[si.Name], Keep: s.keep[si.Name], Foreground: json.RawMessage("null"),
+		Turn: si.Turn, Keep: si.Labels[labelKeep] != "", Foreground: json.RawMessage("null"),
 	}
 	if t.Argv == nil {
 		t.Argv = []string{}
@@ -440,45 +437,4 @@ func (s *Server) lookup(addr string) (proto.SessionInfo, *rpcError) {
 		}
 	}
 	return proto.SessionInfo{}, newError("not_found", "no terminal "+addr)
-}
-
-// broadcast sends a locally generated event (labels, keep, doc) to every
-// subscription of this Server that wants it.
-func (s *Server) broadcast(typ, terminal string, data any) {
-	s.mu.Lock()
-	subs := make([]*subscription, 0, len(s.subs))
-	for sub := range s.subs {
-		subs = append(subs, sub)
-	}
-	s.mu.Unlock()
-	for _, sub := range subs {
-		sub.local(typ, terminal, data)
-	}
-}
-
-func (s *Server) setLabels(name string, labels map[string]string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	m := s.labels[name]
-	if m == nil {
-		m = map[string]string{}
-		s.labels[name] = m
-	}
-	maps.Copy(m, labels)
-}
-
-func (s *Server) forget(name string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.labels, name)
-	delete(s.keep, name)
-	delete(s.turns, name)
-}
-
-func hostname() string {
-	h, err := os.Hostname()
-	if err != nil || h == "" {
-		return "localhost"
-	}
-	return h
 }

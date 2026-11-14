@@ -72,6 +72,7 @@ type Server struct {
 	closing  bool
 	epoch    string
 	bus      *bus
+	docs     *docStore // ops doc_get/doc_set (meta.go)
 
 	lockFile *os.File    // exclusive flock on <socketdir>/agentd.lock, held for the daemon's lifetime
 	sockInfo os.FileInfo // the socket file as bound, to unlink only our own on shutdown
@@ -96,7 +97,7 @@ func New(cfg *config.Config, aliases *config.Aliases, store *mailbox.Store, log 
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	epoch := newEpoch()
-	return &Server{
+	s := &Server{
 		Cfg:      cfg,
 		Aliases:  aliases,
 		Store:    store,
@@ -108,6 +109,8 @@ func New(cfg *config.Config, aliases *config.Aliases, store *mailbox.Store, log 
 		epoch:    epoch,
 		bus:      newBus(epoch),
 	}
+	s.docs = &docStore{logf: func(msg string, args ...any) { s.Log.Warn(msg, args...) }}
+	return s
 }
 
 func (s *Server) socketPath() string {
@@ -479,6 +482,7 @@ type entry struct {
 	mu      sync.Mutex
 	clients map[*attachClient]struct{}
 	active  *attachClient
+	labels  map[string]string // op label (meta.go)
 }
 
 type attachClient struct {

@@ -400,3 +400,26 @@ func (c *Client) Act(a proto.ActArgs) (proto.ActResult, error) {
 	err := c.Call(proto.OpAct, a, &r)
 	return r, err
 }
+
+// Label merges labels into a session's labels (an empty value removes the
+// key) and returns all labels now.
+func (c *Client) Label(name string, labels map[string]string) (map[string]string, error) {
+	var r proto.LabelResult
+	err := c.Call(proto.OpLabel, proto.LabelArgs{Name: name, Labels: labels}, &r)
+	return r.Labels, err
+}
+
+// DocGet reads a stored document.
+func (c *Client) DocGet(name string) (proto.DocGetResult, error) {
+	var r proto.DocGetResult
+	err := c.Call(proto.OpDocGet, proto.DocGetArgs{Name: name}, &r)
+	return r, err
+}
+
+// DocSet writes a document if version is its current version (conflict
+// otherwise) and returns the new version.
+func (c *Client) DocSet(name string, value []byte, version uint64) (uint64, error) {
+	var r proto.DocSetResult
+	err := c.Call(proto.OpDocSet, proto.DocSetArgs{Name: name, Value: value, Version: version}, &r)
+	return r.Version, err
+}

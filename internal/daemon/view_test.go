@@ -123,6 +123,10 @@ func TestViewStatusTransitionsAttentionAndRevisions(t *testing.T) {
 	if !seen["starting"] {
 		t.Errorf("never saw starting: %v", seen)
 	}
+	// The status left working once: one finished turn (ls and op view agree).
+	if s := findSession(t, c, "sh1"); s.Turn < 1 {
+		t.Errorf("turn = %d after working -> idle", s.Turn)
+	}
 	if v.Attention.Reason != "turn_done" || v.Attention.Since.IsZero() {
 		t.Errorf("attention = %+v", v.Attention)
 	}

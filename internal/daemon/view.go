@@ -79,6 +79,7 @@ type viewState struct {
 	pubAtt    bool
 	pubInput  string
 	pubRev    uint64
+	turn      uint64 // times the published status left working
 
 	// Menu instances for op act (act.go). menuCtx is the screen-context hash
 	// of the menu (screen.MenuContext), instance the identity published by
@@ -387,13 +388,13 @@ func fingerprint(v proto.View, tail []screen.Line, total int, spinners string) [
 
 // summary returns the cached view fields shown by ls, refreshing once when
 // the watcher has not computed anything yet.
-func (v *viewState) summary() (status string, attention bool, rev uint64, preview string) {
+func (v *viewState) summary() (status string, attention bool, rev uint64, preview string, turn uint64) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.rev == 0 {
 		v.refreshLocked(time.Now())
 	}
-	return v.cur.Status, v.cur.Attention.Set, v.rev, v.preview
+	return v.cur.Status, v.cur.Attention.Set, v.rev, v.preview, v.turn
 }
 
 // ack clears the attention flag and returns the resulting revision.
@@ -431,9 +432,13 @@ func (v *viewState) refreshAfterAck() {
 func (v *viewState) publishChangesLocked() {
 	cur, bus := v.cur, v.srv
 	if cur.Status != v.pubStatus {
+		// A turn ends each time the published status leaves working.
+		if v.pubStatus == "working" {
+			v.turn++
+		}
 		bus.publish(proto.EvStatusChanged, v.name, proto.StatusChangedData{
 			From: v.pubStatus, Status: cur.Status, Reason: cur.StatusReason,
-			Attention: cur.Attention.Set, Revision: cur.Revision,
+			Attention: cur.Attention.Set, Revision: cur.Revision, Turn: v.turn,
 		})
 	}
 	if v.pubInit && cur.Attention.Set != v.pubAtt {

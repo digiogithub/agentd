@@ -26,5 +26,16 @@ and attaches to one.
 - Tests: protocol test drives `hcompat.Serve` over pipes like Desktop (hello line, frames, subscribe
   snapshot, attach shows a `sh`/fakeagent session's output, input round trip, CLOSE on exit).
 
-## Phase 1..4
-See analysis §10. Phase 1 moves ids, labels, documents and turn into the daemon (generic ops).
+## Phase 1 (done 2026-11-14: [[herdr-compat-phase1]])
+
+- Daemon: op `label` + `run {labels}` + `SessionInfo.labels` + event `session.labels`; ops `doc_get`/`doc_set`
+  (versioned, `docs.json`, event `doc.changed`, humans only for writes); `turn` in view state, `ls` and
+  `status.changed`.
+- hcompat: stateless (labels/keep/docs/turn from the daemon), events from `session.labels` / `doc.changed`,
+  attach drained always + bounded backlog + repaint, results validated against the released OpenRPC schema.
+- Decision: hc addresses stay agentd session names (stable across `hc connect` processes and readable) instead
+  of `tN`; names are reused only after `rm`, when hc clients already dropped the terminal.
+
+## Phase 2..4
+See analysis §10. Next: Phase 2 (automatic input, focus, facts, `history` scrollback, observe without resize,
+reconnect with `resumed`), then Phase 3 (send/keys/interrupt, OSC 7501, `[herdr]` config + audit).

@@ -224,7 +224,7 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
 ### Key behaviours (normative)
 
 - **Paths**: socket `$XDG_RUNTIME_DIR/agentd/agentd.sock` (fallback `/tmp/agentd-$UID/`), state
-  `$XDG_STATE_HOME/agentd` (fallback `~/.local/state/agentd`): `mailbox.db`, `api/devices.json` (device tokens, dir 0700, file 0600, `api/devices.lock`), `api/tls/{cert.pem,key.pem}` (self-signed gateway cert), `logs/<session>.log`,
+  `$XDG_STATE_HOME/agentd` (fallback `~/.local/state/agentd`): `mailbox.db`, `docs.json` (document store, 0600), `hc/core-id`, `api/devices.json` (device tokens, dir 0700, file 0600, `api/devices.lock`), `api/tls/{cert.pem,key.pem}` (self-signed gateway cert), `logs/<session>.log`,
   `daemon.log`. Config `~/.config/agentd/config.toml`. `AGENTD_SOCKET` env overrides the socket path
   (tests must use a temp socket + temp state dir via `AGENTD_STATE_DIR`).
 - **Daemon lock**: the daemon holds an exclusive `flock` on `<socketdir>/agentd.lock` for its whole
@@ -247,9 +247,15 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   are agentd session names; default labels `herdr.space` (project: part after `@`, else cwd base), `herdr.tab`
   (session name), `agentd.harness`. Status: working->working, waiting->blocked (kind question), idle->idle, others
   null (heuristic, a deviation from hc's OSC 7501). `hello` advertises only implemented methods; `server.status`
-  `installed_by:"agentd"`. Core id persisted in `$STATE/hc/core-id`. Labels, keep, turn and documents live in the
-  `hcompat.Server` (per `connect` process) until the daemon owns them (plan Phase 1). The translator connects to
-  the daemon as the calling process, so identity rules apply unchanged.
+  `installed_by:"agentd"`. Core id persisted in `$STATE/hc/core-id`. The translator keeps no state: labels go to op `label`
+  (hc `keep` = reserved label `agentd.hc.keep`; the first client label change materializes the defaults and sets
+  `agentd.hc.labels` so deleting a default sticks; reserved labels are hidden and refused), documents to
+  `doc_get`/`doc_set` (`herdr-app` holds Desktop's spaces/tabs/layout), `turn` comes from the daemon. Attach: the
+  daemon stream is always drained; output waits for credit (256 KiB window); a viewer more than
+  `Server.MaxPending` (4 MiB) behind gets a repaint (daemon stream reopened, its redraw = CAN + screen) instead of
+  the backlog. Results are tested against the vendored `internal/hcompat/testdata/herdr-core-released.openrpc.json`
+  (Apache-2.0, `testdata/NOTICE`). The translator connects to the daemon as the calling process, so identity rules
+  apply unchanged (inside a session, `doc_set` is refused).
 - **HTTP gateway** (frozen 2026-11-14: kept for possible future use, no new features; the Flutter app was removed) (`agentd serve [--listen addr] [--config path] [--no-autostart] [--log-level l]`, design:
   `docs/design/api/http-api.md`): a separate foreground process (logs to stderr, exit non-zero on config
   error) that talks to the daemon over the unix socket and stops on SIGINT/SIGTERM without touching the
@@ -475,6 +481,14 @@ options never carry key sequences), `view_ack {name}` (→ `{revision}`; clears 
 stream, see "Event bus"; CLI `agentd events [--session X] [--kind K] [--json]`),
 `act {name, action, text?, submit?, option_id?, label?, revision?, epoch?, keys?[], force?}` (→ `{revision, status, result,
 submitted?, warning?}`; actions `prompt|choose|keys|interrupt|cancel`, see "Act"; CLI `agentd act NAME ACTION ...`),
+`label {name, labels{}}` (→ `{labels}`: merge, an empty value removes the key; keys without spaces/`=`/controls
+<=128 bytes, values <=1024, at most 64; humans any session, a session only itself unless `[security] agent_type`;
+publishes `session.labels {labels}`; `run {labels}` sets the initial ones; `ls`/`SessionInfo.labels`),
+`doc_get {name}` (→ `{value, version}`; never written = `null`, 0) / `doc_set {name, value, version}` (→ `{version}`;
+optimistic: a `version` other than the current one is `conflict`; `null` deletes the value and keeps the version;
+names `[A-Za-z0-9._-]{1,64}`, value <=1 MiB of JSON (`daemon.MaxDocBytes`); humans only, sessions may read; stored
+compacted in `docs.json`, atomic rename; a broken file is renamed `.bad` and the store starts empty; publishes
+`doc.changed {name, version}` with no session, so session subscribers never see it),
 `peers`, `whoami`, `attach {name, cols, rows}`, `shutdown`. Every request may carry
 `"auth": {"id", "token"}` (filled by `internal/client` from `AGENTD_ID` / `AGENTD_TOKEN`).
 
@@ -589,13 +603,14 @@ monotonic per `epoch` (random per daemon start; seqs and view revisions reset wi
 `session.started` (data: session info; both published only after a successful start, so a failed `run`
 emits nothing), `session.exited` `{exit_code}`, `session.removed` (always after `session.exited`: `rm` waits
 for the exit publisher),
-`status.changed` `{from, status, reason, attention, revision}`, `view.changed` `{revision}` (no content:
+`status.changed` `{from, status, reason, attention, revision, turn?}` (`turn` = times the published status left
+`working`, also `SessionInfo.turn`), `view.changed` `{revision}` (no content:
 call `view`), `input.changed` `{state}`, `attention.changed` `{attention, reason}`, `mail.queued` /
 `mail.delivered` / `mail.read` `{id, from, to}` (never the body; `session` = the recipient when it is a
-session), `resync` `{reason: overflow|since_seq_too_old|epoch_mismatch}`, `heartbeat` (every 15 s,
+session), `session.labels` `{labels}`, `doc.changed` `{name, version}` (no `session`), `resync` `{reason: overflow|since_seq_too_old|epoch_mismatch}`, `heartbeat` (every 15 s,
 `Server.HeartbeatInterval`; `heartbeat_ms` min 1000) and `bye` (daemon shutdown, sent before connections
 are closed). `kinds` filters by exact kind or prefix (`session`, `status`, `view`, `input`, `attention`,
-`mail`); control kinds always pass.
+`mail`, `doc`); control kinds always pass.
 - The bus keeps a 1024-event replay ring. `since_seq` requires `epoch` (`invalid` otherwise); inside the
   ring (same `epoch`) it replays the missed events, then goes live; outside it, or with another `epoch`,
   the stream starts with `resync`.

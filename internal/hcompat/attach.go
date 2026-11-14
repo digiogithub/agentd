@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync"
 
 	"github.com/digiogithub/agentd/internal/proto"
 )
@@ -13,8 +14,8 @@ import (
 // win32-input-mode (never, on a Unix PTY).
 const win32Off = "\x1b[?9001l"
 
-// can (CAN) starts a first paint: it cancels any half-parsed sequence the
-// viewer still holds.
+// can (CAN) starts a paint: it cancels any half-parsed sequence the viewer
+// still holds.
 const can = 0x18
 
 func terminalAttach(c *conn, params json.RawMessage) (any, func(), *rpcError) {
@@ -44,74 +45,216 @@ func terminalAttach(c *conn, params json.RawMessage) (any, func(), *rpcError) {
 	if cols == 0 || rows == 0 {
 		cols, rows = si.Cols, si.Rows
 	}
-	cl, err := c.s.Dial()
+	a := &attachment{c: c, name: si.Name, observe: p.Observe, cols: cols, rows: rows, max: c.s.MaxPending}
+	a.cond = sync.NewCond(&a.mu)
+	dc, err := a.dial()
 	if err != nil {
 		return nil, nil, fromDaemon(err)
 	}
-	dc, err := cl.Attach(si.Name, cols, rows)
-	if err != nil {
-		_ = cl.Close()
-		return nil, nil, fromDaemon(err)
-	}
-	st := c.newStream()
-	a := &attachment{st: st, dc: dc, observe: p.Observe}
-	st.onInput = a.input
+	a.dc = dc
+	a.st = c.newStream()
+	a.st.onInput = a.input
 	go func() {
-		<-c.ctx.Done()
-		_ = dc.Close()
+		select {
+		case <-c.ctx.Done():
+		case <-a.st.done:
+		}
+		a.shutdown()
 	}()
 	result := map[string]any{
-		"channel":              st.ch,
+		"channel":              a.st.ch,
 		"terminal":             c.s.record(si),
 		"resize_notifications": false,
 		"automatic_input":      false,
 	}
-	// The pump starts once the reply is on the wire: the reply precedes
+	// The pumps start once the reply is on the wire: the reply precedes
 	// every stream frame.
-	return result, a.pump, nil
+	return result, a.start, nil
 }
 
-// attachment bridges one hc attach channel and one daemon attach stream.
+// attachment bridges one hc attach channel and a daemon attach stream. The
+// daemon side is always drained (the daemon drops attach clients that stop
+// reading); bytes wait in pending until the viewer has credit. A viewer more
+// than max bytes behind gets a fresh repaint: the daemon stream is reopened
+// and its redraw replaces the backlog (herdr-core's rule).
 type attachment struct {
+	c       *conn
 	st      *stream
-	dc      net.Conn
+	name    string
 	observe bool
+	max     int
+
+	mu       sync.Mutex
+	cond     *sync.Cond
+	dc       net.Conn // current daemon attach connection
+	cols     uint16
+	rows     uint16
+	pending  []byte
+	first    bool // the next daemon DATA frame is a redraw (first paint)
+	end      any  // CLOSE reason once the daemon stream ended
+	ended    bool
+	shut     bool
+	repaints int
 }
 
-// pump forwards daemon output to the client: the first frame is the
-// daemon's full redraw, sent as herdr-core's first paint.
-func (a *attachment) pump() {
-	defer a.dc.Close()
-	first := true
+func (a *attachment) dial() (net.Conn, error) {
+	cl, err := a.c.s.Dial()
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	cols, rows := a.cols, a.rows
+	a.first = true
+	a.mu.Unlock()
+	dc, err := cl.Attach(a.name, cols, rows)
+	if err != nil {
+		_ = cl.Close()
+		return nil, err
+	}
+	return dc, nil
+}
+
+func (a *attachment) start() {
+	go a.reader()
+	go a.sender()
+}
+
+// reader drains the daemon stream into pending; after a repaint it goes on
+// with the new daemon stream (a.dc).
+func (a *attachment) reader() {
 	for {
-		f, err := proto.ReadFrame(a.dc)
+		a.mu.Lock()
+		dc, shut := a.dc, a.shut
+		a.mu.Unlock()
+		if shut {
+			return
+		}
+		f, err := proto.ReadFrame(dc)
 		if err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
-				a.st.close(map[string]any{"reason": "detached", "exit_code": nil, "signal": nil})
-			} else {
-				a.st.close(map[string]any{"reason": "server_stop", "exit_code": nil, "signal": nil})
-			}
+			a.finish(dc, map[string]any{"reason": "detached", "exit_code": nil, "signal": nil}, err)
 			return
 		}
 		switch f.Type {
 		case proto.FrameData:
-			data := f.Payload
-			if first {
-				first = false
-				data = append(append([]byte{can}, data...), win32Off...)
-			}
-			if !a.st.send(data) {
+			if !a.queue(dc, f.Payload) {
 				return
 			}
 		case proto.FrameExit:
 			code, _ := proto.ParseExit(f.Payload)
-			a.st.close(map[string]any{"reason": "exited", "exit_code": code, "signal": nil})
+			a.finish(dc, map[string]any{"reason": "exited", "exit_code": code, "signal": nil}, nil)
 			return
 		case proto.FrameDetach:
-			a.st.close(map[string]any{"reason": "detached", "exit_code": nil, "signal": nil})
+			a.finish(dc, map[string]any{"reason": "detached", "exit_code": nil, "signal": nil}, nil)
 			return
 		}
 	}
+}
+
+// queue adds daemon output; past max it reopens the daemon stream for a
+// repaint. It returns false when the attachment is shut.
+func (a *attachment) queue(dc net.Conn, p []byte) bool {
+	a.mu.Lock()
+	if a.shut || dc != a.dc {
+		a.mu.Unlock()
+		return !a.shut
+	}
+	if a.first {
+		a.first = false
+		a.pending = append(a.pending, can)
+		a.pending = append(a.pending, p...)
+		a.pending = append(a.pending, win32Off...)
+		a.cond.Broadcast()
+		a.mu.Unlock()
+		return true
+	}
+	if len(a.pending)+len(p) <= a.max {
+		a.pending = append(a.pending, p...)
+		a.cond.Broadcast()
+		a.mu.Unlock()
+		return true
+	}
+	// Too far behind: drop the backlog, reattach, let the redraw repaint.
+	a.pending = a.pending[:0]
+	a.repaints++
+	a.mu.Unlock()
+	_ = dc.Close()
+	ndc, err := a.dial()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err != nil {
+		a.end, a.ended = map[string]any{"reason": "detached", "exit_code": nil, "signal": nil}, true
+		a.cond.Broadcast()
+		return false
+	}
+	if a.shut {
+		_ = ndc.Close()
+		return false
+	}
+	a.dc = ndc
+	return true
+}
+
+// finish records the end of the daemon stream dc (ignored for a stream
+// already replaced by a repaint).
+func (a *attachment) finish(dc net.Conn, reason any, err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if dc != a.dc && !a.shut {
+		return // replaced: the new stream's reader goes on
+	}
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
+		reason = map[string]any{"reason": "server_stop", "exit_code": nil, "signal": nil}
+	}
+	a.end, a.ended = reason, true
+	a.cond.Broadcast()
+}
+
+// sender moves pending bytes to the viewer within its credit, then closes
+// the channel with the end reason.
+func (a *attachment) sender() {
+	for {
+		a.mu.Lock()
+		for len(a.pending) == 0 && !a.ended && !a.shut {
+			a.cond.Wait()
+		}
+		if a.shut {
+			a.mu.Unlock()
+			return
+		}
+		if len(a.pending) == 0 && a.ended {
+			reason := a.end
+			a.mu.Unlock()
+			a.st.close(reason)
+			return
+		}
+		data := a.pending
+		a.pending = nil
+		a.mu.Unlock()
+		if !a.st.send(data) {
+			return
+		}
+	}
+}
+
+func (a *attachment) shutdown() {
+	a.mu.Lock()
+	if a.shut {
+		a.mu.Unlock()
+		return
+	}
+	a.shut = true
+	dc := a.dc
+	a.cond.Broadcast()
+	a.mu.Unlock()
+	if dc != nil {
+		_ = dc.Close()
+	}
+}
+
+func (a *attachment) conn() net.Conn {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.dc
 }
 
 // input handles one client frame on the channel (CREDIT is handled by the
@@ -122,9 +265,10 @@ func (a *attachment) input(f Frame) {
 		if a.observe {
 			return
 		}
+		dc := a.conn()
 		for p := f.Payload; len(p) > 0; {
 			n := min(len(p), proto.MaxFrameSize)
-			if err := proto.WriteFrame(a.dc, proto.FrameData, p[:n]); err != nil {
+			if err := proto.WriteFrame(dc, proto.FrameData, p[:n]); err != nil {
 				return
 			}
 			p = p[n:]
@@ -134,14 +278,18 @@ func (a *attachment) input(f Frame) {
 			return
 		}
 		if cols, rows, ok := parseResize(f.Payload); ok {
-			_ = proto.WriteFrame(a.dc, proto.FrameResize, proto.ResizePayload(cols, rows))
+			a.mu.Lock()
+			a.cols, a.rows = cols, rows
+			dc := a.dc
+			a.mu.Unlock()
+			_ = proto.WriteFrame(dc, proto.FrameResize, proto.ResizePayload(cols, rows))
 		}
 	case KindClose:
-		// Answer with an empty CLOSE before the pump can see the daemon
-		// connection end and report a reason.
+		// Answer with an empty CLOSE before the daemon stream can end and
+		// report a reason.
 		a.st.close(nil)
-		_ = proto.WriteFrame(a.dc, proto.FrameDetach, nil)
-		_ = a.dc.Close()
+		_ = proto.WriteFrame(a.conn(), proto.FrameDetach, nil)
+		a.shutdown()
 	case KindFocus, KindFacts:
 		// Not forwarded yet (Phase 2: focus reports for mode 1004, display facts).
 	}

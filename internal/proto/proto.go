@@ -40,6 +40,9 @@ const (
 	OpView      = "view"
 	OpViewAck   = "view_ack"
 	OpSubscribe = "subscribe"
+	OpLabel     = "label"
+	OpDocGet    = "doc_get"
+	OpDocSet    = "doc_set"
 )
 
 // MaxLineSize bounds one JSON request or response line.
@@ -400,6 +403,8 @@ type RunArgs struct {
 	Profile string            `json:"profile,omitempty"`
 	Cols    uint16            `json:"cols,omitempty"`
 	Rows    uint16            `json:"rows,omitempty"`
+	// Labels are free key=value tags kept with the session (see op label).
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // SessionInfo describes a session (result of run, element of ls).
@@ -433,6 +438,47 @@ type SessionInfo struct {
 	Attention bool   `json:"attention,omitempty"`
 	Revision  uint64 `json:"revision,omitempty"`
 	Preview   string `json:"preview,omitempty"`
+	// Turn counts how many times the status left "working" (a finished
+	// turn of the agent). Labels are the session's key=value tags.
+	Turn   uint64            `json:"turn,omitempty"`
+	Labels map[string]string `json:"labels,omitempty"`
+}
+
+// LabelArgs merges labels into a session's labels (op label); an empty
+// value removes the key.
+type LabelArgs struct {
+	Name   string            `json:"name"`
+	Labels map[string]string `json:"labels"`
+}
+
+// LabelResult answers op label with all labels now.
+type LabelResult struct {
+	Labels map[string]string `json:"labels"`
+}
+
+// DocGetArgs reads one stored document (op doc_get).
+type DocGetArgs struct {
+	Name string `json:"name"`
+}
+
+// DocGetResult is a document: Value is null when never written or deleted;
+// Version 0 means never written.
+type DocGetResult struct {
+	Value   json.RawMessage `json:"value"`
+	Version uint64          `json:"version"`
+}
+
+// DocSetArgs writes a document if Version is its current version (op
+// doc_set); a null Value deletes the value but keeps the version.
+type DocSetArgs struct {
+	Name    string          `json:"name"`
+	Value   json.RawMessage `json:"value"`
+	Version uint64          `json:"version"`
+}
+
+// DocSetResult answers doc_set with the new version.
+type DocSetResult struct {
+	Version uint64 `json:"version"`
 }
 
 // LsResult answers ls.
@@ -724,6 +770,8 @@ const (
 	EvMailQueued       = "mail.queued"
 	EvMailDelivered    = "mail.delivered"
 	EvMailRead         = "mail.read"
+	EvSessionLabels    = "session.labels"
+	EvDocChanged       = "doc.changed"
 	EvResync           = "resync"
 	EvHeartbeat        = "heartbeat"
 	EvBye              = "bye"
@@ -794,6 +842,7 @@ type StatusChangedData struct {
 	Reason    string `json:"reason,omitempty"`
 	Attention bool   `json:"attention"`
 	Revision  uint64 `json:"revision"`
+	Turn      uint64 `json:"turn,omitempty"`
 }
 
 // ViewChangedData is the data of view.changed (no content: call view).
@@ -810,6 +859,17 @@ type InputChangedData struct {
 type AttentionChangedData struct {
 	Attention bool   `json:"attention"`
 	Reason    string `json:"reason,omitempty"`
+}
+
+// LabelsData is the data of session.labels: every label now.
+type LabelsData struct {
+	Labels map[string]string `json:"labels"`
+}
+
+// DocChangedData is the data of doc.changed (no value: call doc_get).
+type DocChangedData struct {
+	Name    string `json:"name"`
+	Version uint64 `json:"version"`
 }
 
 // MailEventData is the data of mail.* events; never carries the body.
