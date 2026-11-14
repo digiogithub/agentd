@@ -21,6 +21,11 @@ import (
 const timeout = 10 * time.Second
 
 func TestMain(m *testing.M) {
+	// Helper mode (hclisten_test.go): this binary started as a session
+	// program or a subprocess dials an hc socket.
+	if sock := os.Getenv(hcHelperSock); sock != "" {
+		os.Exit(hcDialHelper(sock, os.Getenv(hcHelperOut)))
+	}
 	// Session-scoped variables must not leak in when run inside an agentd
 	// session.
 	for _, k := range []string{"AGENTD_TOKEN", "AGENTD_ID", "AGENTD_SOCKET"} {
@@ -41,6 +46,12 @@ type env struct {
 // without the delivery loop (tests drive the mailbox directly).
 func startDaemon(t *testing.T) *env {
 	t.Helper()
+	return startDaemonWith(t, config.Default())
+}
+
+// startDaemonWith is startDaemon with a given config.
+func startDaemonWith(t *testing.T, cfg *config.Config) *env {
+	t.Helper()
 	// Short dir: unix socket paths are limited to ~108 bytes.
 	dir, err := os.MkdirTemp("", "agentd-d")
 	if err != nil {
@@ -60,7 +71,7 @@ func startDaemon(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := daemon.New(config.Default(), nil, store, nil)
+	srv := daemon.New(cfg, nil, store, nil)
 	if err := srv.Listen(); err != nil {
 		t.Fatal(err)
 	}

@@ -26,6 +26,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"os"
 	"os/user"
 	"strconv"
 	"strings"
@@ -213,7 +214,13 @@ func (s *Server) resolveCaller(p peerInfo, auth *proto.Auth) (caller, error) {
 }
 
 func (s *Server) resolveOnce(p peerInfo, a proto.Auth) (caller, error) {
-	byProc, procOK := s.sessionByAncestry(p.pid)
+	var byProc string
+	var procOK bool
+	// The daemon's own pid is never a session; it calls itself only from
+	// its hc listener (hclisten.go), whose peers are checked before.
+	if p.pid != os.Getpid() {
+		byProc, procOK = s.sessionByAncestry(p.pid)
+	}
 	if a.Token != "" {
 		name, running, ok := s.sessionByToken(a.Token, a.ID)
 		switch {

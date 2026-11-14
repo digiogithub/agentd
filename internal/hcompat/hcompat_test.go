@@ -105,6 +105,13 @@ func newHCClient(t *testing.T, sock string, opts ...func(*hcompat.Server)) *hcCl
 	return &hcClient{t: t, w: inW, r: bufio.NewReader(outR), nextID: 1}
 }
 
+// newHCClientConn drives an hc server reached over conn (the hc socket).
+func newHCClientConn(t *testing.T, conn io.ReadWriteCloser) *hcClient {
+	t.Helper()
+	t.Cleanup(func() { _ = conn.Close() })
+	return &hcClient{t: t, w: conn, r: bufio.NewReader(conn), nextID: 1}
+}
+
 // helloFramed does Desktop's handshake and starts the frame reader.
 func (c *hcClient) helloFramed() map[string]any {
 	c.t.Helper()

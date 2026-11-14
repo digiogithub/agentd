@@ -46,6 +46,7 @@ const (
 	OpTurns     = "turns"
 	OpClaim     = "claim"
 	OpQueue     = "queue"
+	OpHCListen  = "hc_listener"
 )
 
 // MaxLineSize bounds one JSON request or response line.
@@ -465,6 +466,38 @@ type TurnRecord struct {
 	Message   string    `json:"message,omitempty"`
 	StartedAt time.Time `json:"started_at,omitzero"`
 	EndedAt   time.Time `json:"ended_at"`
+}
+
+// HC listener actions (op hc_listener).
+const (
+	HCListenStatus = "status"
+	HCListenStart  = "start"
+	HCListenStop   = "stop"
+)
+
+// HCListenArgs are the args of op hc_listener: Action status (default),
+// start (bind now if [herdr] listen allows it) or stop (only the listener;
+// sessions and the daemon keep running).
+type HCListenArgs struct {
+	Action string `json:"action,omitempty"`
+}
+
+// HCListenResult answers op hc_listener. Enabled = [herdr] listen (and
+// [herdr] enabled); Listening = the socket is bound; Reason says why not
+// (disabled, stopped, owned by a running core, bind error). WasListening
+// (stop) says whether the call stopped a running listener. PID and
+// StartedAt describe the daemon (the hc "core").
+type HCListenResult struct {
+	Enabled      bool      `json:"enabled"`
+	Listening    bool      `json:"listening"`
+	WasListening bool      `json:"was_listening,omitempty"`
+	Socket       string    `json:"socket,omitempty"`
+	Lock         string    `json:"lock,omitempty"`
+	Session      string    `json:"session,omitempty"`
+	Since        time.Time `json:"since,omitzero"`
+	Reason       string    `json:"reason,omitempty"`
+	PID          int       `json:"pid"`
+	StartedAt    time.Time `json:"started_at,omitzero"`
 }
 
 // TurnsResult answers op turns, oldest first (at most 100).

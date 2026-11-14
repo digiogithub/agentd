@@ -73,6 +73,8 @@ type Server struct {
 	epoch    string
 	bus      *bus
 	docs     *docStore // ops doc_get/doc_set (meta.go)
+	started  time.Time // daemon start (hc server.status uptime)
+	hc       hcListen  // [herdr] listen: the hc socket listener (hclisten.go)
 
 	lockFile *os.File    // exclusive flock on <socketdir>/agentd.lock, held for the daemon's lifetime
 	sockInfo os.FileInfo // the socket file as bound, to unlink only our own on shutdown
@@ -108,6 +110,7 @@ func New(cfg *config.Config, aliases *config.Aliases, store *mailbox.Store, log 
 		done:     make(chan struct{}),
 		epoch:    epoch,
 		bus:      newBus(epoch),
+		started:  time.Now(),
 	}
 	s.docs = &docStore{logf: func(msg string, args ...any) { s.Log.Warn(msg, args...) }}
 	return s
@@ -270,6 +273,7 @@ func (s *Server) Serve(ctx context.Context) error {
 		}()
 	}
 	s.startRetention()
+	s.startHC()
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -404,6 +408,8 @@ func (s *Server) Shutdown() {
 		stopRetention, retentionDone := s.stopRetention, s.retentionDone
 		s.mu.Unlock()
 
+		// The hc listener first: its connections are clients of this daemon.
+		s.stopHC("daemon shutdown")
 		if ln != nil {
 			_ = ln.Close()
 		}

@@ -89,9 +89,24 @@ func hello(c *conn, params json.RawMessage) (any, func(), *rpcError) {
 }
 
 func serverStatus(c *conn, _ json.RawMessage) (any, func(), *rpcError) {
-	all, err := c.s.sessions()
+	st, err := c.s.status()
 	if err != nil {
 		return nil, nil, fromDaemon(err)
+	}
+	return st, nil, nil
+}
+
+// Status is the server.status result (what `hc server status --json`
+// prints): core identity, version, pid, uptime and terminal counts.
+func (s *Server) Status() (map[string]any, error) {
+	s.init()
+	return s.status()
+}
+
+func (s *Server) status() (map[string]any, error) {
+	all, err := s.sessions()
+	if err != nil {
+		return nil, err
 	}
 	live, finished := 0, 0
 	for _, si := range all {
@@ -102,15 +117,15 @@ func serverStatus(c *conn, _ json.RawMessage) (any, func(), *rpcError) {
 		}
 	}
 	return map[string]any{
-		"core":         c.s.Core,
-		"version":      c.s.Version,
-		"pid":          os.Getpid(),
-		"uptime_ms":    time.Since(c.s.started).Milliseconds(),
+		"core":         s.Core,
+		"version":      s.Version,
+		"pid":          s.PID,
+		"uptime_ms":    time.Since(s.started).Milliseconds(),
 		"holders":      []any{},
 		"live":         live,
 		"finished":     finished,
 		"installed_by": "agentd", // non-null: clients do not try to self-update the core
-	}, nil, nil
+	}, nil
 }
 
 func terminalList(c *conn, params json.RawMessage) (any, func(), *rpcError) {

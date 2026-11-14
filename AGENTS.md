@@ -211,14 +211,14 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
 | `internal/inject` | Safe input path: guard, bracketed paste, paste verification, submit delay, per-session input lock | session, config |
 | `internal/delivery` | Decide when a session is idle and inject queued messages (via `inject`) | session, mailbox, config, inject |
 | `internal/proto` | Wire protocol: JSON request/response + binary framed attach stream | stdlib |
-| `internal/daemon` | Socket server, registry, op handlers, lifecycle, autostart helpers; per-session view state + watcher (`view.go`, `view_rules.go`: profile → `screen.Rules`) behind ops `view`/`view_ack` and the `ls` summary; event bus + op `subscribe` (`events.go`) | all above |
+| `internal/daemon` | Socket server, registry, op handlers, lifecycle, autostart helpers; per-session view state + watcher (`view.go`, `view_rules.go`: profile → `screen.Rules`) behind ops `view`/`view_ack` and the `ls` summary; event bus + op `subscribe` (`events.go`); the opt-in hc socket listener + op `hc_listener` (`hclisten.go`, peer admission) | all above (incl. hcompat and, through it, client: the listener's translator dials this daemon) |
 | `internal/client` | Go client for the socket API (used by CLI and MCP); `Subscribe` returns a `Subscription` (event channel + `Close`) | proto |
 | `internal/attach` | Client-side terminal: raw mode, SIGWINCH, detach key, redraw | client, x/term |
 | `internal/mcpserver` | MCP stdio server exposing mailbox + peers tools | client (+ proto types), go-sdk |
 | `internal/apitoken` | Device-token store for the gateway: `agd_<id>_<secret>` tokens, `api/devices.json` (0600, flock, SHA-256 hashes), verify/expiry/last-seen/revoke, `httpapi.Authenticator` + revoke guard; pairing: `api/pairing.json` (0600, flock, salted code hashes) + the unauthenticated `POST /v1/pair` route (`PairRoute`) | stdlib, httpapi (types only; httpapi never imports it) |
 | `internal/tlsutil` | Gateway TLS: persisted self-signed cert, files mode with reload, SPKI pin, pin-verifying client callback | stdlib only |
 | `internal/httpapi` | HTTP/JSON + SSE gateway (`agentd serve`): routing table, middleware (request id, recover, body cap, auth hook, JSON error envelope), daemon connection pool. Config is passed in by `cmd/agentd` | client, proto (stdlib otherwise; never daemon/session/config) |
-| `internal/hcompat` | herdr-core (`hc`) client protocol, generation 1, translated onto daemon ops (Herdr Desktop / Whip compatibility, proof of concept): JSON-RPC 2.0 lines then 9-byte LE frames, per-stream credit, first paint, events, in-memory labels/keep/turn/docs | client, proto (stdlib otherwise; never daemon/session/config) |
+| `internal/hcompat` | herdr-core (`hc`) client protocol, generation 1, translated onto daemon ops (Herdr Desktop / Whip compatibility, proof of concept): JSON-RPC 2.0 lines then 9-byte LE frames, per-stream credit, first paint, events, in-memory labels/keep/turn/docs; `Listener` (unix socket with herdr-core's `core.lock` ownership, admission hook, cleanup) and `LoadCoreID` | client, proto (stdlib otherwise; never daemon/session/config) |
 | `cmd/agentd` | Cobra CLI wiring; invoked as `herdr-core`/`hc` (argv[0]) it is the hc CLI subset (`hc.go`) | client, attach, daemon, mcpserver, httpapi, hcompat, config, tlsutil |
 
 ### Key behaviours (normative)
@@ -273,6 +273,30 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   records (`status.reported`), others with the heuristic mapping. Config `[herdr]` (`internal/config/herdr.go`):
   `enabled` (default true; false = `hc connect` refuses), `read_only` (write methods `forbidden`, attaches are
   observers), `allow_run` (argv[0] base names/globs `terminal.run` may start; empty = any).
+  **hc socket listener** (Phase 4, `internal/hcompat/listen.go` + `internal/daemon/hclisten.go`; for Whip's SSH
+  `direct-streamlocal` and herdr-mobile-relay's hc backend): `[herdr] listen` (default false), `socket` (override,
+  absolute or `~/`), `session` (default `default`, herdr-core's folder-name rule). It runs inside the daemon
+  (started in `Serve`, stopped first in `Shutdown`) at herdr-core's place (`HerdrConfig.Paths`, as herdr-core
+  paths.rs): socket `$XDG_RUNTIME_DIR/herdr-core/<session>.sock` (else `/run/user/<uid>/...` if that dir exists,
+  else `<state>/<session>.sock`), lock `${XDG_STATE_HOME:-~/.local/state}/herdr-core/<session>/core.lock`.
+  Ownership = herdr-core's own rule: the listener takes a non-blocking `flock` on `core.lock` first (held = a running
+  core: not started, `hcompat.ErrOwned`) and writes the socket path into it (what Whip's discovery reads); an
+  existing socket path is replaced only if it is a socket nobody answers on (a live socket or a non-socket file is
+  never touched). Dirs it creates are 0700 (an existing socket dir must be ours), socket 0600. Close/stop: socket
+  removed only if still our inode, `core.lock` emptied and removed while held (only if still our inode), created
+  dirs removed when empty. No `core.json` is written. **Identity**: the translator dials the daemon from the
+  daemon's own pid (always `human:<user>`, see "Identity"), so every peer is admitted only if its `SO_PEERCRED`
+  uid is ours, its pid is known, no running session is among its ancestors and (Linux, best effort) its
+  `/proc/<pid>/environ` has no `AGENTD_TOKEN`; anything else gets one JSON-RPC `forbidden` error and is closed
+  (refused, never served read-only; `[security] agent_type/agent_view` do not change this). Op `hc_listener
+  {action: status|start|stop}` (humans only; → `{enabled, listening, was_listening?, socket, lock, session, since?,
+  reason?, pid, started_at}`). Shim `hc server start|status|stop|restart [--json]` (the "core" is the daemon):
+  `start` autostarts the daemon, asks `hc_listener start` and prints herdr-core's `server.status` object
+  (`hcompat.Server.Status`: core, version, pid, uptime_ms, holders, live, finished, installed_by) plus
+  `agentd.listener`, exit 0 even when the listener stays off (Whip then falls back to `hc connect --session S`);
+  `status` never autostarts (no daemon = exit 2); `stop` stops only the listener (`{"stopped": bool}`, never the
+  daemon or sessions; no daemon = `{"stopped":false}`). The core id is shared with `hc connect`
+  (`hcompat.LoadCoreID`, `config.HCCoreIDPath`).
 - **HTTP gateway** (frozen 2026-11-14: kept for possible future use, no new features; the Flutter app was removed) (`agentd serve [--listen addr] [--config path] [--no-autostart] [--log-level l]`, design:
   `docs/design/api/http-api.md`): a separate foreground process (logs to stderr, exit non-zero on config
   error) that talks to the daemon over the unix socket and stops on SIGINT/SIGTERM without touching the
@@ -556,7 +580,7 @@ optimistic: a `version` other than the current one is `conflict`; `null` deletes
 names `[A-Za-z0-9._-]{1,64}`, value <=1 MiB of JSON (`daemon.MaxDocBytes`); humans only, sessions may read; stored
 compacted in `docs.json`, atomic rename; a broken file is renamed `.bad` and the store starts empty; publishes
 `doc.changed {name, version}` with no session, so session subscribers never see it),
-`turns {name}` (→ `{turns[]}`, see "Turn records"), `peers`, `whoami`, `attach {name, cols, rows, observe?, passive?, history?}`, `shutdown`. Every request may carry
+`turns {name}` (→ `{turns[]}`, see "Turn records"), `hc_listener {action}` (humans only, see "Herdr compatibility"), `peers`, `whoami`, `attach {name, cols, rows, observe?, passive?, history?}`, `shutdown`. Every request may carry
 `"auth": {"id", "token"}` (filled by `internal/client` from `AGENTD_ID` / `AGENTD_TOKEN`).
 
 MCP tools (`agentd mcp`, identity resolved by the daemon, see "Identity"): `agentd_peers`,
@@ -712,7 +736,8 @@ For every identity-dependent op (`send`, `inbox`, `read`, `reply`, `claim`, `que
    `LOCAL_PEERPID` (macOS, best effort) and its ancestors (`/proc/<pid>/stat` ppid on Linux,
    `sysctl kern.proc.pid` on macOS; at most 64 levels, stop at pid 1). If one is the child pid of a
    *running* session, the caller is that session. Works for harnesses that strip env vars from MCP
-   servers (Codex).
+   servers (Codex). The daemon's own pid is never matched (it calls itself only from its hc socket
+   listener, whose peers are admitted beforehand, see "Herdr compatibility").
 2. **Token**: otherwise, a request `auth.token` equal to a running session's `AGENTD_TOKEN`
    (32 random bytes, hex; generated at `run`, kept only in daemon memory and the child env)
    identifies that session. A valid token for a session other than the one found by ancestry, an
@@ -742,6 +767,7 @@ Permissions on the resolved identity:
 - `type`: humans may type into any session; a session only into itself unless config
   `[security] agent_type = true`.
 - `act`: same as `type` (humans any session; a session only itself unless `[security] agent_type = true`).
+- `hc_listener`: humans only. The hc socket itself refuses session peers (ancestry or `AGENTD_TOKEN`).
 
 Limits: this protects against confused or prompt-injected agents claiming another identity, not
 against hostile code running as the same uid (which can read `/proc/<pid>/environ` or ptrace). Any

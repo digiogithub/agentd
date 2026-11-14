@@ -268,7 +268,7 @@ keep, parent, notify, rm, reason, exit_code, signal, finished_ms, foreground, te
 ```
 Herdr Desktop ─spawn─► herdr-core connect ─┐   (agentd binary via argv[0] / `agentd hc connect`)
 Whip ─ssh exec─► hc connect --session s ───┤
-Whip / 0cv relay ─streamlocal─► hc socket ─┘   (optional: `agentd hc serve` listener, Phase 4)
+Whip / 0cv relay ─streamlocal─► hc socket ─┘   (opt-in `[herdr] listen` in the daemon, Phase 4)
                                            │  hc gen 1 (plain → framed)
                                    internal/hcompat   (per connection, stateless)
                                      wire.go   frames, credit windows, 4 MiB repaint rule

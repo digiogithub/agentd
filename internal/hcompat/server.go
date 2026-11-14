@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"slices"
 	"sync"
 	"time"
@@ -28,6 +29,11 @@ type Server struct {
 	Core CoreInfo
 	// Version is the hc version reported (default CompatVersion).
 	Version string
+	// PID is what server.status reports as the core pid (0 = this process).
+	PID int
+	// Started is when the core started, for server.status uptime_ms (zero =
+	// when this Server first served).
+	Started time.Time
 	// EnvBase is the environment terminal.run passes as the child's base.
 	EnvBase []string
 	// MaxPending is how far (bytes) an attach may fall behind before it gets
@@ -56,6 +62,12 @@ type Server struct {
 func (s *Server) init() {
 	s.once.Do(func() {
 		s.started = time.Now()
+		if !s.Started.IsZero() {
+			s.started = s.Started
+		}
+		if s.PID <= 0 {
+			s.PID = os.Getpid()
+		}
 		if s.MaxPending <= 0 {
 			s.MaxPending = MaxPending
 		}

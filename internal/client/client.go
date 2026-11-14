@@ -452,6 +452,13 @@ func (c *Client) DocSet(name string, value []byte, version uint64) (uint64, erro
 	return r.Version, err
 }
 
+// HCListener runs op hc_listener (action status, start or stop).
+func (c *Client) HCListener(action string) (proto.HCListenResult, error) {
+	var r proto.HCListenResult
+	err := c.Call(proto.OpHCListen, proto.HCListenArgs{Action: action}, &r)
+	return r, err
+}
+
 // Turns returns a session's finished turns, oldest first.
 func (c *Client) Turns(name string) ([]proto.TurnRecord, error) {
 	var r proto.TurnsResult

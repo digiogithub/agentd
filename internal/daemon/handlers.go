@@ -300,6 +300,16 @@ func (s *Server) dispatch(ctx context.Context, req proto.Request, peer peerInfo)
 			return nil, err
 		}
 		return s.turnsOp(who, a)
+	case proto.OpHCListen:
+		var a proto.HCListenArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.hcListenerOp(who, a)
 	case proto.OpPeers:
 		return s.peers(), nil
 	case proto.OpWhoami:

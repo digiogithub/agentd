@@ -50,6 +50,13 @@ over the heuristics (view status, `status.reported`, hc exact words); turn recor
 allow_run); act audit `client`. Not done: the "only my turns" notification filter (lives in the frozen gateway's
 `[api.notify]`; origin is now available when the gateway is unfrozen).
 
-## Phase 4
-Official Herdr mobile app: capture its calls through the shim (log stdin/stdout) and close the gaps; Whip
-(`connect --session`, hc socket listener for `direct-streamlocal`, discovery script paths); 0cv relay hc backend.
+## Phase 4 (socket clients done 2026-11-15: [[herdr-compat-phase4]])
+Official Herdr mobile app: capture its calls through the shim (log stdin/stdout) and close the gaps (the user
+verified it works through `herdr-core connect`; capture still open); Whip (`connect --session`, hc socket listener
+for `direct-streamlocal`, discovery script paths); 0cv relay hc backend.
+
+Done: opt-in `[herdr] listen` socket listener inside the daemon at herdr-core's place (`core.lock` flock ownership,
+socket path written in it for Whip's discovery, peers admitted only when not in a session), op `hc_listener`, shim
+`hc server start|status|stop|restart [--json]`. Before this Whip failed at `hc server start --json` (exit 2); now it
+works through the socket with `listen = true`, else through its `hc connect --session` fallback. The relay needs
+`listen = true` (socket only). Open: the official app capture; field checks of Whip and the relay on a device.

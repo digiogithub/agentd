@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +20,7 @@ import (
 	"github.com/digiogithub/agentd/internal/client"
 	"github.com/digiogithub/agentd/internal/config"
 	"github.com/digiogithub/agentd/internal/hcompat"
+	"github.com/digiogithub/agentd/internal/proto"
 )
 
 // hcNames are the program names Herdr clients look for. Invoked under one of
@@ -42,7 +41,7 @@ func invokedAsHC() bool {
 // hcCmd is `agentd hc ...`: the same herdr-core CLI subset, plus install-shim.
 func hcCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "hc [connect|--version|machine ls --json|install-shim]",
+		Use:   "hc [connect|--version|server start|status|stop|machine ls --json|install-shim]",
 		Short: "Herdr client compatibility (herdr-core protocol over stdio)",
 		Long: "Speaks the herdr-core (hc) client protocol on top of agentd so Herdr clients can list and\n" +
 			"attach to agentd sessions. `agentd hc install-shim` creates herdr-core/hc symlinks to point\n" +
@@ -83,7 +82,7 @@ func hcMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 	}
 	if len(args) == 0 {
-		return fail("agentd's herdr-core shim needs a command", "supported: connect, --version, machine ls --json")
+		return fail("agentd's herdr-core shim needs a command", "supported: connect, --version, server start|status|stop, machine ls --json")
 	}
 	switch args[0] {
 	case "--version", "-V", "version":
@@ -96,6 +95,8 @@ func hcMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return fail(err.Error(), "check `agentd ls`; the agentd daemon must be reachable")
 		}
 		return 0
+	case "server":
+		return hcServer(args[1:], stdout, fail)
 	case "machine":
 		if len(args) >= 2 && (args[1] == "ls" || args[1] == "list") {
 			fmt.Fprintln(stdout, `{"machines":[]}`)
@@ -151,29 +152,117 @@ func hcConnect(stdin io.Reader, stdout io.Writer) error {
 }
 
 // hcCoreID is the permanent random core id (hello.core.id), kept in the
-// state dir; it changes only when the state is wiped.
+// state dir and shared with the daemon's hc listener.
 func hcCoreID() (string, error) {
-	dir, err := config.StateDir()
+	p, err := config.HCCoreIDPath()
 	if err != nil {
 		return "", err
 	}
-	p := filepath.Join(dir, "hc", "core-id")
-	if b, err := os.ReadFile(p); err == nil && len(strings.TrimSpace(string(b))) > 0 {
-		return strings.TrimSpace(string(b)), nil
+	return hcompat.LoadCoreID(p)
+}
+
+// hcServer is `hc server start|status|stop|restart [--json]`. The "core" is
+// the agentd daemon; start/stop act only on its hc socket listener
+// ([herdr] listen), never on the daemon or its sessions. start exits 0 even
+// when the listener stays off (disabled, or a real herdr-core owns the
+// socket): Whip then re-discovers, fails to open the socket and falls back to
+// `hc connect --session S`, which always works.
+func hcServer(args []string, stdout io.Writer, fail func(msg, hint string) int) int {
+	jsonOut := false
+	action := ""
+	for _, a := range args {
+		switch {
+		case a == "--json":
+			jsonOut = true
+		case action == "" && !strings.HasPrefix(a, "-"):
+			action = a
+		case a == "--fresh" && action == "restart":
+		default:
+			return fail("unsupported argument to hc server: "+a, "usage: hc server start|status|stop|restart [--json]")
+		}
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
-		return "", err
+	sock := config.SocketPath()
+	out := func(v any, human string) int {
+		if jsonOut {
+			b, _ := json.Marshal(v)
+			fmt.Fprintln(stdout, string(b))
+		} else {
+			fmt.Fprintln(stdout, human)
+		}
+		return 0
 	}
-	var raw [16]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return "", err
+	switch action {
+	case "stop":
+		c, err := client.Dial(sock)
+		if err != nil {
+			return out(map[string]any{"stopped": false}, "no core running")
+		}
+		defer c.Close()
+		r, err := c.HCListener(proto.HCListenStop)
+		if err != nil {
+			return fail(err.Error(), "only the user (not an agentd session) may stop the hc listener")
+		}
+		return out(map[string]any{"stopped": r.WasListening},
+			"hc listener stopped (the agentd daemon and its sessions keep running)")
+	case "start", "status", "restart":
+	default:
+		return fail("unsupported herdr-core command: server "+action, "supported: server start|status|stop|restart [--json]")
 	}
-	id := hex.EncodeToString(raw[:])
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, []byte(id+"\n"), 0o600); err != nil {
-		return "", err
+	var c *client.Client
+	var err error
+	if action == "status" {
+		c, err = client.Dial(sock)
+	} else {
+		c, err = client.DialAuto(sock, client.AutoOptions{})
 	}
-	return id, os.Rename(tmp, p)
+	if err != nil {
+		return fail("no core running: "+err.Error(), "start it with `hc server start` (starts the agentd daemon)")
+	}
+	defer c.Close()
+	cfg, err := config.LoadDefault()
+	if err != nil {
+		return fail(err.Error(), "fix the agentd config")
+	}
+	if !cfg.Herdr.On() {
+		return fail(fmt.Sprintf("the herdr-core protocol is disabled ([herdr] enabled = false in %s)", cfg.Path), "enable it in the agentd config")
+	}
+	var r proto.HCListenResult
+	switch action {
+	case "restart":
+		if _, err = c.HCListener(proto.HCListenStop); err == nil {
+			r, err = c.HCListener(proto.HCListenStart)
+		}
+	case "start":
+		r, err = c.HCListener(proto.HCListenStart)
+	default:
+		r, err = c.HCListener(proto.HCListenStatus)
+	}
+	if err != nil {
+		return fail(err.Error(), "only the user (not an agentd session) may manage the hc listener")
+	}
+	id, err := hcCoreID()
+	if err != nil {
+		return fail(err.Error(), "check the agentd state directory")
+	}
+	host, _ := os.Hostname()
+	srv := &hcompat.Server{
+		Dial:    func() (*client.Client, error) { return client.Dial(sock) },
+		Core:    hcompat.CoreInfo{ID: id, Name: host},
+		PID:     r.PID,
+		Started: r.StartedAt,
+	}
+	st, err := srv.Status()
+	if err != nil {
+		return fail(err.Error(), "check `agentd ls`")
+	}
+	st["agentd"] = map[string]any{"listener": r}
+	human := fmt.Sprintf("core %s (%s) running, pid %d (agentd daemon)", host, id[:min(8, len(id))], r.PID)
+	if r.Listening {
+		human += "; hc socket " + r.Socket
+	} else {
+		human += "; hc socket off: " + r.Reason + " (clients use `hc connect`)"
+	}
+	return out(st, human)
 }
 
 // installShim creates herdr-core and hc symlinks to this executable in a
