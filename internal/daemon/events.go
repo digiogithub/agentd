@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/digiogithub/agentd/internal/mailbox"
 	"github.com/digiogithub/agentd/internal/proto"
 )
 
@@ -42,6 +43,7 @@ const (
 type busEvent struct {
 	ev       proto.Event
 	from, to string // mail events only
+	queue    string // work-queue posts only (mail.queued to "queue:<name>")
 }
 
 type bus struct {
@@ -78,6 +80,9 @@ type eventFilter struct {
 	// agent_view). Mail is never lifted.
 	self          string
 	allowSessions bool
+	// canClaim, for a session subscriber, reports whether it may claim from
+	// a queue: it then also sees that queue's posts (mail.queued, no body).
+	canClaim func(queue string) bool
 }
 
 func newBus(epoch string) *bus {
@@ -107,6 +112,9 @@ func (f eventFilter) match(be busEvent) bool {
 	}
 	if f.self != "" {
 		if strings.HasPrefix(ev.Kind, "mail.") {
+			if be.queue != "" && f.canClaim != nil && f.canClaim(be.queue) {
+				return true
+			}
 			return be.from == f.self || be.to == f.self
 		}
 		return f.allowSessions || ev.Session == f.self
@@ -117,6 +125,12 @@ func (f eventFilter) match(be busEvent) bool {
 // publish appends an event and fans it out. It never blocks: a subscriber
 // with a full queue is flushed and receives one resync.
 func (b *bus) publish(kind, session, from, to string, data any) {
+	b.publishQueue(kind, session, from, to, "", data)
+}
+
+// publishQueue is publish for a work-queue post: queue widens the identity
+// filter to the sessions allowed to claim from it.
+func (b *bus) publishQueue(kind, session, from, to, queue string, data any) {
 	raw := rawOf(data)
 	now := time.Now().UTC()
 	b.mu.Lock()
@@ -126,7 +140,7 @@ func (b *bus) publish(kind, session, from, to string, data any) {
 	}
 	b.seq++
 	ev := proto.Event{Seq: b.seq, Epoch: b.epoch, Time: now, Kind: kind, Session: session, Data: raw}
-	be := busEvent{ev: ev, from: from, to: to}
+	be := busEvent{ev: ev, from: from, to: to, queue: queue}
 	b.ring[b.seq%ReplayRing] = be
 	for s := range b.subs {
 		if kind == proto.EvSessionRemoved && s.f.self != "" && session == s.f.self && !s.endDone {
@@ -243,6 +257,23 @@ func (s *Server) publishMail(kind string, id int64, from, to string) {
 	s.bus.publish(kind, sess, from, to, proto.MailEventData{ID: id, From: from, To: to})
 }
 
+// publishQueueMail emits a mail.* event about a work-queue item m. A post
+// (unclaimed, by = "") has no session and is also shown to the sessions that
+// may claim from the queue; a claim (mail.claimed, by = claimer) is about the
+// claimer.
+func (s *Server) publishQueueMail(kind string, m mailbox.Message, by string) {
+	d := proto.MailEventData{ID: m.ID, From: m.Sender, To: m.Recipient, Queue: m.Queue, By: by}
+	if m.State == mailbox.StateUnclaimed {
+		s.bus.publishQueue(kind, "", m.Sender, m.Recipient, m.Queue, d)
+		return
+	}
+	sess := ""
+	if s.isSession(m.Recipient) {
+		sess = m.Recipient
+	}
+	s.bus.publish(kind, sess, m.Sender, m.Recipient, d)
+}
+
 func (s *Server) heartbeat() time.Duration {
 	if s.HeartbeatInterval > 0 {
 		return s.HeartbeatInterval
@@ -253,7 +284,7 @@ func (s *Server) heartbeat() time.Duration {
 var knownKinds = []string{
 	proto.EvSessionCreated, proto.EvSessionStarted, proto.EvSessionExited, proto.EvSessionRemoved,
 	proto.EvStatusChanged, proto.EvViewChanged, proto.EvInputChanged, proto.EvAttentionChanged,
-	proto.EvMailQueued, proto.EvMailDelivered, proto.EvMailRead,
+	proto.EvMailQueued, proto.EvMailDelivered, proto.EvMailRead, proto.EvMailClaimed,
 	proto.EvSessionLabels, proto.EvDocChanged, proto.EvStatusReported, proto.EvTurnCompleted,
 }
 
@@ -300,6 +331,8 @@ func (s *Server) handleSubscribe(conn net.Conn, codec *proto.Codec, req proto.Re
 	f := eventFilter{sessions: a.Sessions, kinds: a.Kinds}
 	if who.session {
 		f.self, f.allowSessions = who.id, s.Cfg.Security.AgentView
+		self := who.id
+		f.canClaim = func(q string) bool { return s.Cfg.ClaimAllowed(q, self) }
 	}
 	sub, _ := s.bus.subscribe(f, a.SinceSeq, a.Epoch)
 	if sub == nil {

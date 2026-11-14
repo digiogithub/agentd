@@ -107,6 +107,12 @@ agentd reply 42 "Done, 3 comments"                   # goes back to the sender (
 agentd peers [--json]           # sessions you can message
 agentd whoami                   # your identity as the daemon sees it
 agentd purge --older-than 2d    # delete old messages (see "Mailbox retention and purge")
+agentd inbox --json --since-digest d…  # "not modified" when nothing changed (cheap polling)
+
+# shared work queues: post tasks, idle agents pull them (first claim wins)
+agentd send queue:build "Fix the lint errors in pkg/api" [--subject S]
+agentd queue [build] [--bodies] [--json]  # unclaimed items (or every non-empty queue)
+agentd claim build [ID] [--inject] [--json] # inside a session: take the oldest (or ID); reply goes to the poster
 
 agentd aliases                  # project aliases and their source (file/env)
 agentd version                  # client and daemon versions
@@ -209,15 +215,20 @@ agentd hc install-shim --local-bin   # ~/.local/share/agentd/hc/herdr-core and ~
 
 ## MCP
 
-`agentd mcp` is a stdio MCP server with five tools:
+`agentd mcp` is a stdio MCP server with these tools:
 
 | Tool | Input | Output |
 |---|---|---|
 | `agentd_peers` | — | `self`, `peers[]` (name, state, idle, idle_ms, profile, dir, self) |
-| `agentd_send` | `to`, `body`, `subject?` | `id`, `to`, `state` |
-| `agentd_inbox` | `all?` | `messages[]` (id, from, to, subject, body, reply_to, state, created_at, note) |
+| `agentd_send` | `to` (session, `human:<user>` or `queue:<name>`), `body`, `subject?` | `id`, `to`, `state` |
+| `agentd_inbox` | `all?`, `since_digest?` | `messages[]` (id, from, to, subject, body, reply_to, state, queue, created_at, note), `digest`, `not_modified?` |
 | `agentd_read` | `id` | message (marked read) |
 | `agentd_reply` | `id`, `body` | `id`, `to`, `state` (the reply goes back to the sender) |
+| `agentd_claim` | `queue`, `id?` | the claimed message (now yours, state delivered) |
+| `agentd_queue` | `name?` | `items[]` (id, from, subject, created_at; no body) or `queues[]` (name, unclaimed) |
+
+Work queues: who may post is `[acl] "queue:<name>"`; who may claim is `[claim] "<name>" = ["session-glob"]`
+(default: any session; humans never claim, they send the task to a session directly).
 
 The identity is resolved by the daemon (the MCP server descends from the agent's session process), so
 no environment variable has to reach the MCP server; outside a session the mailbox tools return an

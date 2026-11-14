@@ -204,6 +204,26 @@ func (s *Server) dispatch(ctx context.Context, req proto.Request, peer peerInfo)
 			return nil, err
 		}
 		return s.reply(ctx, who, a)
+	case proto.OpClaim:
+		var a proto.ClaimArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.claim(ctx, who, a)
+	case proto.OpQueue:
+		var a proto.QueueArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.queueList(ctx, who, a)
 	case proto.OpPurge:
 		var a proto.PurgeArgs
 		if err := req.DecodeArgs(&a); err != nil {
@@ -609,6 +629,7 @@ func toWire(m mailbox.Message) proto.Message {
 		ID: m.ID, Sender: m.Sender, Recipient: m.Recipient, Subject: m.Subject, Body: m.Body,
 		ReplyTo: m.ReplyTo, State: string(m.State), Attempts: m.Attempts, CreatedAt: m.CreatedAt,
 		DeliveredAt: m.DeliveredAt, ReadAt: m.ReadAt, RepliedAt: m.RepliedAt,
+		Queue: m.Queue, ClaimedAt: m.ClaimedAt,
 	}
 }
 

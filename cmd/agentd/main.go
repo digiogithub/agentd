@@ -53,6 +53,7 @@ func newRootCmd() *cobra.Command {
 		daemonCmd(), runCmd(), lsCmd(), attachCmd(), dumpCmd(), viewCmd(), eventsCmd(), typeCmd(), actCmd(), killCmd(), rmCmd(),
 		sendCmd(), inboxCmd(), readCmd(), replyCmd(), peersCmd(), aliasesCmd(), shutdownCmd(),
 		versionCmd(), mcpCmd(), whoamiCmd(), purgeCmd(), serveCmd(), hcCmd(), turnsCmd(),
+		claimCmd(), queueCmd(),
 	)
 	return root
 }
@@ -617,10 +618,13 @@ func sendCmd() *cobra.Command {
 	var subject string
 	cmd := &cobra.Command{
 		Use:   "send TO MESSAGE...",
-		Short: `Send a message to a session or "human:<user>" ("-" reads the body from stdin)`,
+		Short: `Send a message to a session, "human:<user>" or "queue:<name>" ("-" reads the body from stdin)`,
 		Long: `Send a message to a session or "human:<user>". The sender is not chosen by
 the caller: the daemon identifies it (the session this process runs in, or
-human:<user> outside sessions). See 'agentd whoami'.`,
+human:<user> outside sessions). See 'agentd whoami'.
+
+TO = queue:<name> posts to a shared work queue: the message waits unclaimed
+until a session takes it with 'agentd claim <name>' (see 'agentd queue').`,
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			body := strings.Join(args[1:], " ")
@@ -640,6 +644,10 @@ human:<user> outside sessions). See 'agentd whoami'.`,
 			if err != nil {
 				return err
 			}
+			if m.Queue != "" {
+				fmt.Printf("posted message #%d to %s (unclaimed)\n", m.ID, m.Recipient)
+				return nil
+			}
 			fmt.Printf("queued message #%d to %s\n", m.ID, m.Recipient)
 			return nil
 		},
@@ -650,7 +658,7 @@ human:<user> outside sessions). See 'agentd whoami'.`,
 
 func inboxCmd() *cobra.Command {
 	var all, asJSON bool
-	var as string
+	var as, since string
 	cmd := &cobra.Command{
 		Use:   "inbox",
 		Short: "List your messages (your session's, or human:<user> outside sessions)",
@@ -661,12 +669,20 @@ func inboxCmd() *cobra.Command {
 				return err
 			}
 			defer c.Close()
-			msgs, err := c.Inbox(as, all)
+			res, err := c.InboxWith(proto.InboxArgs{As: as, All: all, SinceDigest: since})
 			if err != nil {
 				return err
 			}
+			msgs := res.Messages
 			if asJSON {
+				if since != "" {
+					return printJSON(os.Stdout, res) // the full answer: digest, not_modified
+				}
 				return printJSON(os.Stdout, msgs)
+			}
+			if res.NotModified {
+				fmt.Println("not modified")
+				return nil
 			}
 			if len(msgs) == 0 {
 				fmt.Println("no messages")
@@ -686,7 +702,8 @@ func inboxCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "include read messages")
 	cmd.Flags().StringVar(&as, "as", "", "humans only: peek at another mailbox (no state changes)")
-	cmd.Flags().BoolVar(&asJSON, "json", false, "JSON output")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "JSON output (with --since-digest: the whole answer, digest included)")
+	cmd.Flags().StringVar(&since, "since-digest", "", "print \"not modified\" (no state change) if the listing still has this digest")
 	return cmd
 }
 

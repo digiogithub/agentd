@@ -368,6 +368,52 @@ func TestAllowed(t *testing.T) {
 	}
 }
 
+func TestClaimAllowed(t *testing.T) {
+	c, err := Load(writeConfig(t, `
+[acl]
+"queue:build" = ["human:*"]
+[claim]
+"build" = ["*@ci", "lead"]
+"closed" = []
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		queue, session string
+		want           bool
+	}{
+		{"build", "codex@ci", true},
+		{"build", "lead", true},
+		{"build", "codex@web", false},
+		{"closed", "lead", false},
+		{"other", "anyone", true}, // no entry, no "*": any session
+	}
+	for _, tt := range tests {
+		if got := c.ClaimAllowed(tt.queue, tt.session); got != tt.want {
+			t.Errorf("ClaimAllowed(%q, %q) = %v, want %v", tt.queue, tt.session, got, tt.want)
+		}
+	}
+	// Posting goes through [acl] with the queue address.
+	if !c.Allowed("queue:build", "human:bob") || c.Allowed("queue:build", "codex@ci") {
+		t.Error("queue post ACL wrong")
+	}
+	c2, err := Load(writeConfig(t, "[claim]\n\"*\" = [\"claude@*\"]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c2.ClaimAllowed("x", "claude@a") || c2.ClaimAllowed("x", "codex@a") {
+		t.Error("claim wildcard wrong")
+	}
+	if _, err := Load(writeConfig(t, "[claim]\n\"x\" = [\"[\"]\n")); err == nil {
+		t.Error("bad claim glob accepted")
+	}
+	var nilCfg *Config
+	if !nilCfg.ClaimAllowed("a", "b") {
+		t.Error("nil config should allow")
+	}
+}
+
 func TestGhostProfileSettings(t *testing.T) {
 	c := Default()
 	cl := c.Profile("claude")

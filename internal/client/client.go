@@ -317,6 +317,29 @@ func (c *Client) Inbox(as string, all bool) ([]proto.Message, error) {
 	return r.Messages, err
 }
 
+// InboxWith is Inbox with every option (as, all, since_digest) and the full
+// answer (digest, not_modified).
+func (c *Client) InboxWith(a proto.InboxArgs) (proto.InboxResult, error) {
+	var r proto.InboxResult
+	err := c.Call(proto.OpInbox, a, &r)
+	return r, err
+}
+
+// Claim takes an unclaimed item of a work queue for the calling session.
+func (c *Client) Claim(a proto.ClaimArgs) (proto.Message, error) {
+	var r proto.Message
+	err := c.Call(proto.OpClaim, a, &r)
+	return r, err
+}
+
+// Queue lists a work queue's unclaimed items, or every non-empty queue when
+// a.Name is empty.
+func (c *Client) Queue(a proto.QueueArgs) (proto.QueueResult, error) {
+	var r proto.QueueResult
+	err := c.Call(proto.OpQueue, a, &r)
+	return r, err
+}
+
 // Read returns message id (addressed to the caller) and marks it read. A
 // non-empty as reads from another mailbox (humans only, without marking).
 func (c *Client) Read(as string, id int64) (proto.Message, error) {

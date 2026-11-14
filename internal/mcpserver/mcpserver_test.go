@@ -151,7 +151,7 @@ func TestTools(t *testing.T) {
 	a := connect(t, sock, runWithToken(t, c, "fake@a", cwd, "codex"))
 	b := connect(t, sock, runWithToken(t, c, "fake@b", cwd, "codex"))
 
-	// tools/list: exactly the five tools, with descriptions and schemas.
+	// tools/list: exactly these tools, with descriptions and schemas.
 	tl, err := a.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -164,7 +164,7 @@ func TestTools(t *testing.T) {
 		}
 	}
 	slices.Sort(names)
-	want := []string{"agentd_inbox", "agentd_peers", "agentd_read", "agentd_reply", "agentd_send"}
+	want := []string{"agentd_claim", "agentd_inbox", "agentd_peers", "agentd_queue", "agentd_read", "agentd_reply", "agentd_send"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("tools = %v, want %v", names, want)
 	}
@@ -286,6 +286,8 @@ func TestNoIdentity(t *testing.T) {
 		"agentd_inbox": {},
 		"agentd_read":  {"id": 1},
 		"agentd_reply": {"id": 1, "body": "hi"},
+		"agentd_claim": {"queue": "q"},
+		"agentd_queue": {},
 	} {
 		res := call(t, anon, name, args, nil)
 		if !res.IsError || !strings.Contains(errText(res), "not inside an agentd session") {

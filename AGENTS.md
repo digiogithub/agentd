@@ -207,7 +207,7 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
 | `internal/config` | Paths (XDG), `config.toml` loading, harness profiles | toml, termcolor |
 | `internal/screen` | `Snapshot` type: immutable copy of cells (index == column; wide-char continuation cells kept as `Width:0`)/cursor/scrollback tail/modes/activity/notification counters for interpretation; title/cwd/notify text sanitized (no C0/C1 controls, capped); `Reflow` (logical lines), `Split` (transcript/input/footer/status/dialog regions) and the shared ghost-cell classification (`GhostColumns`, `GhostRules`, `Rules`) | stdlib, termcolor |
 | `internal/session` | One PTY child + VT emulator + fan-out + input + idle/human-activity tracking + ghost-text filter + atomic `Snapshot()`, `OutputGen()`/`Changed()`, `NewReplayer(cols, rows)` (standalone emulator fed raw PTY bytes, same filter and cell conversion as live sessions, for fixtures), BEL/OSC 7/9/777 recording (OSC 9 bodies starting with a numeric sub-command, e.g. `9;4`, `9;9;cwd`, `9;12`, are not notifications; `Changed()` never fires after exit, select on `Done()`), frame-aligned PTY chunking for DEC 2026 synchronized updates (`syncgate.go`) | pty, vt, termcolor, screen |
-| `internal/mailbox` | Message store: send, inbox, get, state transitions, replies, purge/vacuum | sqlite |
+| `internal/mailbox` | Message store: send, inbox, get, state transitions, replies, purge/vacuum, work queues (`Claim`, `QueueItems`, `Queues`), listing digests (`Digest`, `InboxDigest`, `QueueDigest`) | sqlite |
 | `internal/inject` | Safe input path: guard, bracketed paste, paste verification, submit delay, per-session input lock | session, config |
 | `internal/delivery` | Decide when a session is idle and inject queued messages (via `inject`) | session, mailbox, config, inject |
 | `internal/proto` | Wire protocol: JSON request/response + binary framed attach stream | stdlib |
@@ -452,7 +452,31 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
 - **Mailbox states**: `queued` → `delivered` (injected or fetched) → `read` → (optional) `replied`.
   Messages to unknown recipients are rejected; to exited sessions they stay `queued`.
   Delivery is at-least-once; ids are monotonic integers and never reused (AUTOINCREMENT), not even
-  after a purge.
+  after a purge. Work-queue items start `unclaimed` (see "Work queues").
+- **Work queues** (herdrup "Gram grab queue"; plan `docs/plans/agentd/mailbox-queue_plan.md`): `send {to:
+  "queue:<name>"}` (name `[a-zA-Z0-9._-]{1,64}`) stores the message with `recipient = "queue:<name>"`,
+  `queue = <name>`, state `unclaimed`; the delivery loop only reads `queued`, so an unclaimed item is never
+  injected and no session is kicked. Op `claim {queue, id?, inject?}` (sessions only) assigns the oldest
+  (or the given) unclaimed item to the caller in one write transaction (`UPDATE … WHERE state =
+  'unclaimed'`, `BEGIN IMMEDIATE`): first claim wins; an empty queue or an id that is not an item of that
+  queue is `not_found`, an item already claimed is `conflict`. The item then is a normal message of the
+  claimer (`recipient` = claimer, `claimed_at` set, `queue` kept): `read`, `reply` (goes to the poster) and
+  purge work as usual. The claim answer is the message with its body and counts as the fetch (state
+  `delivered`); `inject: true` leaves it `queued` so the delivery loop types the notice in. Post ACL:
+  `[acl] "queue:<name>"` like any recipient (falls back to `"*"`, default allow). Claim ACL: table
+  `[claim] "<name>" = ["session-glob", ...]` (falls back to `"*"`; no entry = any session; an empty list
+  denies all; `Config.ClaimAllowed`). Op `queue {name?, bodies?, since_digest?}`: with `name` →
+  `{name, items[], digest}` (unclaimed items oldest first; bodies blanked unless `bodies: true`), without →
+  `{queues[{name, unclaimed}]}`. Humans may list any queue; a session only queues it may claim from (the
+  name-less listing is filtered the same way). Retention purges unclaimed items by age like any message;
+  humans can `purge --recipient queue:<name>` / `--state unclaimed`. Schema v3 rebuilds the table like v2
+  (new state in the CHECK constraint, columns `queue`, `claimed_at`; ids and the AUTOINCREMENT counter
+  kept, `PRAGMA foreign_key_check`).
+- **Conditional fetch**: `inbox` answers carry `digest` (`d` + 16 hex of SHA-256 over the listed `(id,
+  state)` pairs, `mailbox.Digest`); `inbox {…, since_digest}` whose digest still matches returns
+  `{messages: [], digest, not_modified: true}` computed without reading bodies and with no state change (a
+  queued message would be fetched, which changes the digest, so a match never hides one). `queue {name,
+  since_digest}` works the same way. New fields are optional (`omitempty`).
 - **Mailbox retention and purge**: config `[mailbox] retention` (Go duration or whole days, `"120h"`,
   `"5d"`, `"1d12h"`; default 5 days, `"0"` disables) and `purge_interval` (default `1h`, minimum
   `1m`). The daemon purges every message (any state) with `created_at` older than retention once at
@@ -463,9 +487,10 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   `reply_to` cleared (v2 rebuilds the v1 table keeping ids and the AUTOINCREMENT counter, then runs
   `PRAGMA foreign_key_check`). `Store.Vacuum` compacts the file. Op `purge`: see "Ops" and "Identity".
 - **ACL**: config `[acl] "<recipient>" = ["sender-glob", ...]`; default allow all local senders. Applied
-  to the daemon-resolved sender (see "Identity").
-- **Recipients**: a registered session (running or exited) or `human:<name>` with `<name>` in
-  `[a-zA-Z0-9._-]{1,64}`.
+  to the daemon-resolved sender (see "Identity"). `"queue:<name>"` keys control who may post to a work
+  queue; `[claim]` controls who may claim (see "Work queues").
+- **Recipients**: a registered session (running or exited), `human:<name>` with `<name>` in
+  `[a-zA-Z0-9._-]{1,64}`, or a work queue `queue:<name>` (same charset).
 - **Attach**: detach key = `Ctrl-]` then `d` (`Ctrl-]` twice sends a literal `Ctrl-]`). On attach the
   server sends a full redraw rendered from the emulator (`Render()` + cursor position) and then the
   live PTY stream. Window size of the most recently active attached client wins; resize the PTY and
@@ -506,7 +531,10 @@ is resolved against the caller's absolute `cwd`; `harness` defaults to `cmd[0]` 
 `agentd aliases` reads the CLI's own environment, so it agrees with `run`), `ls` (a session caller without `[security] agent_view` gets other sessions' `preview` blanked; status and
 attention stay), `kill {name, signal}`, `rm {name}`,
 `dump {name, scrollback:bool, ansi:bool, ghost:bool, cells:bool, row?:int}` (→ `{text, ghost, ghost_hidden, cells?}`; `cells` = `{cursor_x, cursor_y, row, cells:[{x, content, rune, fg, bg, attrs[], width}]}` for `row` or the cursor's row, diagnostics), `type {name, text, submit:bool}` (raw injection, for humans/scripts),
-`send {to, subject, body, reply_to}`, `inbox {as?, all:bool}`, `read {as?, id}`, `reply {id, body}`,
+`send {to, subject, body, reply_to}`, `inbox {as?, all:bool, since_digest?}` (→ `{messages[], digest, not_modified?}`),
+`read {as?, id}`, `reply {id, body}`, `claim {queue, id?, inject?}` (→ the claimed message),
+`queue {name?, bodies?, since_digest?}` (→ `{name, items[], digest, not_modified?}` or `{queues[{name, unclaimed}]}`; see
+"Work queues"),
 `purge {before?: RFC3339 | older_than?: duration, recipient?, states?[], all:bool, dry_run:bool, vacuum:bool}`
 (→ `{count, dry_run}`; at least one filter or `all` is required),
 `view {name, since_revision?, epoch?, lines_limit?, from_line?, scrollback?}` (→ the semantic View
@@ -532,7 +560,9 @@ compacted in `docs.json`, atomic rename; a broken file is renamed `.bad` and the
 `"auth": {"id", "token"}` (filled by `internal/client` from `AGENTD_ID` / `AGENTD_TOKEN`).
 
 MCP tools (`agentd mcp`, identity resolved by the daemon, see "Identity"): `agentd_peers`,
-`agentd_send`, `agentd_inbox`, `agentd_read`, `agentd_reply` (no purge tool). The mailbox tools call `whoami` first
+`agentd_send` (`to` may be `queue:<name>`), `agentd_inbox` (`since_digest` in, `digest`/`not_modified` out),
+`agentd_read`, `agentd_reply`, `agentd_claim {queue, id?}` (returns the claimed task with its body, state
+`delivered`) and `agentd_queue {name?}` (ids, posters and subjects, never bodies) (no purge tool). The mailbox tools call `whoami` first
 and fail with a clear error when the daemon sees the caller as a human (MCP server not started from
 inside a session). No run/kill/type over MCP in v0.1 (an agent must not spawn or drive other agents'
 terminals directly). `agentd_peers` also returns each peer's `status` and `attention` (no screen content).
@@ -648,7 +678,9 @@ for the exit publisher),
 `working`, also `SessionInfo.turn`), `view.changed` `{revision}` (no content:
 call `view`), `input.changed` `{state}`, `attention.changed` `{attention, reason}`, `mail.queued` /
 `mail.delivered` / `mail.read` `{id, from, to}` (never the body; `session` = the recipient when it is a
-session), `session.labels` `{labels}`, `doc.changed` `{name, version}` (no `session`), `status.reported`
+session; a work-queue post is `mail.queued` with `to: "queue:<name>"`, `queue` and no `session`),
+`mail.claimed` `{id, from, to, queue, by}` (`session` = `by` = the claimer; followed by `mail.delivered` unless
+`inject`), `session.labels` `{labels}`, `doc.changed` `{name, version}` (no `session`), `status.reported`
 `{status, records, reported}` (OSC 7501), `turn.completed` (a turn record), `resync` `{reason: overflow|since_seq_too_old|epoch_mismatch}`, `heartbeat` (every 15 s,
 `Server.HeartbeatInterval`; `heartbeat_ms` min 1000) and `bye` (daemon shutdown, sent before connections
 are closed). `kinds` filters by exact kind or prefix (`session`, `status`, `view`, `input`, `attention`,
@@ -661,19 +693,20 @@ are closed). `kinds` filters by exact kind or prefix (`session`, `status`, `view
   predates the snapshot. A `since_seq` replay is not filtered.
 - Every subscriber has a bounded queue (256). `publish` never blocks: on overflow the queue is dropped,
   one `resync` is queued and the stream continues live. A write exceeding the attach write deadline
-  drops the client. Publishers: handlers (`run`, exit watcher, `rm`, `send`, `reply`, `inbox`, `read`),
+  drops the client. Publishers: handlers (`run`, exit watcher, `rm`, `send`, `reply`, `inbox`, `read`, `claim`),
   the per-session view watcher (only when the published fingerprint/revision, status, attention or input
   state changes, never per output byte) and `delivery.Loop.OnDelivered` (set by `NewDeliveryLoop`;
   `delivery` does not import `daemon`).
 - Identity: humans see every event; a session sees only events about itself and mail it sent or
-  received (`[security] agent_view = true` also lifts the session-event restriction, never the mail one).
+  received (`[security] agent_view = true` also lifts the session-event restriction, never the mail one),
+  plus the posts (`mail.queued`, no body) of the work queues it may claim from (`[claim]`).
   A session-identity subscription ends with `bye` when its session is removed (whatever its `kinds`
   filter); `client.Subscription` closes its connection on `bye`.
 
 ### Identity
 
 The daemon decides who is calling; clients cannot choose a sender (`internal/daemon/identity.go`).
-For every identity-dependent op (`send`, `inbox`, `read`, `reply`, `type`, `purge`, `whoami`):
+For every identity-dependent op (`send`, `inbox`, `read`, `reply`, `claim`, `queue`, `type`, `purge`, `whoami`):
 
 1. **Process ancestry** (kernel-verified): the peer pid from `SO_PEERCRED` (Linux) /
    `LOCAL_PEERPID` (macOS, best effort) and its ancestors (`/proc/<pid>/stat` ppid on Linux,
@@ -691,7 +724,11 @@ is rejected ("identity mismatch"). If the hint names a session that is still `st
 waits up to 2 s for it to register.
 
 Permissions on the resolved identity:
-- `send`: sender = caller; ACL applies to it. There is no `from` argument.
+- `send`: sender = caller; ACL applies to it. There is no `from` argument. Humans and sessions may post to
+  a work queue (`[acl] "queue:<name>"`).
+- `claim`: sessions only (a human gets `forbidden`: humans assign work with a direct `send`), and only from
+  queues `[claim]` allows for the caller. `queue`: humans any queue; a session only queues it may claim
+  from.
 - `inbox` / `read`: the caller's own mailbox. Humans may pass `as` (`--as`) to look at any mailbox;
   that is a peek: no state change (not delivered, not read). Sessions cannot use `as`.
 - `reply`: the caller must be the original recipient; the reply goes to the original sender. If that

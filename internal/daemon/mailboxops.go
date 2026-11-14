@@ -57,8 +57,9 @@ func (s *Server) send(ctx context.Context, who caller, a proto.SendArgs) (proto.
 	if a.To == "" {
 		return proto.Message{}, proto.Errorf(proto.CodeInvalid, "send: missing recipient")
 	}
-	if !s.knownRecipient(a.To) {
-		return proto.Message{}, proto.Errorf(proto.CodeInvalid, "send: unknown recipient %q (want a session name or human:<name> with [a-zA-Z0-9._-])", a.To)
+	_, isQueue := mailbox.QueueOf(a.To)
+	if !isQueue && !s.knownRecipient(a.To) {
+		return proto.Message{}, proto.Errorf(proto.CodeInvalid, "send: unknown recipient %q (want a session name, human:<name> or queue:<name> with [a-zA-Z0-9._-])", a.To)
 	}
 	if !s.Cfg.Allowed(a.To, who.id) {
 		return proto.Message{}, proto.Errorf(proto.CodeForbidden, "send: %q is not allowed to message %q", who.id, a.To)
@@ -68,6 +69,11 @@ func (s *Server) send(ctx context.Context, who caller, a proto.SendArgs) (proto.
 	})
 	if err != nil {
 		return proto.Message{}, err
+	}
+	if isQueue {
+		s.Log.Info("queue item posted", "id", m.ID, "from", m.Sender, "queue", m.Queue, "via", who.via)
+		s.publishQueueMail(proto.EvMailQueued, m, "")
+		return toWire(m), nil
 	}
 	s.Log.Info("message queued", "id", m.ID, "from", m.Sender, "to", m.Recipient, "via", who.via)
 	s.publishMail(proto.EvMailQueued, m.ID, m.Sender, m.Recipient)
@@ -92,18 +98,30 @@ func (s *Server) mailboxOf(op string, who caller, as string) (string, bool, erro
 
 // inbox lists a mailbox. Listing one's own mailbox counts as fetching: queued
 // messages it returns move to delivered, so they are not injected afterwards.
-// A human listing another mailbox (as) only peeks: no state changes.
+// A human listing another mailbox (as) only peeks: no state changes. The
+// answer carries the listing's digest; a request whose since_digest still
+// matches gets {not_modified, digest} and changes nothing (a queued message
+// changes the digest when it is fetched, so a matching digest never hides one).
 func (s *Server) inbox(ctx context.Context, who caller, a proto.InboxArgs) (proto.InboxResult, error) {
 	box, own, err := s.mailboxOf("inbox", who, a.As)
 	if err != nil {
 		return proto.InboxResult{}, err
+	}
+	if a.SinceDigest != "" {
+		d, err := s.Store.InboxDigest(ctx, box, a.All)
+		if err != nil {
+			return proto.InboxResult{}, err
+		}
+		if d == a.SinceDigest {
+			return proto.InboxResult{Messages: []proto.Message{}, Digest: d, NotModified: true}, nil
+		}
 	}
 	msgs, err := s.Store.Inbox(ctx, box, a.All)
 	if err != nil {
 		return proto.InboxResult{}, err
 	}
 	res := proto.InboxResult{Messages: make([]proto.Message, 0, len(msgs))}
-	for _, m := range msgs {
+	for i, m := range msgs {
 		if own && m.State == mailbox.StateQueued {
 			if err := s.Store.MarkDelivered(ctx, m.ID); err == nil {
 				if fresh, err := s.Store.Get(ctx, m.ID); err == nil {
@@ -112,8 +130,10 @@ func (s *Server) inbox(ctx context.Context, who caller, a proto.InboxArgs) (prot
 				s.publishMail(proto.EvMailDelivered, m.ID, m.Sender, m.Recipient)
 			}
 		}
+		msgs[i] = m
 		res.Messages = append(res.Messages, toWire(m))
 	}
+	res.Digest = mailbox.Digest(msgs)
 	return res, nil
 }
 

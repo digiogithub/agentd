@@ -44,6 +44,8 @@ const (
 	OpDocGet    = "doc_get"
 	OpDocSet    = "doc_set"
 	OpTurns     = "turns"
+	OpClaim     = "claim"
+	OpQueue     = "queue"
 )
 
 // MaxLineSize bounds one JSON request or response line.
@@ -593,7 +595,9 @@ type TypeArgs struct {
 }
 
 // SendArgs sends a mailbox message. The sender is the caller's identity as
-// resolved by the daemon.
+// resolved by the daemon. To is a session name, "human:<name>", or
+// "queue:<name>" (a shared work queue: the message waits unclaimed until a
+// session claims it, op claim).
 type SendArgs struct {
 	To      string `json:"to"`
 	Subject string `json:"subject,omitempty"`
@@ -603,14 +607,54 @@ type SendArgs struct {
 
 // InboxArgs lists the caller's mailbox; All includes read messages. As
 // (humans only) lists another mailbox without changing message states.
+// SinceDigest is the digest of a previous answer: when the listing is
+// unchanged the answer is {not_modified: true, digest} with no messages.
 type InboxArgs struct {
-	As  string `json:"as,omitempty"`
-	All bool   `json:"all,omitempty"`
+	As          string `json:"as,omitempty"`
+	All         bool   `json:"all,omitempty"`
+	SinceDigest string `json:"since_digest,omitempty"`
 }
 
-// InboxResult answers inbox.
+// InboxResult answers inbox. Digest identifies the listing (ids and states):
+// pass it back as since_digest to poll cheaply.
 type InboxResult struct {
-	Messages []Message `json:"messages"`
+	Messages    []Message `json:"messages"`
+	Digest      string    `json:"digest,omitempty"`
+	NotModified bool      `json:"not_modified,omitempty"`
+}
+
+// ClaimArgs claims an unclaimed item of a work queue for the calling session
+// (sessions only): the oldest one, or ID. The item becomes a message to the
+// caller; the answer (the message) counts as fetching it (state delivered)
+// unless Inject, which leaves it queued for the delivery loop to type in.
+type ClaimArgs struct {
+	Queue  string `json:"queue"`
+	ID     int64  `json:"id,omitempty"`
+	Inject bool   `json:"inject,omitempty"`
+}
+
+// QueueArgs lists a work queue's unclaimed items (Name set) or every queue
+// with unclaimed items (Name empty). Bodies includes the message bodies
+// (omitted by default). SinceDigest works as in InboxArgs (Name set only).
+type QueueArgs struct {
+	Name        string `json:"name,omitempty"`
+	Bodies      bool   `json:"bodies,omitempty"`
+	SinceDigest string `json:"since_digest,omitempty"`
+}
+
+// QueueCount is one queue of a QueueResult listing.
+type QueueCount struct {
+	Name      string `json:"name"`
+	Unclaimed int    `json:"unclaimed"`
+}
+
+// QueueResult answers queue: Items (with Name) or Queues (without).
+type QueueResult struct {
+	Name        string       `json:"name,omitempty"`
+	Items       []Message    `json:"items,omitempty"`
+	Queues      []QueueCount `json:"queues,omitempty"`
+	Digest      string       `json:"digest,omitempty"`
+	NotModified bool         `json:"not_modified,omitempty"`
 }
 
 // ReadArgs reads (and marks read) one message addressed to the caller. As
@@ -673,6 +717,10 @@ type Message struct {
 	DeliveredAt *time.Time `json:"delivered_at,omitempty"`
 	ReadAt      *time.Time `json:"read_at,omitempty"`
 	RepliedAt   *time.Time `json:"replied_at,omitempty"`
+	// Queue is the work queue the message was posted to (kept after the
+	// claim); ClaimedAt is when a session claimed it.
+	Queue     string     `json:"queue,omitempty"`
+	ClaimedAt *time.Time `json:"claimed_at,omitempty"`
 	// Warning is set by the daemon when the operation succeeded with a caveat
 	// (e.g. a reply to a sender that is not a known mailbox).
 	Warning string `json:"warning,omitempty"`
@@ -826,6 +874,7 @@ const (
 	EvMailQueued       = "mail.queued"
 	EvMailDelivered    = "mail.delivered"
 	EvMailRead         = "mail.read"
+	EvMailClaimed      = "mail.claimed"
 	EvSessionLabels    = "session.labels"
 	EvDocChanged       = "doc.changed"
 	EvStatusReported   = "status.reported"
@@ -931,8 +980,12 @@ type DocChangedData struct {
 }
 
 // MailEventData is the data of mail.* events; never carries the body.
+// Queue is set for work-queue items (posts and claims), By for mail.claimed
+// (the claiming session, also To after the claim).
 type MailEventData struct {
-	ID   int64  `json:"id"`
-	From string `json:"from"`
-	To   string `json:"to"`
+	ID    int64  `json:"id"`
+	From  string `json:"from"`
+	To    string `json:"to"`
+	Queue string `json:"queue,omitempty"`
+	By    string `json:"by,omitempty"`
 }

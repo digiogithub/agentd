@@ -107,7 +107,7 @@ func (s *Server) purge(ctx context.Context, who caller, a proto.PurgeArgs) (prot
 	for _, st := range a.States {
 		ms := mailbox.State(st)
 		if !ms.Valid() {
-			return proto.PurgeResult{}, proto.Errorf(proto.CodeInvalid, "purge: unknown state %q (want queued, delivered, read or replied)", st)
+			return proto.PurgeResult{}, proto.Errorf(proto.CodeInvalid, "purge: unknown state %q (want queued, delivered, read, replied or unclaimed)", st)
 		}
 		if !slices.Contains(o.States, ms) {
 			o.States = append(o.States, ms)

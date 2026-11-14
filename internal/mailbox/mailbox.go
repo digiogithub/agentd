@@ -1,6 +1,8 @@
 // Package mailbox is the persistent message store used by agentd to let
 // agents exchange messages. Messages move through the states
-// queued → delivered → read → (optional) replied.
+// queued → delivered → read → (optional) replied. A message posted to a
+// shared work queue ("queue:<name>") starts unclaimed and becomes a queued
+// message of the session that claims it (see Claim).
 //
 // The store is backed by SQLite (modernc.org/sqlite, WAL mode) and is safe for
 // concurrent use from multiple goroutines.
@@ -24,6 +26,8 @@ var (
 	ErrNotFound  = errors.New("mailbox: message not found")
 	ErrForbidden = errors.New("mailbox: forbidden")
 	ErrInvalid   = errors.New("mailbox: invalid message")
+	// ErrClaimed is returned by Claim for a queue item someone else already claimed.
+	ErrClaimed = errors.New("mailbox: already claimed")
 )
 
 // State is the delivery state of a message.
@@ -35,6 +39,9 @@ const (
 	StateDelivered State = "delivered"
 	StateRead      State = "read"
 	StateReplied   State = "replied"
+	// StateUnclaimed is a work-queue item nobody has claimed yet. The
+	// delivery loop only reads queued messages, so it is never injected.
+	StateUnclaimed State = "unclaimed"
 )
 
 // Message is a mailbox message. It is serialized over the wire and via MCP.
@@ -51,6 +58,10 @@ type Message struct {
 	DeliveredAt *time.Time `json:"delivered_at,omitempty"`
 	ReadAt      *time.Time `json:"read_at,omitempty"`
 	RepliedAt   *time.Time `json:"replied_at,omitempty"`
+	// Queue is the work queue the message was posted to ("" for a direct
+	// message). It is kept after the claim.
+	Queue     string     `json:"queue,omitempty"`
+	ClaimedAt *time.Time `json:"claimed_at,omitempty"`
 }
 
 // Unread reports whether the message has not been read yet (queued or delivered).
@@ -155,6 +166,42 @@ var migrations = []string{
 	ALTER TABLE messages_v2 RENAME TO messages;
 	CREATE INDEX messages_recipient_state ON messages(recipient, state);
 	CREATE INDEX messages_created_at ON messages(created_at);`,
+
+	// v3: shared work queues. New state 'unclaimed' (the CHECK constraint
+	// cannot be altered, so the table is rebuilt the same way as v2: ids
+	// and the AUTOINCREMENT counter kept) and columns queue (origin queue
+	// name, kept after the claim) and claimed_at.
+	`CREATE TABLE messages_v3 (
+		id           INTEGER PRIMARY KEY AUTOINCREMENT,
+		sender       TEXT    NOT NULL,
+		recipient    TEXT    NOT NULL,
+		subject      TEXT    NOT NULL DEFAULT '',
+		body         TEXT    NOT NULL,
+		reply_to     INTEGER REFERENCES messages_v3(id) ON DELETE SET NULL,
+		state        TEXT    NOT NULL DEFAULT 'queued'
+		             CHECK (state IN ('queued','delivered','read','replied','unclaimed')),
+		attempts     INTEGER NOT NULL DEFAULT 0,
+		created_at   INTEGER NOT NULL,
+		delivered_at INTEGER,
+		read_at      INTEGER,
+		replied_at   INTEGER,
+		queue        TEXT,
+		claimed_at   INTEGER
+	);
+	INSERT INTO messages_v3(id, sender, recipient, subject, body, reply_to, state, attempts,
+		created_at, delivered_at, read_at, replied_at)
+		SELECT id, sender, recipient, subject, body, reply_to, state, attempts,
+			created_at, delivered_at, read_at, replied_at
+		FROM messages ORDER BY id;
+	INSERT INTO sqlite_sequence(name, seq)
+		SELECT 'messages_v3', 0 WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = 'messages_v3');
+	UPDATE sqlite_sequence SET seq = MAX(seq,
+		COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'messages'), 0))
+		WHERE name = 'messages_v3';
+	DROP TABLE messages;
+	ALTER TABLE messages_v3 RENAME TO messages;
+	CREATE INDEX messages_recipient_state ON messages(recipient, state);
+	CREATE INDEX messages_created_at ON messages(created_at);`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {
@@ -230,7 +277,7 @@ func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
 }
 
 const selectCols = `id, sender, recipient, subject, body, reply_to, state, attempts,
-	created_at, delivered_at, read_at, replied_at`
+	created_at, delivered_at, read_at, replied_at, queue, claimed_at`
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -243,9 +290,11 @@ func scanMessage(r rowScanner) (Message, error) {
 		state                 string
 		created               int64
 		delivered, read, repl sql.NullInt64
+		queue                 sql.NullString
+		claimed               sql.NullInt64
 	)
 	if err := r.Scan(&m.ID, &m.Sender, &m.Recipient, &m.Subject, &m.Body, &replyTo,
-		&state, &m.Attempts, &created, &delivered, &read, &repl); err != nil {
+		&state, &m.Attempts, &created, &delivered, &read, &repl, &queue, &claimed); err != nil {
 		return Message{}, err
 	}
 	if replyTo.Valid {
@@ -257,6 +306,8 @@ func scanMessage(r rowScanner) (Message, error) {
 	m.DeliveredAt = msPtr(delivered)
 	m.ReadAt = msPtr(read)
 	m.RepliedAt = msPtr(repl)
+	m.Queue = queue.String
+	m.ClaimedAt = msPtr(claimed)
 	return m, nil
 }
 
@@ -306,8 +357,9 @@ func (s *Store) list(ctx context.Context, query string, args ...any) ([]Message,
 
 // Send stores a new message in state queued and returns it with its id and
 // timestamps set. Sender, recipient and body must be non-empty. If ReplyTo is
-// set it must reference an existing message. ID, State, Attempts and the
-// timestamps of m are ignored.
+// set it must reference an existing message. ID, State, Attempts, Queue and
+// the timestamps of m are ignored. A recipient "queue:<name>" posts to a work
+// queue: the message is stored unclaimed with Queue = name (see Claim).
 func (s *Store) Send(ctx context.Context, m Message) (Message, error) {
 	m.Sender = strings.TrimSpace(m.Sender)
 	m.Recipient = strings.TrimSpace(m.Recipient)
@@ -319,6 +371,13 @@ func (s *Store) Send(ctx context.Context, m Message) (Message, error) {
 	}
 	if strings.TrimSpace(m.Body) == "" {
 		return Message{}, fmt.Errorf("%w: empty body", ErrInvalid)
+	}
+	m.Queue = ""
+	if rest, ok := strings.CutPrefix(m.Recipient, QueuePrefix); ok {
+		if !ValidQueueName(rest) {
+			return Message{}, fmt.Errorf("%w: bad queue name %q (want [a-zA-Z0-9._-]{1,64})", ErrInvalid, rest)
+		}
+		m.Queue = rest
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -354,10 +413,14 @@ func insert(ctx context.Context, tx *sql.Tx, m Message, now time.Time) (int64, e
 	if m.ReplyTo != nil {
 		replyTo = sql.NullInt64{Int64: *m.ReplyTo, Valid: true}
 	}
+	state, queue := StateQueued, sql.NullString{}
+	if m.Queue != "" {
+		state, queue = StateUnclaimed, sql.NullString{String: m.Queue, Valid: true}
+	}
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO messages(sender, recipient, subject, body, reply_to, state, attempts, created_at)
-		 VALUES (?, ?, ?, ?, ?, 'queued', 0, ?)`,
-		m.Sender, m.Recipient, m.Subject, m.Body, replyTo, now.UnixMilli())
+		`INSERT INTO messages(sender, recipient, subject, body, reply_to, state, attempts, created_at, queue)
+		 VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+		m.Sender, m.Recipient, m.Subject, m.Body, replyTo, string(state), now.UnixMilli(), queue)
 	if err != nil {
 		return 0, fmt.Errorf("mailbox: insert: %w", err)
 	}
@@ -558,7 +621,7 @@ func (s *Store) UnreadCount(ctx context.Context, recipient string) (int, error) 
 // Valid reports whether st is one of the known states.
 func (st State) Valid() bool {
 	switch st {
-	case StateQueued, StateDelivered, StateRead, StateReplied:
+	case StateQueued, StateDelivered, StateRead, StateReplied, StateUnclaimed:
 		return true
 	}
 	return false

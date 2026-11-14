@@ -218,6 +218,10 @@ type Config struct {
 	// ACL maps a recipient session name (or "*") to the sender globs
 	// (path.Match syntax) allowed to message it.
 	ACL map[string][]string `toml:"acl"`
+	// Claim maps a work queue name (without "queue:", or "*") to the
+	// session globs allowed to claim its items ([claim]). Posting to a queue
+	// is decided by ACL["queue:<name>"], like any recipient.
+	Claim map[string][]string `toml:"claim"`
 	// Security holds identity-related switches.
 	Security Security `toml:"security"`
 	// Run holds session-start settings ([run]).
@@ -431,6 +435,13 @@ func (c *Config) init() error {
 		for _, g := range globs {
 			if _, err := path.Match(g, ""); err != nil {
 				return fmt.Errorf("acl %q: bad glob %q: %w", recipient, g, err)
+			}
+		}
+	}
+	for queue, globs := range c.Claim {
+		for _, g := range globs {
+			if _, err := path.Match(g, ""); err != nil {
+				return fmt.Errorf("claim %q: bad glob %q: %w", queue, g, err)
 			}
 		}
 	}
@@ -652,6 +663,29 @@ func (c *Config) Allowed(recipient, sender string) bool {
 	}
 	for _, g := range globs {
 		if m, err := path.Match(g, sender); err == nil && m {
+			return true
+		}
+	}
+	return false
+}
+
+// ClaimAllowed reports whether session may claim items of work queue (the
+// name without "queue:"). The [claim] entry for queue is used, else the "*"
+// entry, else every session may claim. An entry with an empty list denies
+// all. A nil *Config allows everything.
+func (c *Config) ClaimAllowed(queue, session string) bool {
+	if c == nil {
+		return true
+	}
+	globs, ok := c.Claim[queue]
+	if !ok {
+		globs, ok = c.Claim["*"]
+	}
+	if !ok {
+		return true
+	}
+	for _, g := range globs {
+		if m, err := path.Match(g, session); err == nil && m {
 			return true
 		}
 	}
