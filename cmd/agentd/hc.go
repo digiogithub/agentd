@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -399,13 +400,27 @@ func shimConflicts(exe string, dirs, runtimeDirs []string) []string {
 			if strings.Contains(filepath.Base(sock), ".holder.") {
 				continue
 			}
-			c, err := net.DialTimeout("unix", sock, 300*time.Millisecond)
-			if err != nil {
-				continue
+			if live, ours := probeHCSocket(sock); !live || ours {
+				continue // stale, or agentd's own hc listener ([herdr] listen)
 			}
-			_ = c.Close()
 			out = append(out, fmt.Sprintf("a herdr-core is running (%s): the Herdr mobile app connects to it instead of agentd; stop it (herdr-core server stop) and remove that herdr-core", sock))
 		}
 	}
 	return out
+}
+
+// probeHCSocket reports whether something answers on sock and whether it is
+// agentd (server.status says installed_by "agentd").
+func probeHCSocket(sock string) (live, ours bool) {
+	c, err := net.DialTimeout("unix", sock, 300*time.Millisecond)
+	if err != nil {
+		return false, false
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(time.Second))
+	if _, err := io.WriteString(c, `{"jsonrpc":"2.0","id":1,"method":"server.status","params":{}}`+"\n"); err != nil {
+		return true, false
+	}
+	line, _ := bufio.NewReader(c).ReadString('\n')
+	return true, strings.Contains(line, `"installed_by":"agentd"`)
 }

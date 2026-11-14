@@ -229,4 +229,26 @@ func TestShimConflicts(t *testing.T) {
 	if len(got) != 1 || !strings.Contains(got[0], "default.sock") {
 		t.Fatalf("running core: %v", got)
 	}
+
+	// agentd's own hc listener answers server.status with installed_by agentd.
+	ag, err := net.Listen("unix", filepath.Join(rt, "agentd.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ag.Close()
+	go func() {
+		for {
+			c, err := ag.Accept()
+			if err != nil {
+				return
+			}
+			_, _ = c.Read(make([]byte, 512))
+			_, _ = c.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"installed_by":"agentd"}}` + "\n"))
+			_ = c.Close()
+		}
+	}()
+	got = shimConflicts(exe, []string{ours}, []string{rt})
+	if len(got) != 1 || strings.Contains(got[0], "agentd.sock") {
+		t.Fatalf("agentd's own listener reported: %v", got)
+	}
 }
