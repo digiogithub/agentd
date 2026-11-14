@@ -186,6 +186,27 @@ can be purged. Inside a session only that session's own `read`/`replied` message
 `--vacuum`). Replies to a purged message keep working (their `reply_to` is cleared), and message
 ids are never reused. There is no MCP tool for purging.
 
+## Herdr clients (Desktop and mobile)
+
+agentd speaks the herdr-core protocol, so the [Herdr](https://herdr.dev) desktop app and the official mobile
+app ("Herdr", `dev.herdr.app`) show and drive agentd sessions without herdr-core installed:
+
+```sh
+agentd hc install-shim --local-bin   # ~/.local/share/agentd/hc/herdr-core and ~/.local/bin/herdr-core -> agentd
+```
+
+- Herdr Desktop: set `"core"` to the absolute path of `~/.local/share/agentd/hc/herdr-core` in
+  `~/.config/herdr-app/settings.json` and restart it. Install the app without its bundled herdr-core.
+- Mobile app: add the machine over SSH (it adds its own key to `~/.ssh/authorized_keys`, which gives it a
+  shell); it runs `~/.local/bin/herdr-core connect`.
+- Sessions appear in a space named after their project (`herdr.space` label); status comes from agentd's view
+  (or the program's own OSC 7501 reports).
+- Remove any real herdr-core first: clients prefer it, the mobile app even more so when one is running.
+  `install-shim` warns about both. The third-party "Herdr Mobile" (`dev.herdr.mobile`) and herdrup use the old
+  Herdr TUI protocol and do not work with agentd.
+- `[herdr] read_only = true` / `allow_run = [...]` in `config.toml` restrict what Herdr clients may do;
+  `AGENTD_HC_TRACE=<file>` logs the calls a client makes (names only).
+
 ## MCP
 
 `agentd mcp` is a stdio MCP server with five tools:

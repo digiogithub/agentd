@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -175,10 +177,12 @@ func hcCoreID() (string, error) {
 }
 
 // installShim creates herdr-core and hc symlinks to this executable in a
-// dedicated directory. It never replaces a file or a symlink to anything
-// else (a real herdr-core install stays untouched).
+// dedicated directory (and, with --local-bin, in ~/.local/bin, where Herdr's
+// mobile app and remote cores look over SSH). It never replaces a file or a
+// symlink to anything else, and warns about other herdr-core binaries or a
+// running herdr-core: clients prefer those over agentd.
 func installShim(w io.Writer, args []string) error {
-	dir := ""
+	dir, localBin := "", false
 	for i := 0; i < len(args); i++ {
 		switch {
 		case args[i] == "--dir" && i+1 < len(args):
@@ -186,15 +190,17 @@ func installShim(w io.Writer, args []string) error {
 			i++
 		case strings.HasPrefix(args[i], "--dir="):
 			dir = strings.TrimPrefix(args[i], "--dir=")
+		case args[i] == "--local-bin":
+			localBin = true
 		default:
-			return fmt.Errorf("install-shim: unknown argument %q (usage: agentd hc install-shim [--dir DIR])", args[i])
+			return fmt.Errorf("install-shim: unknown argument %q (usage: agentd hc install-shim [--dir DIR] [--local-bin])", args[i])
 		}
 	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
 	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return err
-		}
 		dir = filepath.Join(home, ".local", "share", "agentd", "hc")
 	}
 	exe, err := os.Executable()
@@ -204,26 +210,113 @@ func installShim(w io.Writer, args []string) error {
 	if exe, err = filepath.EvalSymlinks(exe); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+	dirs := []string{dir}
+	if localBin {
+		dirs = append(dirs, filepath.Join(home, ".local", "bin"))
 	}
-	for _, name := range hcNames {
-		link := filepath.Join(dir, name)
-		if cur, err := os.Readlink(link); err == nil {
-			if cur == exe {
-				continue
-			}
-			return fmt.Errorf("install-shim: %s already points to %s; not replacing it", link, cur)
-		} else if _, serr := os.Lstat(link); serr == nil {
-			return fmt.Errorf("install-shim: %s exists and is not agentd's symlink; not replacing it", link)
-		} else if !errors.Is(serr, os.ErrNotExist) {
-			return serr
-		}
-		if err := os.Symlink(exe, link); err != nil {
+	for _, d := range dirs {
+		if err := linkShim(d, exe); err != nil {
 			return err
 		}
 	}
 	fmt.Fprintf(w, "herdr-core shim: %s\n", filepath.Join(dir, "herdr-core"))
 	fmt.Fprintln(w, "Herdr Desktop: set \"core\" to that path in its settings.json.")
+	if localBin {
+		fmt.Fprintf(w, "Herdr mobile app and remote cores (SSH): %s\n", filepath.Join(home, ".local", "bin", "herdr-core"))
+	} else {
+		fmt.Fprintln(w, "Herdr mobile app over SSH: run again with --local-bin (links ~/.local/bin/herdr-core).")
+	}
+	for _, warn := range shimConflicts(exe, shimSearchDirs(home), herdrRuntimeDirs()) {
+		fmt.Fprintln(w, "warning: "+warn)
+	}
 	return nil
+}
+
+// linkShim makes dir/herdr-core and dir/hc symlinks to exe; an existing link
+// that already resolves to exe is kept, anything else is an error.
+func linkShim(dir, exe string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	for _, name := range hcNames {
+		link := filepath.Join(dir, name)
+		if _, err := os.Lstat(link); err == nil {
+			if resolved, rerr := filepath.EvalSymlinks(link); rerr == nil && resolved == exe {
+				continue
+			}
+			cur, _ := os.Readlink(link)
+			if cur == "" {
+				cur = "a file"
+			}
+			return fmt.Errorf("install-shim: %s exists (%s) and is not agentd; not replacing it", link, cur)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.Symlink(exe, link); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// shimSearchDirs are the places Herdr clients look for herdr-core / hc
+// (Desktop's core_bin.rs, herdr-core's remote dial, SSH's minimal PATH).
+func shimSearchDirs(home string) []string {
+	dirs := filepath.SplitList(os.Getenv("PATH"))
+	dirs = append(dirs, filepath.Join(home, ".local", "bin"), "/usr/local/bin", "/usr/bin", "/bin",
+		"/opt/homebrew/bin", filepath.Join(home, ".cargo", "bin"), filepath.Join(home, ".nix-profile", "bin"))
+	return dirs
+}
+
+// herdrRuntimeDirs are where a running herdr-core keeps its socket.
+func herdrRuntimeDirs() []string {
+	var out []string
+	if rt := os.Getenv("XDG_RUNTIME_DIR"); rt != "" {
+		out = append(out, filepath.Join(rt, "herdr-core"))
+	}
+	return append(out, filepath.Join("/run/user", strconv.Itoa(os.Getuid()), "herdr-core"))
+}
+
+// shimConflicts lists herdr-core/hc binaries that are not agentd and live
+// herdr-core sockets: Herdr clients pick those (the mobile app prefers a
+// running core), so agentd's sessions would not show.
+func shimConflicts(exe string, dirs, runtimeDirs []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, d := range dirs {
+		for _, name := range hcNames {
+			p := filepath.Join(d, name)
+			if d == "" || seen[p] {
+				continue
+			}
+			seen[p] = true
+			fi, err := os.Stat(p)
+			if err != nil || fi.IsDir() {
+				continue
+			}
+			if resolved, err := filepath.EvalSymlinks(p); err == nil && resolved == exe {
+				continue
+			}
+			out = append(out, fmt.Sprintf("%s is another herdr-core (not agentd): Herdr clients may use it instead; remove it (check its package: dpkg -S %s)", p, p))
+		}
+	}
+	for _, d := range runtimeDirs {
+		if seen[d] {
+			continue
+		}
+		seen[d] = true
+		socks, _ := filepath.Glob(filepath.Join(d, "*.sock"))
+		for _, sock := range socks {
+			if strings.Contains(filepath.Base(sock), ".holder.") {
+				continue
+			}
+			c, err := net.DialTimeout("unix", sock, 300*time.Millisecond)
+			if err != nil {
+				continue
+			}
+			_ = c.Close()
+			out = append(out, fmt.Sprintf("a herdr-core is running (%s): the Herdr mobile app connects to it instead of agentd; stop it (herdr-core server stop) and remove that herdr-core", sock))
+		}
+	}
+	return out
 }

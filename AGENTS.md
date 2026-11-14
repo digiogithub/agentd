@@ -239,8 +239,11 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   ECONNABORTED…) are retried with exponential backoff (5 ms → 1 s). Connections beyond `MaxConns`
   (default 1024) are closed on accept.
 - **Herdr compatibility** (proof of concept; analysis `docs/architecture/herdr-compatibility-analysis.md`, plan
-  `docs/plans/agentd/herdr-compat_plan.md`): `agentd hc install-shim [--dir D]` makes `herdr-core` and `hc` symlinks
-  to agentd (default `~/.local/share/agentd/hc/`; never replaces an existing file or foreign symlink). Invoked under
+  `docs/plans/agentd/herdr-compat_plan.md`): `agentd hc install-shim [--dir D] [--local-bin]` makes `herdr-core` and `hc` symlinks
+  to agentd (default `~/.local/share/agentd/hc/`; `--local-bin` also in `~/.local/bin`, where the Herdr mobile app and
+  remote cores look over SSH; never replaces an existing file or a link that does not resolve to agentd) and warns about
+  other `herdr-core`/`hc` binaries (PATH, `/usr/bin`, `/usr/local/bin`, `~/.local/bin`, ...) and live herdr-core sockets
+  (`$XDG_RUNTIME_DIR/herdr-core/*.sock`, holder sockets ignored): the mobile app prefers a running real core. Invoked under
   those names: `--version` prints `hc 0.1.21` (`hcompat.CompatVersion`, plain x.y.z: Herdr Desktop parses it by
   `.`/`-` and needs >= 0.1.11), `connect [--session S]` speaks hc over stdio (session ignored), `machine ls --json`
   prints `{"machines":[]}`, `update` and anything else exit 2 with `{"error":{message,hint}}` on stderr. `AGENTD_HC_TRACE=<file>` appends a trace (CLI

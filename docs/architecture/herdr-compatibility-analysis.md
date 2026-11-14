@@ -216,6 +216,10 @@ keep, parent, notify, rm, reason, exit_code, signal, finished_ms, foreground, te
   display history observe resumed rows terminal}`. It types live on the attach stream (no `terminal.send` /
   `keys` seen); after backgrounding it reconnects with a new SSH connection and `resumed`. Verified: listing,
   live typing into a Pando agent, reconnect. No errors.
+- **Binary collision observed (R4)**: with the `herdr-gpui` package installed (`/usr/bin/herdr-core` 0.1.13) and its
+  core running, the official mobile app ran `/usr/bin/herdr-core connect` and showed only that core's terminals;
+  before that core was started it had used `~/.local/bin/herdr-core` (agentd). Removing the package fixed it.
+  `agentd hc install-shim` now warns about other herdr-core binaries and live herdr-core sockets.
 - **"Herdr Mobile" (`dev.herdr.mobile`, third party, Expo)** is NOT the official app: it uploads
   `~/.herdr-mobile-uploads/install-herdr.sh`, installs the Herdr **TUI** from herdr.dev and starts `herdr server`
   (legacy protocol): incompatible with agentd, out of scope.
