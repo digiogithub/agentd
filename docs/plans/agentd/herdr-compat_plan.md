@@ -42,7 +42,14 @@ Daemon attach frames `A` (automatic input) and `F` (focus, DEC 1004 reports), at
 `passive`, `history`; hcompat maps AUTOMATIC_INPUT (advertised), FOCUS, observe, resumed, history; repaints
 reattach passive. FACTS ignored; `resize_notifications` not offered (decided: observers use size events).
 
-## Phase 3..4
-See analysis §10. Next: Phase 3 (send/keys/interrupt/wait, OSC 7501 parsing, turn records with outcome/origin and
-"only my turns" notifications from [[herdrup-analysis]], `[herdr]` config + audit), then Phase 4 (official Herdr
-mobile app capture, Whip, hc socket listener).
+## Phase 3 (done 2026-11-14: [[herdr-compat-phase3]])
+
+hc `terminal.send/keys/interrupt/wait`; daemon key names extended; OSC 7501 parsed by sessions and preferred
+over the heuristics (view status, `status.reported`, hc exact words); turn records with outcome/origin (op
+`turns`, `turn.completed`, CLI) from [[herdrup-analysis]] items 1-2; `[herdr]` config (enabled, read_only,
+allow_run); act audit `client`. Not done: the "only my turns" notification filter (lives in the frozen gateway's
+`[api.notify]`; origin is now available when the gateway is unfrozen).
+
+## Phase 4
+Official Herdr mobile app: capture its calls through the shim (log stdin/stdout) and close the gaps; Whip
+(`connect --session`, hc socket listener for `direct-streamlocal`, discovery script paths); 0cv relay hc backend.

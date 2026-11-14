@@ -483,6 +483,7 @@ type entry struct {
 	clients map[*attachClient]struct{}
 	active  *attachClient
 	labels  map[string]string // op label (meta.go)
+	turns   turnTrack         // turn records (turns.go)
 }
 
 type attachClient struct {

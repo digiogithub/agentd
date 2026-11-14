@@ -28,6 +28,11 @@ var _ delivery.Registry = (*Server)(nil)
 func (s *Server) NewDeliveryLoop(log *slog.Logger) *delivery.Loop {
 	return &delivery.Loop{
 		Store: s.Store, Reg: s, Log: log,
-		OnDelivered: func(m mailbox.Message) { s.publishMail(proto.EvMailDelivered, m.ID, m.Sender, m.Recipient) },
+		OnDelivered: func(m mailbox.Message) {
+			if e, err := s.lookup(m.Recipient); err == nil {
+				e.noteInput(OriginMail, false)
+			}
+			s.publishMail(proto.EvMailDelivered, m.ID, m.Sender, m.Recipient)
+		},
 	}
 }

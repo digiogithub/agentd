@@ -78,7 +78,23 @@ var conEmuSub = regexp.MustCompile(`^\d+(;|$)`)
 // registerNotifyHandlers hooks OSC 9 and OSC 777 (x/vt only logs them as
 // unhandled). Handlers receive the whole payload including the command number
 // and run under outMu.
-func (s *Session) registerNotifyHandlers() { registerNotify(s.emu.Emulator, s.recordNotify) }
+func (s *Session) registerNotifyHandlers() {
+	registerNotify(s.emu.Emulator, s.recordNotify)
+	// OSC 7501 (Program Status Protocol): the program's own status reports.
+	s.emu.Emulator.RegisterOscHandler(7501, func(data []byte) bool {
+		if st, ok := screen.ParseOSC7501(string(data)); ok {
+			s.prog.Apply(st)
+		}
+		return true
+	})
+}
+
+// ProgramStatus returns the program's OSC 7501 reports (a copy).
+func (s *Session) ProgramStatus() screen.ProgramStatuses {
+	s.outMu.RLock()
+	defer s.outMu.RUnlock()
+	return s.prog.Copy()
+}
 
 // registerNotify installs the OSC 9 / OSC 777 handlers on e, calling rec for
 // every real notification (shared by Session and Replayer).

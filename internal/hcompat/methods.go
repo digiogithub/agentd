@@ -21,7 +21,15 @@ var methodNames = []string{
 	"hello", "server.status", "events.subscribe",
 	"terminal.list", "terminal.get", "terminal.attach", "terminal.run",
 	"terminal.kill", "terminal.rm", "terminal.label", "terminal.keep", "terminal.read",
+	"terminal.send", "terminal.keys", "terminal.interrupt", "terminal.wait",
 	"doc.get", "doc.set", "machine.list", "templates.list",
+}
+
+// writeMethods are refused when the Server is read-only.
+var writeMethods = map[string]bool{
+	"terminal.run": true, "terminal.kill": true, "terminal.rm": true, "terminal.label": true,
+	"terminal.keep": true, "terminal.send": true, "terminal.keys": true, "terminal.interrupt": true,
+	"doc.set": true,
 }
 
 // features is what hello advertises. automatic_input: AUTOMATIC_INPUT (kind
@@ -31,22 +39,26 @@ var features = []string{"framed", "attach", "events", "status", "automatic_input
 
 func init() {
 	methods = map[string]handler{
-		"hello":            hello,
-		"server.status":    serverStatus,
-		"events.subscribe": eventsSubscribe,
-		"terminal.list":    terminalList,
-		"terminal.get":     terminalGet,
-		"terminal.attach":  terminalAttach,
-		"terminal.run":     terminalRun,
-		"terminal.kill":    terminalKill,
-		"terminal.rm":      terminalRm,
-		"terminal.label":   terminalLabel,
-		"terminal.keep":    terminalKeep,
-		"terminal.read":    terminalRead,
-		"doc.get":          docGet,
-		"doc.set":          docSet,
-		"machine.list":     machineList,
-		"templates.list":   templatesList,
+		"hello":              hello,
+		"server.status":      serverStatus,
+		"events.subscribe":   eventsSubscribe,
+		"terminal.list":      terminalList,
+		"terminal.get":       terminalGet,
+		"terminal.attach":    terminalAttach,
+		"terminal.run":       terminalRun,
+		"terminal.kill":      terminalKill,
+		"terminal.rm":        terminalRm,
+		"terminal.label":     terminalLabel,
+		"terminal.keep":      terminalKeep,
+		"terminal.read":      terminalRead,
+		"terminal.send":      terminalSend,
+		"terminal.keys":      terminalKeys,
+		"terminal.interrupt": terminalInterrupt,
+		"terminal.wait":      terminalWait,
+		"doc.get":            docGet,
+		"doc.set":            docSet,
+		"machine.list":       machineList,
+		"templates.list":     templatesList,
 	}
 }
 
@@ -338,6 +350,11 @@ func terminalRun(c *conn, params json.RawMessage) (any, func(), *rpcError) {
 	}
 	if !filepath.IsAbs(cwd) {
 		return nil, nil, invalidParams("cwd must be absolute")
+	}
+	if c.s.AllowRun != nil && !c.s.AllowRun(argv[0]) {
+		e := newError("forbidden", "agentd does not allow starting "+filepath.Base(argv[0])+" over hc")
+		e.Data.Hint = "add it to [herdr] allow_run in agentd's config.toml"
+		return nil, nil, e
 	}
 	labels := map[string]string{}
 	for k, v := range p.Labels {

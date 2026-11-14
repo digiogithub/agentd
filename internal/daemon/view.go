@@ -74,12 +74,14 @@ type viewState struct {
 	nextWake time.Duration
 
 	// Last values published on the event bus (publishChangesLocked).
-	pubInit   bool
-	pubStatus string
-	pubAtt    bool
-	pubInput  string
-	pubRev    uint64
-	turn      uint64 // times the published status left working
+	pubInit    bool
+	pubStatus  string
+	pubAtt     bool
+	pubInput   string
+	pubRev     uint64
+	turn       uint64                 // times the published status left working
+	prog       screen.ProgramStatuses // last OSC 7501 reports seen
+	pubProgGen uint64
 
 	// Menu instances for op act (act.go). menuCtx is the screen-context hash
 	// of the menu (screen.MenuContext), instance the identity published by
@@ -186,6 +188,14 @@ func (v *viewState) refreshLocked(now time.Time) {
 		promptMatch = p.PromptMatches(scr)
 	}
 	sr := screen.Classify(snap, v.reg, v.opts, statusInput(p, v.rules, now, promptMatch))
+	// A program that reports its status (OSC 7501) is believed over the
+	// screen heuristics, also while starting (an exit stays an exit).
+	v.prog = sess.ProgramStatus()
+	if v.prog.Root != nil && sr.Status != screen.StatusExited {
+		sr.Status = screen.StatusFromProgram(v.prog.Root.State)
+		sr.Reason = "reported:" + v.prog.Root.State
+		sr.Confidence = 1
+	}
 	v.att = screen.Next(v.att, sr)
 
 	view := proto.View{
@@ -431,10 +441,21 @@ func (v *viewState) refreshAfterAck() {
 // the baseline: it publishes the initial status and revision only.
 func (v *viewState) publishChangesLocked() {
 	cur, bus := v.cur, v.srv
+	if v.prog.Gen != v.pubProgGen {
+		root, recs := programStatus(v.prog)
+		bus.publish(proto.EvStatusReported, v.name, proto.ProgramStatusData{Status: root, Records: recs, Reported: v.prog.Reported})
+		v.pubProgGen = v.prog.Gen
+	}
 	if cur.Status != v.pubStatus {
 		// A turn ends each time the published status leaves working.
+		now := time.Now()
+		if cur.Status == "working" {
+			v.e.turnStarted(now)
+		}
 		if v.pubStatus == "working" {
 			v.turn++
+			rec := v.e.turnEnded(v.turn, cur.Status, v.preview, now)
+			defer bus.publish(proto.EvTurnCompleted, v.name, rec) // after status.changed
 		}
 		bus.publish(proto.EvStatusChanged, v.name, proto.StatusChangedData{
 			From: v.pubStatus, Status: cur.Status, Reason: cur.StatusReason,

@@ -178,6 +178,7 @@ loop:
 		case proto.FrameData:
 			input, reply := splitTermReplies(f.Payload)
 			if len(input) > 0 {
+				e.noteInput(OriginHuman, isStopInput(input))
 				e.activate(c)
 				if !in.push(input) {
 					s.Log.Debug("attach input dropped (child not reading)", "name", a.Name, "bytes", len(input))

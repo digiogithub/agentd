@@ -13,6 +13,7 @@ import (
 
 	"github.com/digiogithub/agentd/internal/config"
 	"github.com/digiogithub/agentd/internal/proto"
+	"github.com/digiogithub/agentd/internal/screen"
 )
 
 // Session labels and the document store: generic metadata clients keep in the
@@ -242,4 +243,24 @@ func (s *Server) docSet(who caller, a proto.DocSetArgs) (proto.DocSetResult, err
 	}
 	s.publish(proto.EvDocChanged, "", proto.DocChangedData{Name: a.Name, Version: next.Version})
 	return proto.DocSetResult{Version: next.Version}, nil
+}
+
+// programStatus converts a session's OSC 7501 reports to wire types.
+func programStatus(p screen.ProgramStatuses) (*proto.ProgramStatus, map[string]proto.ProgramStatus) {
+	conv := func(st screen.ProgramStatus) proto.ProgramStatus {
+		return proto.ProgramStatus{State: st.State, Kind: st.Kind, Progress: st.Progress, App: st.App, Title: st.Title, Msg: st.Msg}
+	}
+	var root *proto.ProgramStatus
+	if p.Root != nil {
+		r := conv(*p.Root)
+		root = &r
+	}
+	var recs map[string]proto.ProgramStatus
+	if len(p.Records) > 0 {
+		recs = make(map[string]proto.ProgramStatus, len(p.Records))
+		for id, st := range p.Records {
+			recs[id] = conv(st)
+		}
+	}
+	return root, recs
 }

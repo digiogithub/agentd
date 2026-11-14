@@ -42,6 +42,9 @@ type ActArgs struct {
 	Epoch string `json:"epoch,omitempty"`
 	// Keys are abstract key names (action keys), at most MaxActKeys.
 	Keys []string `json:"keys,omitempty"`
+	// Client is the caller's self-declared client name ("hc", "cli"...), for
+	// the audit log only: never trusted for permissions.
+	Client string `json:"client,omitempty"`
 	// Force skips the status preconditions (and the recent-keystroke check).
 	// It never skips a pending human draft (except for interrupt/cancel),
 	// paste verification, option re-verification or permissions.

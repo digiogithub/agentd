@@ -258,7 +258,16 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   `Server.MaxPending` (4 MiB) behind gets a repaint (daemon stream reopened, its redraw = CAN + screen) instead of
   the backlog. Results are tested against the vendored `internal/hcompat/testdata/herdr-core-released.openrpc.json`
   (Apache-2.0, `testdata/NOTICE`). The translator connects to the daemon as the calling process, so identity rules
-  apply unchanged (inside a session, `doc_set` is refused).
+  apply unchanged (inside a session, `doc_set` is refused). Driving: `terminal.send` = act prompt (forced only
+  for the status check when the program is working or has no status; a `blocked` program needs `force`;
+  `if` mismatch = `status_mismatch`; busy (draft, recent keystrokes) is retried up to 60 s; result
+  `{turn, status, started, wait?}`), `terminal.keys` = act keys (hc names lowercased, `+` → `-`, aliases
+  `escape return pageup pagedown backtab bs del ins`), `terminal.interrupt` = act interrupt (forced; outcome
+  stopped/exited/still_working), `terminal.wait {terminal, timeout}` (until not working or exit; no
+  `children`/`output`: invalid). Status: a program that reports OSC 7501 is shown with its exact words and
+  records (`status.reported`), others with the heuristic mapping. Config `[herdr]` (`internal/config/herdr.go`):
+  `enabled` (default true; false = `hc connect` refuses), `read_only` (write methods `forbidden`, attaches are
+  observers), `allow_run` (argv[0] base names/globs `terminal.run` may start; empty = any).
 - **HTTP gateway** (frozen 2026-11-14: kept for possible future use, no new features; the Flutter app was removed) (`agentd serve [--listen addr] [--config path] [--no-autostart] [--log-level l]`, design:
   `docs/design/api/http-api.md`): a separate foreground process (logs to stderr, exit non-zero on config
   error) that talks to the daemon over the unix socket and stops on SIGINT/SIGTERM without touching the
@@ -361,6 +370,21 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   that misses it is dropped.
 - **Session logs**: `logs/<session>.log` is capped at config `[run] log_max_mb` (default 50, 0 = no cap)
   with a single rotation to `<session>.log.1`.
+- **Program status (OSC 7501)** (`screen.ParseOSC7501`, `screen.ProgramStatuses`, session handler in
+  `snapshot.go`): `ESC ] 7501 ; state=<idle|working|done|blocked|error|clear>:id=:kind=<permission|question|auth>:progress=0..100:app=:title=<b64>:msg=<b64> ST`
+  (herdr-core's Program Status Protocol). A report replaces its record (root = no id; at most 256 records);
+  `clear` removes the record and ids `<id>.*` (no id: everything). Bad optional fields are dropped. Once a root
+  record exists the view status follows it, overriding the heuristics also while starting (working → working,
+  blocked → waiting, idle/done/error → idle, reason `reported:<state>`; exited stays exited); `SessionInfo`
+  carries `program_status`, `program_records`, `reported`; the view watcher publishes `status.reported
+  {status, records, reported}` before `status.changed`. Delivery idle detection is unchanged.
+- **Turn records** (`internal/daemon/turns.go`): each time the published status leaves `working` the session
+  records `{turn, outcome, origin, status, message, started_at, ended_at}` (last 100, memory only): outcome
+  `completed`, `aborted` (a stop key during the turn and the end within 15 s: interrupt/cancel act, act keys with
+  `ctrl-c`/`esc`, a human Ctrl-C or lone Esc) or `exited`; origin = the last input at most 60 s before it went
+  working (or within 5 s after): `human` (attach keystrokes), `act`, `mail` (delivery), else `program`; message =
+  the view preview. Op `turns {name}` (view visibility rules), event `turn.completed` (after `status.changed`),
+  CLI `agentd turns NAME [--json]`.
 - **Idle detection** (per harness profile, configurable): idle ⇔ no PTY output for `idle_ms`
   (default 1500) AND (no `prompt_regex` configured OR it matches the current screen text) AND no
   human keystroke from any attached client (or key written by an `act`: `Session.LastInput`) for
@@ -499,7 +523,7 @@ optimistic: a `version` other than the current one is `conflict`; `null` deletes
 names `[A-Za-z0-9._-]{1,64}`, value <=1 MiB of JSON (`daemon.MaxDocBytes`); humans only, sessions may read; stored
 compacted in `docs.json`, atomic rename; a broken file is renamed `.bad` and the store starts empty; publishes
 `doc.changed {name, version}` with no session, so session subscribers never see it),
-`peers`, `whoami`, `attach {name, cols, rows}`, `shutdown`. Every request may carry
+`turns {name}` (→ `{turns[]}`, see "Turn records"), `peers`, `whoami`, `attach {name, cols, rows, observe?, passive?, history?}`, `shutdown`. Every request may carry
 `"auth": {"id", "token"}` (filled by `internal/client` from `AGENTD_ID` / `AGENTD_TOKEN`).
 
 MCP tools (`agentd mcp`, identity resolved by the daemon, see "Identity"): `agentd_peers`,
@@ -557,11 +581,12 @@ Types into agent terminals: when in doubt it refuses with a coded error instead 
   future revision is `conflict` with `data = {revision, view}` and nothing is sent (prompt: checked in the
   inject guard, before the paste). `force` does not override it.
 - **keys** `{keys[]}`: abstract names only (`enter esc tab shift-tab up down left right home end pgup
-  pgdown backspace delete ctrl-c ctrl-d ctrl-l space y n 0-9`), 1..32 keys, 30 ms apart; an unknown
+  pgdown insert backspace delete space`, `a`-`z`, `0`-`9`, `ctrl-a`..`ctrl-y` (no `ctrl-z`: job control),
+  `alt-<a-z|0-9>`, `f1`-`f12`), 1..32 keys, 30 ms apart; an unknown
   name (raw bytes included) is `invalid` before anything is written. `enter` = profile `submit`;
   cursor keys use SS3 when the session is in DECCKM mode. Refused with `busy` on a pending draft.
   `enter` with no menu on screen, an empty input line and a ghost suggestion visible, reached before any
-  key that types text (`y n space 0-9`), is `not_ready` (the harness would submit the suggestion; `force`
+  key that types text (letters, digits, `space`), is `not_ready` (the harness would submit the suggestion; `force`
   does not override). Keys containing `ctrl-c` / `ctrl-d` get the interrupt status guard (working or
   waiting, else `not_ready`; `force` overrides).
 - **interrupt** / **cancel**: profile keys `interrupt_keys` (default `["ctrl-c"]`; claude and codex
@@ -577,7 +602,8 @@ Types into agent terminals: when in doubt it refuses with a coded error instead 
 - **Profile key** `menu_digit_action = "select" | "move"` (config default `move`; built-in `claude` and
   `codex` = `select`, both to confirm against the real TUIs, plan F8): see choose.
 - **Audit**: every act logs `act` at info to `daemon.log` (session, action, caller, via, force, option
-  id/label, key names, outcome code); prompt text is never logged (only its length).
+  id/label, key names, outcome code, and `client` when the request names one: `ActArgs.Client`, self-declared,
+  audit only; the hc layer sends `hc`); prompt text is never logged (only its length).
 
 ### Semantic view (op `view`)
 
@@ -617,10 +643,11 @@ for the exit publisher),
 `working`, also `SessionInfo.turn`), `view.changed` `{revision}` (no content:
 call `view`), `input.changed` `{state}`, `attention.changed` `{attention, reason}`, `mail.queued` /
 `mail.delivered` / `mail.read` `{id, from, to}` (never the body; `session` = the recipient when it is a
-session), `session.labels` `{labels}`, `doc.changed` `{name, version}` (no `session`), `resync` `{reason: overflow|since_seq_too_old|epoch_mismatch}`, `heartbeat` (every 15 s,
+session), `session.labels` `{labels}`, `doc.changed` `{name, version}` (no `session`), `status.reported`
+`{status, records, reported}` (OSC 7501), `turn.completed` (a turn record), `resync` `{reason: overflow|since_seq_too_old|epoch_mismatch}`, `heartbeat` (every 15 s,
 `Server.HeartbeatInterval`; `heartbeat_ms` min 1000) and `bye` (daemon shutdown, sent before connections
 are closed). `kinds` filters by exact kind or prefix (`session`, `status`, `view`, `input`, `attention`,
-`mail`, `doc`); control kinds always pass.
+`mail`, `doc`, `turn`); control kinds always pass.
 - The bus keeps a 1024-event replay ring. `since_seq` requires `epoch` (`invalid` otherwise); inside the
   ring (same `epoch`) it replays the missed events, then goes live; outside it, or with another `epoch`,
   the stream starts with `resync`.

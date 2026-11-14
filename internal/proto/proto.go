@@ -43,6 +43,7 @@ const (
 	OpLabel     = "label"
 	OpDocGet    = "doc_get"
 	OpDocSet    = "doc_set"
+	OpTurns     = "turns"
 )
 
 // MaxLineSize bounds one JSON request or response line.
@@ -442,6 +443,48 @@ type SessionInfo struct {
 	// turn of the agent). Labels are the session's key=value tags.
 	Turn   uint64            `json:"turn,omitempty"`
 	Labels map[string]string `json:"labels,omitempty"`
+	// Program* are the program's own OSC 7501 status reports (the root
+	// record, nil when never sent or cleared; the other records by id) and
+	// whether it ever reported. A reported root state overrides Status.
+	ProgramStatus  *ProgramStatus           `json:"program_status,omitempty"`
+	ProgramRecords map[string]ProgramStatus `json:"program_records,omitempty"`
+	Reported       bool                     `json:"reported,omitempty"`
+}
+
+// TurnRecord is one finished turn of a session (op turns, event
+// turn.completed): Outcome completed | aborted (ended within 15 s of a stop
+// key) | exited; Origin human | act | mail | program (who wrote last before
+// it started); Message the last transcript line; Status the status it ended on.
+type TurnRecord struct {
+	Turn      uint64    `json:"turn"`
+	Outcome   string    `json:"outcome"`
+	Origin    string    `json:"origin"`
+	Status    string    `json:"status"`
+	Message   string    `json:"message,omitempty"`
+	StartedAt time.Time `json:"started_at,omitzero"`
+	EndedAt   time.Time `json:"ended_at"`
+}
+
+// TurnsResult answers op turns, oldest first (at most 100).
+type TurnsResult struct {
+	Turns []TurnRecord `json:"turns"`
+}
+
+// ProgramStatus is one OSC 7501 status record, as the program sent it.
+type ProgramStatus struct {
+	State    string `json:"state"`
+	Kind     string `json:"kind,omitempty"`
+	Progress *int   `json:"progress,omitempty"`
+	App      string `json:"app,omitempty"`
+	Title    string `json:"title,omitempty"`
+	Msg      string `json:"msg,omitempty"`
+}
+
+// ProgramStatusData is the data of status.reported: every record now.
+type ProgramStatusData struct {
+	Status   *ProgramStatus           `json:"status"`
+	Records  map[string]ProgramStatus `json:"records"`
+	Reported bool                     `json:"reported"`
 }
 
 // LabelArgs merges labels into a session's labels (op label); an empty
@@ -785,6 +828,8 @@ const (
 	EvMailRead         = "mail.read"
 	EvSessionLabels    = "session.labels"
 	EvDocChanged       = "doc.changed"
+	EvStatusReported   = "status.reported"
+	EvTurnCompleted    = "turn.completed"
 	EvResync           = "resync"
 	EvHeartbeat        = "heartbeat"
 	EvBye              = "bye"

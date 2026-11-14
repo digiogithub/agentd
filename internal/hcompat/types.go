@@ -16,9 +16,34 @@ type CoreInfo struct {
 
 // Status is one hc status record (the OSC 7501 root record in herdr-core).
 type Status struct {
-	State string `json:"state"`
-	Kind  string `json:"kind,omitempty"`
-	App   string `json:"app,omitempty"`
+	State    string `json:"state"`
+	Kind     string `json:"kind,omitempty"`
+	Progress *int   `json:"progress,omitempty"`
+	App      string `json:"app,omitempty"`
+	Title    string `json:"title,omitempty"`
+	Msg      string `json:"msg,omitempty"`
+}
+
+func fromProgram(p proto.ProgramStatus) Status {
+	return Status{State: p.State, Kind: p.Kind, Progress: p.Progress, App: p.App, Title: p.Title, Msg: p.Msg}
+}
+
+// statusOf is a session's hc status: what the program reported over OSC 7501
+// when it ever did (exact words, like herdr-core), else agentd's heuristic.
+func statusOf(si proto.SessionInfo) (st *Status, records map[string]Status, reported bool) {
+	records = map[string]Status{}
+	if si.Reported {
+		for id, r := range si.ProgramRecords {
+			records[id] = fromProgram(r)
+		}
+		if si.ProgramStatus != nil {
+			s := fromProgram(*si.ProgramStatus)
+			st = &s
+		}
+		return st, records, true
+	}
+	st = mapStatus(si)
+	return st, records, st != nil
 }
 
 // Terminal is the hc terminal record (schema Terminal).

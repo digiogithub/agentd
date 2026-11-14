@@ -52,7 +52,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(
 		daemonCmd(), runCmd(), lsCmd(), attachCmd(), dumpCmd(), viewCmd(), eventsCmd(), typeCmd(), actCmd(), killCmd(), rmCmd(),
 		sendCmd(), inboxCmd(), readCmd(), replyCmd(), peersCmd(), aliasesCmd(), shutdownCmd(),
-		versionCmd(), mcpCmd(), whoamiCmd(), purgeCmd(), serveCmd(), hcCmd(),
+		versionCmd(), mcpCmd(), whoamiCmd(), purgeCmd(), serveCmd(), hcCmd(), turnsCmd(),
 	)
 	return root
 }

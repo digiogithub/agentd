@@ -211,6 +211,9 @@ func (s *Server) actOp(ctx context.Context, who caller, a proto.ActArgs) (res an
 		case proto.ActPrompt:
 			attrs = append(attrs, "text_len", len(a.Text))
 		}
+		if a.Client != "" {
+			attrs = append(attrs, "client", a.Client)
+		}
 		if err != nil {
 			attrs = append(attrs, "outcome", proto.CodeOf(classifyError(err)))
 		} else {
@@ -222,6 +225,9 @@ func (s *Server) actOp(ctx context.Context, who caller, a proto.ActArgs) (res an
 		return nil, s.conflict(e, who, "act: epoch %q is not this daemon's (%q): the daemon restarted; take a fresh view", a.Epoch, s.epoch)
 	}
 
+	stop := a.Action == proto.ActInterrupt || a.Action == proto.ActCancel ||
+		slices.Contains(a.Keys, "ctrl-c") || slices.Contains(a.Keys, "esc")
+	e.noteInput(OriginAct, stop)
 	switch a.Action {
 	case proto.ActPrompt:
 		return s.actPrompt(ctx, e, who, a)
@@ -462,8 +468,16 @@ func (s *Server) actPrompt(ctx context.Context, e *entry, who caller, a proto.Ac
 
 // inputKeys are keys that put text into the input line (and so erase a ghost
 // suggestion) before a following Enter.
-var inputKeys = map[string]bool{"y": true, "n": true, "space": true,
-	"0": true, "1": true, "2": true, "3": true, "4": true, "5": true, "6": true, "7": true, "8": true, "9": true}
+var inputKeys = map[string]bool{"space": true}
+
+func init() {
+	for d := '0'; d <= '9'; d++ {
+		inputKeys[string(d)] = true
+	}
+	for c := 'a'; c <= 'z'; c++ {
+		inputKeys[string(c)] = true
+	}
+}
 
 func (s *Server) actKeys(ctx context.Context, e *entry, who caller, a proto.ActArgs) (any, error) {
 	names, result := a.Keys, "keys_sent"

@@ -226,6 +226,8 @@ type Config struct {
 	Mailbox MailboxConfig `toml:"mailbox"`
 	// API holds the HTTP gateway settings ([api], see api.go).
 	API APIConfig `toml:"api"`
+	// Herdr holds the Herdr client compatibility settings ([herdr]).
+	Herdr HerdrConfig `toml:"herdr"`
 
 	// Path is the file the config was loaded from ("" for defaults).
 	Path string `toml:"-"`
@@ -411,6 +413,9 @@ func (c *Config) init() error {
 		return err
 	}
 	if err := c.Mailbox.validate(); err != nil {
+		return err
+	}
+	if err := c.Herdr.validate(); err != nil {
 		return err
 	}
 	c.API.applyDefaults()

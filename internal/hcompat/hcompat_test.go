@@ -402,7 +402,7 @@ func TestAttachToFinishedAndUnknown(t *testing.T) {
 	if k := errKind(c.call("terminal.get", map[string]any{"terminal": "nope"})); k != "not_found" {
 		t.Fatalf("get unknown: kind %q", k)
 	}
-	if k := errKind(c.call("terminal.wait", map[string]any{})); k != "not_supported" {
+	if k := errKind(c.call("file.read", map[string]any{"path": "/etc/hostname"})); k != "not_supported" {
 		t.Fatalf("unimplemented method: kind %q", k)
 	}
 }

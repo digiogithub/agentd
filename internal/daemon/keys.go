@@ -48,7 +48,26 @@ var keyTable = map[string]keyDef{
 func init() {
 	for d := '0'; d <= '9'; d++ {
 		keyTable[string(d)] = keyDef{plain: string(d)}
+		keyTable["alt-"+string(d)] = keyDef{plain: "\x1b" + string(d), human: true}
 	}
+	for c := 'a'; c <= 'z'; c++ {
+		if _, ok := keyTable[string(c)]; !ok {
+			keyTable[string(c)] = keyDef{plain: string(c)}
+		}
+		// Ctrl-letter is a C0 control; only Ctrl-C (above) is draft-neutral.
+		// Ctrl-Z is left out: it suspends the child (job control).
+		if name := "ctrl-" + string(c); c != 'z' && keyTable[name] == (keyDef{}) {
+			keyTable[name] = keyDef{plain: string(rune(c - 'a' + 1))}
+		}
+		keyTable["alt-"+string(c)] = keyDef{plain: "\x1b" + string(c), human: true}
+	}
+	// xterm function keys (F1-F4 SS3, F5-F12 CSI ~).
+	fkeys := []string{"\x1bOP", "\x1bOQ", "\x1bOR", "\x1bOS", "\x1b[15~", "\x1b[17~", "\x1b[18~", "\x1b[19~",
+		"\x1b[20~", "\x1b[21~", "\x1b[23~", "\x1b[24~"}
+	for i, seq := range fkeys {
+		keyTable[fmt.Sprintf("f%d", i+1)] = keyDef{plain: seq, human: true}
+	}
+	keyTable["insert"] = keyDef{plain: "\x1b[2~", human: true}
 }
 
 // KeyNames lists the accepted key names, sorted.

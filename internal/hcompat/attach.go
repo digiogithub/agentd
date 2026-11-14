@@ -49,7 +49,7 @@ func terminalAttach(c *conn, params json.RawMessage) (any, func(), *rpcError) {
 	if cols == 0 || rows == 0 {
 		cols, rows = si.Cols, si.Rows
 	}
-	a := &attachment{c: c, name: si.Name, observe: p.Observe, cols: cols, rows: rows, max: c.s.MaxPending}
+	a := &attachment{c: c, name: si.Name, observe: p.Observe || c.s.ReadOnly, cols: cols, rows: rows, max: c.s.MaxPending}
 	a.cond = sync.NewCond(&a.mu)
 	dc, err := a.dial(p.Resumed, max(p.History, 0))
 	if err != nil {

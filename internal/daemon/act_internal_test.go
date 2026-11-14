@@ -34,7 +34,7 @@ func TestResolveKeysTable(t *testing.T) {
 		t.Errorf("enter with custom submit = %q", ks[0].bytes)
 	}
 	// Printable keys are never marked as human input (no phantom draft).
-	for _, n := range []string{"y", "n", "1", "space", "backspace", "tab"} {
+	for _, n := range []string{"y", "n", "1", "q", "space", "backspace", "tab", "ctrl-a"} {
 		if ks, _ := resolveKeys([]string{n}, false, ""); ks[0].human {
 			t.Errorf("%s marked human", n)
 		}
@@ -44,8 +44,18 @@ func TestResolveKeysTable(t *testing.T) {
 			t.Errorf("resolveKeys(%q) accepted", bad)
 		}
 	}
-	if !slices.IsSorted(KeyNames()) || len(KeyNames()) != 20+10 {
-		t.Errorf("KeyNames = %v", KeyNames())
+	if !slices.IsSorted(KeyNames()) {
+		t.Errorf("KeyNames not sorted: %v", KeyNames())
+	}
+	for _, want := range []string{"a", "z", "ctrl-a", "ctrl-x", "alt-x", "alt-1", "f1", "f12", "insert"} {
+		if !slices.Contains(KeyNames(), want) {
+			t.Errorf("missing key %s", want)
+		}
+	}
+	for n, want := range map[string]string{"ctrl-a": "\x01", "alt-x": "\x1bx", "f1": "\x1bOP", "f5": "\x1b[15~", "q": "q"} {
+		if ks, err := resolveKeys([]string{n}, false, ""); err != nil || string(ks[0].bytes) != want {
+			t.Errorf("%s = %v, %v", n, ks, err)
+		}
 	}
 }
 

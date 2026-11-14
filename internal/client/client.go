@@ -428,3 +428,10 @@ func (c *Client) DocSet(name string, value []byte, version uint64) (uint64, erro
 	err := c.Call(proto.OpDocSet, proto.DocSetArgs{Name: name, Value: value, Version: version}, &r)
 	return r.Version, err
 }
+
+// Turns returns a session's finished turns, oldest first.
+func (c *Client) Turns(name string) ([]proto.TurnRecord, error) {
+	var r proto.TurnsResult
+	err := c.Call(proto.OpTurns, proto.NameArgs{Name: name}, &r)
+	return r.Turns, err
+}

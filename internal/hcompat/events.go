@@ -268,6 +268,22 @@ func (sub *subscription) translate(ev proto.Event) bool {
 			sub.event("removed", ev.Session, map[string]any{})
 		}
 		sub.mu.Unlock()
+	case proto.EvStatusReported:
+		var d proto.ProgramStatusData
+		if json.Unmarshal(ev.Data, &d) != nil {
+			return true
+		}
+		sub.mu.Lock()
+		si := sub.known[ev.Session]
+		si.ProgramStatus, si.ProgramRecords, si.Reported = d.Status, d.Records, d.Reported
+		if si.Name != "" {
+			sub.known[ev.Session] = si
+		}
+		if sub.visible[ev.Session] {
+			st, recs, rep := statusOf(si)
+			sub.event("status", ev.Session, map[string]any{"status": st, "records": recs, "reported": rep})
+		}
+		sub.mu.Unlock()
 	case proto.EvSessionLabels:
 		var d proto.LabelsData
 		if json.Unmarshal(ev.Data, &d) != nil {
@@ -288,8 +304,12 @@ func (sub *subscription) translate(ev proto.Event) bool {
 			sub.known[ev.Session] = si
 		}
 		if sub.visible[ev.Session] && d.Status != "exited" {
-			st := mapStatus(proto.SessionInfo{Status: d.Status, Profile: si.Profile})
-			sub.event("status", ev.Session, map[string]any{"status": st, "records": map[string]any{}, "reported": st != nil})
+			st, _, _ := statusOf(si)
+			if !si.Reported {
+				// Programs that report get their exact words from
+				// status.reported instead.
+				sub.event("status", ev.Session, map[string]any{"status": st, "records": map[string]any{}, "reported": st != nil})
+			}
 			if d.From == "working" && d.Status != "working" {
 				word := ""
 				if st != nil {

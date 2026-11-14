@@ -100,15 +100,24 @@ func hcConnect(stdin io.Reader, stdout io.Writer) error {
 		return err
 	}
 	_ = probe.Close()
+	cfg, err := config.LoadDefault()
+	if err != nil {
+		return err
+	}
+	if !cfg.Herdr.On() {
+		return fmt.Errorf("the herdr-core protocol is disabled ([herdr] enabled = false in %s)", cfg.Path)
+	}
 	id, err := hcCoreID()
 	if err != nil {
 		return err
 	}
 	host, _ := os.Hostname()
 	srv := &hcompat.Server{
-		Dial:    func() (*client.Client, error) { return client.Dial(sock) },
-		Core:    hcompat.CoreInfo{ID: id, Name: host},
-		EnvBase: os.Environ(),
+		Dial:     func() (*client.Client, error) { return client.Dial(sock) },
+		Core:     hcompat.CoreInfo{ID: id, Name: host},
+		EnvBase:  os.Environ(),
+		ReadOnly: cfg.Herdr.ReadOnly,
+		AllowRun: cfg.Herdr.RunAllowed,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()

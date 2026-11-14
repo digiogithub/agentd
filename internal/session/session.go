@@ -142,7 +142,8 @@ type Session struct {
 	ring     *ring
 	cols     uint16
 	rows     uint16
-	decModes map[int]bool // DEC private modes the child set/reset (via callbacks)
+	decModes map[int]bool           // DEC private modes the child set/reset (via callbacks)
+	prog     screen.ProgramStatuses // OSC 7501 reports (snapshot.go)
 	// Synchronized output (DEC 2026), guarded by outMu: syncSince is when the
 	// open update began (zero = none open), syncFrames counts completed ones.
 	// Updated in order by trackMode, so a set and reset inside one PTY chunk

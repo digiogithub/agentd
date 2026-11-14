@@ -270,6 +270,16 @@ func (s *Server) dispatch(ctx context.Context, req proto.Request, peer peerInfo)
 			return nil, err
 		}
 		return s.docSet(who, a)
+	case proto.OpTurns:
+		var a proto.NameArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.turnsOp(who, a)
 	case proto.OpPeers:
 		return s.peers(), nil
 	case proto.OpWhoami:
@@ -419,6 +429,10 @@ func (s *Server) info(ctx context.Context, e *entry) proto.SessionInfo {
 		Attached:   e.attachedCount(),
 		Title:      sess.Title(),
 		Labels:     e.labelsCopy(),
+	}
+	if ps := sess.ProgramStatus(); ps.Reported {
+		info.Reported = true
+		info.ProgramStatus, info.ProgramRecords = programStatus(ps)
 	}
 	info.Cols, info.Rows = sess.Size()
 	if code, ok := sess.ExitCode(); ok {

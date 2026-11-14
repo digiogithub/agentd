@@ -31,6 +31,13 @@ type Server struct {
 	// MaxPending is how far (bytes) an attach may fall behind before it gets
 	// a fresh repaint instead of the backlog (default MaxPending).
 	MaxPending int
+	// ReadOnly ([herdr] read_only): clients may list, read and watch;
+	// every method that types, starts, stops, labels or writes is refused
+	// and attaches are observers.
+	ReadOnly bool
+	// AllowRun ([herdr] allow_run) decides whether terminal.run may start a
+	// program (argv[0]); nil = any.
+	AllowRun func(program string) bool
 	// Log receives diagnostics (default: discard). Never terminal contents.
 	Log *slog.Logger
 
@@ -225,6 +232,11 @@ func (c *conn) call(req request) (any, func(), *rpcError) {
 		return nil, nil, &rpcError{Code: -32601, Message: "no method " + req.Method,
 			Data: errorData{Kind: "not_supported", Hint: "agentd implements part of the herdr-core API"}}
 	}
+	if c.s.ReadOnly && writeMethods[req.Method] {
+		e := newError("forbidden", req.Method+" is disabled: agentd serves hc read-only")
+		e.Data.Hint = "set [herdr] read_only = false in agentd's config.toml"
+		return nil, nil, e
+	}
 	params := req.Params
 	if len(params) == 0 || string(params) == "null" {
 		params = json.RawMessage("{}")
@@ -406,8 +418,7 @@ func (s *Server) record(si proto.SessionInfo) Terminal {
 			pid := si.Pid
 			t.Pid = &pid
 		}
-		t.Status = mapStatus(si)
-		t.Reported = t.Status != nil
+		t.Status, t.Records, t.Reported = statusOf(si)
 	}
 	return t
 }
