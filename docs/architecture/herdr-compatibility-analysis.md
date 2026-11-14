@@ -28,12 +28,20 @@ relative to each repository root.
    hc over stdio"**, plus optionally a unix socket at the hc path. System sshd keeps doing login, keys and
    encryption, exactly as herdr-core does (`docs/security.md` "Remote trust"). This replaces §5.3 of the
    initial spec (an agentd SSH server): it would add attack surface and no client would use it.
-3. **There is no official "Herdr Mobile" app.** All herdr docs versions say "Herdr works on your phone
-   without a mobile app or web dashboard. Install any SSH client" (`herdr/docs/next/website/src/content/docs/how-to-work.mdx:49`).
-   herdr-core and herdr-app contain no mobile client. The phone clients are third party:
+3. **Correction (2026-11-14): there IS an official Herdr mobile app** (iPhone, iPad, Android:
+   App Store id6828898364, Google Play `dev.herdr.app`; https://herdr.dev/mobile/). Its source is not in the
+   public herdrdev repositories, so its exact calls are not verified. The page states: "Your phone talks to
+   herdr-core on each machine over SSH", "no Herdr account and no server of ours in between", "Herdr TUI isn't
+   supported", terminals/agents appear with herdr-core alone while "Spaces appear only when the Herdr app also
+   runs on that machine" (i.e. it reads the `herdr-app` document), and status comes from OSC 7501. It most
+   likely uses the same hc generation 1 path as Desktop/Whip (SSH exec `herdr-core connect` or streamlocal to
+   the hc socket); confirm with a protocol capture (log the shim's stdin/stdout) before Phase 4. The older
+   herdr TUI docs ("works on your phone without a mobile app ... any SSH client",
+   `herdr/docs/next/website/src/content/docs/how-to-work.mdx:49`) predate it. Third-party phone clients:
    **Whip** (React Native, AGPL; speaks hc and the legacy TUI protocol over SSH), **0cv/herdr-mobile-relay**
    (host relay + PWA; can use hc), **HerdrGo** and **teasec4/herdr-mobile-app** (host bridges over the
-   legacy TUI socket API and the `herdr` CLI). Phase 4 of the spec should target Whip first.
+   legacy TUI socket API and the `herdr` CLI), **herdrup** (iOS/macOS, on a fork of the herdr TUI; see
+   `docs/architecture/herdrup-analysis.md`). Phase 4 targets the official app first, then Whip.
 4. **Two Herdr protocols exist; only one is worth implementing.** The Herdr TUI (`herdrdev/herdr`, v0.9.5)
    is standalone and has its own socket API (non-JSON-RPC, ~90 methods, workspace/tab/pane model) and a
    bincode binary terminal protocol (`PROTOCOL_VERSION = 22`, clients gate on 17..=22). herdr-core is the
