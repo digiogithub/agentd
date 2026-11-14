@@ -243,7 +243,9 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   to agentd (default `~/.local/share/agentd/hc/`; never replaces an existing file or foreign symlink). Invoked under
   those names: `--version` prints `hc 0.1.21` (`hcompat.CompatVersion`, plain x.y.z: Herdr Desktop parses it by
   `.`/`-` and needs >= 0.1.11), `connect [--session S]` speaks hc over stdio (session ignored), `machine ls --json`
-  prints `{"machines":[]}`, `update` and anything else exit 2 with `{"error":{message,hint}}` on stderr. Addresses
+  prints `{"machines":[]}`, `update` and anything else exit 2 with `{"error":{message,hint}}` on stderr. `AGENTD_HC_TRACE=<file>` appends a trace (CLI
+  invocations, calls with method/id/param names/outcome, stream closes; never values or screen bytes). `terminal.kill`
+  sends SIGHUP (closing a terminal; interactive shells ignore SIGTERM). Addresses
   are agentd session names; default labels `herdr.space` (project: part after `@`, else cwd base), `herdr.tab`
   (session name), `agentd.harness`. Status: working->working, waiting->blocked (kind question), idle->idle, others
   null (heuristic, a deviation from hc's OSC 7501). `hello` advertises only implemented methods; `server.status`

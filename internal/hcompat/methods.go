@@ -181,7 +181,9 @@ func terminalKill(c *conn, params json.RawMessage) (any, func(), *rpcError) {
 	}
 	defer cl.Close()
 	if si.State != "exited" {
-		if err := cl.Kill(si.Name, ""); err != nil {
+		// Like closing a terminal (herdr-core hangs up the program): an
+		// interactive shell ignores SIGTERM but not SIGHUP.
+		if err := cl.Kill(si.Name, "HUP"); err != nil {
 			return nil, nil, fromDaemon(err)
 		}
 	}

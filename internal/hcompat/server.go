@@ -6,8 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -40,6 +42,12 @@ type Server struct {
 	AllowRun func(program string) bool
 	// Log receives diagnostics (default: discard). Never terminal contents.
 	Log *slog.Logger
+	// Trace, when set, receives one line per call (method, id, param names,
+	// result or error kind, duration) and per stream close: what a client
+	// actually uses. Never parameter values or terminal bytes.
+	Trace io.Writer
+
+	traceMu sync.Mutex
 
 	started time.Time
 	once    sync.Once
@@ -227,6 +235,47 @@ func (c *conn) writeFrame(ch uint32, kind byte, payload []byte) {
 // call dispatches one request. after, when non-nil, runs once the reply is
 // on the wire (streams must not send frames before their attach reply).
 func (c *conn) call(req request) (any, func(), *rpcError) {
+	if c.s.Trace == nil {
+		return c.dispatch(req)
+	}
+	start := time.Now()
+	res, after, err := c.dispatch(req)
+	outcome := "ok"
+	if err != nil {
+		outcome = "error " + err.Data.Kind + ": " + err.Message
+	} else if m, ok := res.(map[string]any); ok {
+		if ch, ok := m["channel"]; ok {
+			outcome = fmt.Sprintf("ok channel=%v", ch)
+		}
+	}
+	c.s.tracef("call %s id=%s params=%v -> %s (%s)", req.Method, string(req.ID), paramNames(req.Params), outcome,
+		time.Since(start).Round(time.Millisecond))
+	return res, after, err
+}
+
+func (s *Server) tracef(format string, args ...any) {
+	if s.Trace == nil {
+		return
+	}
+	s.traceMu.Lock()
+	defer s.traceMu.Unlock()
+	fmt.Fprintf(s.Trace, time.Now().Format("15:04:05.000")+" "+format+"\n", args...)
+}
+
+func paramNames(p json.RawMessage) []string {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(p, &m) != nil {
+		return nil
+	}
+	names := make([]string, 0, len(m))
+	for k := range m {
+		names = append(names, k)
+	}
+	slices.Sort(names)
+	return names
+}
+
+func (c *conn) dispatch(req request) (any, func(), *rpcError) {
 	h, ok := methods[req.Method]
 	if !ok {
 		return nil, nil, &rpcError{Code: -32601, Message: "no method " + req.Method,
@@ -329,6 +378,7 @@ func (st *stream) close(reason any) {
 	if reason != nil {
 		payload, _ = json.Marshal(reason)
 	}
+	st.c.s.tracef("stream %d closed reason=%s", st.ch, payload)
 	if st.c.framed {
 		st.c.writeFrame(st.ch, KindClose, payload)
 	}

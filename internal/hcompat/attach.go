@@ -296,6 +296,7 @@ func (a *attachment) input(f Frame) {
 			_ = proto.WriteFrame(dc, proto.FrameResize, proto.ResizePayload(cols, rows))
 		}
 	case KindClose:
+		a.c.s.tracef("stream %d close from client", a.st.ch)
 		// Answer with an empty CLOSE before the daemon stream can end and
 		// report a reason.
 		a.st.close(nil)

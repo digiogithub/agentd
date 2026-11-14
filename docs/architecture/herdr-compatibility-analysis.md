@@ -201,6 +201,25 @@ keep, parent, notify, rm, reason, exit_code, signal, finished_ms, foreground, te
 - **Status**: reads `status.state` (`working|blocked|error|idle|done`) and `status.app`; "done/unseen" =
   `turn > labels["herdr.seen"]`.
 
+### 4.1b Captured against agentd (2026-11-14, `AGENTD_HC_TRACE`)
+
+- **Herdr Desktop 0.1.15** (Linux, `core` setting → agentd shim): `--version`, `connect`; `hello {framed}`,
+  `server.status`, `events.subscribe`, `doc.get/doc.set` (`herdr-app`), `terminal.run {argv cwd display env keep
+  labels on size}`, `terminal.attach {cols display history rows terminal}`, `terminal.label` (often, `herdr.seen`),
+  `terminal.get`/`terminal.keep` (adoption of a labelled session), `terminal.kill` on closing a terminal (needs
+  SIGHUP: an interactive bash ignores SIGTERM), `machine.list` every 2.5 s, bundled mods run
+  `herdr-core machine ls --json` every 15 s. No errors.
+- **Official Herdr mobile app** (Android, `dev.herdr.app`): password once to append its own ed25519 key
+  (`herdr-mobile`) to `~/.ssh/authorized_keys`, then public-key SSH exec of `herdr-core connect` (found at
+  `~/.local/bin/herdr-core` from a non-login shell; no `--version`, no streamlocal, no `server start`);
+  `hello {framed generation}`, `events.subscribe`, `doc.get {name}`, `terminal.label`, `terminal.attach {cols
+  display history observe resumed rows terminal}`. It types live on the attach stream (no `terminal.send` /
+  `keys` seen); after backgrounding it reconnects with a new SSH connection and `resumed`. Verified: listing,
+  live typing into a Pando agent, reconnect. No errors.
+- **"Herdr Mobile" (`dev.herdr.mobile`, third party, Expo)** is NOT the official app: it uploads
+  `~/.herdr-mobile-uploads/install-herdr.sh`, installs the Herdr **TUI** from herdr.dev and starts `herdr server`
+  (legacy protocol): incompatible with agentd, out of scope.
+
 ### 4.2 Whip (`kosumic/whip`, app AGPL-3.0+, `crates/herdr-protocol` MIT)
 - Own Rust SSH client on the phone (keys/password, known_hosts, jump hosts). No host software required.
 - Discovery script over SSH exec prints `whip-hc-endpoint-v1\0` + session, socket, installed flag, command

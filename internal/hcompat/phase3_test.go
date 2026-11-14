@@ -109,3 +109,17 @@ func TestReadOnlyAndAllowRun(t *testing.T) {
 	}
 	result(t, rw.call("terminal.run", map[string]any{"argv": []string{"sleep", "30"}, "cwd": t.TempDir()}))
 }
+
+// terminal.kill ends an interactive shell (it ignores SIGTERM): Desktop's
+// "close terminal".
+func TestKillEndsInteractiveShell(t *testing.T) {
+	sock := startDaemon(t)
+	runSession(t, sock, "sh@proj", "bash", "--norc", "-i")
+	testutil.WaitFor(t, 10*time.Second, func() bool { return sessionInfo(t, sock, "sh@proj").Pid > 0 }, "started", nil)
+	time.Sleep(300 * time.Millisecond)
+	c := newHCClient(t, sock)
+	c.helloFramed()
+	result(t, c.call("terminal.kill", map[string]any{"terminal": "sh@proj"}))
+	testutil.WaitFor(t, 10*time.Second, func() bool { return sessionInfo(t, sock, "sh@proj").State == "exited" },
+		"interactive bash ended by terminal.kill", nil)
+}

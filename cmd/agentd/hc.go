@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -67,6 +68,18 @@ func hcMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, string(b))
 		return 2
 	}
+	// With AGENTD_HC_TRACE, record every CLI invocation too (argument
+	// names only up to 6, to see what a client runs over SSH).
+	if p := os.Getenv("AGENTD_HC_TRACE"); p != "" {
+		if f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+			shown := args
+			if len(shown) > 6 {
+				shown = shown[:6]
+			}
+			fmt.Fprintf(f, "%s cli pid %d: %s %q\n", time.Now().Format("15:04:05.000"), os.Getpid(), filepath.Base(os.Args[0]), shown)
+			_ = f.Close()
+		}
+	}
 	if len(args) == 0 {
 		return fail("agentd's herdr-core shim needs a command", "supported: connect, --version, machine ls --json")
 	}
@@ -118,6 +131,17 @@ func hcConnect(stdin io.Reader, stdout io.Writer) error {
 		EnvBase:  os.Environ(),
 		ReadOnly: cfg.Herdr.ReadOnly,
 		AllowRun: cfg.Herdr.RunAllowed,
+	}
+	// AGENTD_HC_TRACE=<file>: append a trace of the calls a client makes
+	// (methods, ids, param names, outcomes; never values or screen bytes).
+	if p := os.Getenv("AGENTD_HC_TRACE"); p != "" {
+		f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		srv.Trace = f
+		fmt.Fprintf(f, "--- hc connect pid %d\n", os.Getpid())
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
