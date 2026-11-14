@@ -67,11 +67,14 @@ Backlog: gintrack project `AGED` (`docs/.pmngr`).
 
 ## Phase 7 — Herdr client compatibility (herdr-core protocol)
 Analysis: `docs/architecture/herdr-compatibility-analysis.md`. Plan: `docs/plans/agentd/herdr-compat_plan.md`.
-- [~] PoC: `internal/hcompat` + `herdr-core`/`hc` shim (`connect`), hello, events snapshot, attach, docs
-- [ ] Phase 1: daemon stable terminal ids, labels, document store, turn counter; real event translation, credit flow
-- [ ] Phase 2: interactive streaming (automatic input, focus, facts, history, repaint rule, reconnect)
-- [ ] Phase 3: run/send/keys/read/kill/label/keep, status mapping, OSC 7501, `[herdr]` config + audit
-- [ ] Phase 4: Whip (Android) over SSH, hc socket listener
+- [x] PoC: `internal/hcompat` + `herdr-core`/`hc` shim (`connect`), hello, events snapshot, attach, docs
+- [x] Phase 1: daemon labels, document store, turn counter; real event translation, credit flow
+- [x] Phase 2: interactive streaming (automatic input, focus, history, observe, passive/resumed, repaint)
+- [x] Phase 3: send/keys/interrupt/wait, OSC 7501 program status, turn records, `[herdr]` config + audit
+- [x] Phase 4: opt-in hc socket listener in the daemon (`[herdr] listen`) for Whip and relays, `server start/status/stop`
+- [x] Verified with Herdr Desktop 0.1.15 and the official Herdr mobile app (Android); `install-shim --local-bin`
+- [ ] Field test with Whip and the 0cv relay
+- [x] Mailbox work queues (`queue:<name>`, op `claim`) and conditional inbox (`since_digest`), from the herdrup analysis
 
 ## Later
 - [ ] Session persistence across daemon restarts (re-exec with fd passing, or at least log replay)
