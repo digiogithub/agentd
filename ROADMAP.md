@@ -1,6 +1,6 @@
 # Roadmap — agentd
 
-Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
+Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[-]` dropped.
 
 ## Phase 0 — Bootstrap
 - [x] Git repo, `go.mod` with pinned dependencies, `README.md`, `AGENTS.md`, `ROADMAP.md`
@@ -61,9 +61,17 @@ Plan: `docs/plans/api-gateway-plan.md` (decisions ADR-A01…A11, stories API-S01
       ops `view`, `act`, `subscribe`; fixed PTY size (API never resizes)
 - [ ] `agentd serve` HTTP gateway: REST + SSE, OpenAPI contract, loopback default
 - [ ] Device tokens, QR pairing, TLS / Tailscale, audit log, webhook notifications
-- [ ] Flutter app in `app/` (desktop Linux/macOS/Windows + Android): hosts, pairing, agent list,
-      session view, launch; validation with real harnesses (ADR-A18)
+- [-] Flutter app in `app/`: removed 2026-11-14 in favour of Herdr client compatibility (Phase 7).
+      The `agentd serve` gateway is frozen (kept, no new features) for possible future use.
 Backlog: gintrack project `AGED` (`docs/.pmngr`).
+
+## Phase 7 — Herdr client compatibility (herdr-core protocol)
+Analysis: `docs/architecture/herdr-compatibility-analysis.md`. Plan: `docs/plans/agentd/herdr-compat_plan.md`.
+- [~] PoC: `internal/hcompat` + `herdr-core`/`hc` shim (`connect`), hello, events snapshot, attach, docs
+- [ ] Phase 1: daemon stable terminal ids, labels, document store, turn counter; real event translation, credit flow
+- [ ] Phase 2: interactive streaming (automatic input, focus, facts, history, repaint rule, reconnect)
+- [ ] Phase 3: run/send/keys/read/kill/label/keep, status mapping, OSC 7501, `[herdr]` config + audit
+- [ ] Phase 4: Whip (Android) over SSH, hc socket listener
 
 ## Later
 - [ ] Session persistence across daemon restarts (re-exec with fd passing, or at least log replay)

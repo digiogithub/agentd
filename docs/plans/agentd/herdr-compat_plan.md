@@ -1,0 +1,30 @@
+# Plan: Herdr client compatibility (herdr-core protocol, generation 1)
+
+Analysis: `docs/architecture/herdr-compatibility-analysis.md`. Links: [[herdr-compatibility-analysis]],
+[[plans/api-gateway-plan]] (gateway frozen, not extended).
+
+Decisions (2026-11-14, user): remove the Flutter app (`app/`); freeze `agentd serve` (kept, no new
+features); start with the proof of concept below.
+
+## PoC (done 2026-11-14, Desktop GUI check pending: [[herdr-compat-poc]])
+
+Scope: Herdr Desktop, pointed at agentd's shim (settings `core` path), connects, lists agentd sessions
+and attaches to one.
+
+- `internal/hcompat` (depends on `client`, `proto`, stdlib):
+  - `wire.go`: 9-byte LE frames, kinds 0..6, 16 MiB cap.
+  - `server.go`: plain JSON-RPC lines until `hello {framed:true}`, then frames; channel-0 calls
+    concurrent; per-channel credit (256 KiB initial window).
+  - methods: `hello`, `server.status`, `events.subscribe` (ls snapshot + daemon subscribe translated:
+    created/finished/removed/status/turn), `terminal.list/get/attach/kill/read/run/label/keep`,
+    `doc.get/doc.set` (in-memory per connection), `machine.list` (empty), `templates.list` (empty).
+  - address = agentd session name (stable, no `/`); labels: `herdr.space` = project label, `herdr.tab`
+    = session name, overlay per connection.
+  - status mapping: working→working, waiting→blocked, idle→idle (done after a turn), exited→null.
+- `cmd/agentd`: argv[0] `herdr-core`/`hc` dispatch and `agentd hc ...`: `--version` (`hc 0.1.21`),
+  `connect [--session S]`, `machine ls --json`, `install-shim [--dir]` (symlinks, never overwrites).
+- Tests: protocol test drives `hcompat.Serve` over pipes like Desktop (hello line, frames, subscribe
+  snapshot, attach shows a `sh`/fakeagent session's output, input round trip, CLOSE on exit).
+
+## Phase 1..4
+See analysis §10. Phase 1 moves ids, labels, documents and turn into the daemon (generic ops).

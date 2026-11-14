@@ -172,29 +172,6 @@ not exist yet is **correct and useful**: it records a concept worth documenting 
   - Terminal QR for `agentd serve pair`: `github.com/skip2/go-qrcode` (pure Go, MIT, no transitive deps; used only in `cmd/agentd/pair.go` to render the pairing URL with half-block characters; a hand-written QR encoder would be riskier than this small, stable library)
   - OpenAPI contract tests (test-only, never linked into the binary): `github.com/pb33f/libopenapi` + `github.com/pb33f/libopenapi-validator` (OpenAPI 3.1 parser and request/response/schema validator; used only by `internal/httpapi/contract_*_test.go` and `openapi_lint_test.go` to fail CI when handlers drift from `docs/api/openapi.yaml`; chosen over kin-openapi because the spec is 3.1 (`const`, `examples`, `if/then`, `type` arrays) which kin-openapi does not fully support; no Node/Java tooling needed)
 
-### Flutter app (`app/`)
-
-- The client app (package `agentd_app`, ADR-A18) lives in `app/`; Go ignores it. Flutter **3.50.0**
-  (Dart 3.14) at `/apps/flutter`: `export PATH=/apps/flutter/bin:$PATH` (Dart included). CI pins the
-  same version (`.github/workflows/app.yml`). Android builds need `ANDROID_HOME=/apps/android-sdk`.
-- Verify with `cd app && dart format --output=none --set-exit-if-changed . && flutter analyze &&
-  flutter test && flutter build linux --debug`.
-- `app/lib/api/` is pure Dart (no Flutter imports); layers are `ui → state → repositories → api`
-  (`docs/design/api/frontend-app.md`). `app/test/api/contract_test.dart` reads
-  `docs/api/openapi.yaml`: a changed route or schema property fails it until the client/models follow.
-- `app/pubspec.lock` is committed (application).
-- App releases are separate from the Go release: `app-v*` tags run `.github/workflows/app-release.yml`
-  (draft release; `workflow_dispatch` = unsigned dry run). Installer configs live in `packaging/app/`,
-  Linux desktop/AppStream metadata in `app/linux/packaging/` (app id `dev.digio.agentd_app`). Android
-  release signing reads `ANDROID_KEY*` env or gitignored `android/key.properties` (never commit keys).
-  Details and required secrets: `docs/release.md` "Client app".
-- The app drives agents' terminals: every `act` carries the `revision` + `epoch` of the view shown at tap
-  time (confirm dialogs capture it before opening), there is no automatic retry, only an explicit prompt
-  Retry (same key, same text, <= 30 s), and `hostClientProvider` is keyed by (id, base URL, pin, device id)
-  so list changes (rename, `lastOk`) never rebuild the client. Details and the per-item list:
-  `docs/changes/app-review-fixes.md`. Android: `allowBackup=false` + data extraction rules exclude
-  everything; `10.0.2.2` counts as loopback only in debug builds.
-
 ## Rules
 
 - Docs, code comments, commit messages and identifiers in **English**.
@@ -241,7 +218,8 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
 | `internal/apitoken` | Device-token store for the gateway: `agd_<id>_<secret>` tokens, `api/devices.json` (0600, flock, SHA-256 hashes), verify/expiry/last-seen/revoke, `httpapi.Authenticator` + revoke guard; pairing: `api/pairing.json` (0600, flock, salted code hashes) + the unauthenticated `POST /v1/pair` route (`PairRoute`) | stdlib, httpapi (types only; httpapi never imports it) |
 | `internal/tlsutil` | Gateway TLS: persisted self-signed cert, files mode with reload, SPKI pin, pin-verifying client callback | stdlib only |
 | `internal/httpapi` | HTTP/JSON + SSE gateway (`agentd serve`): routing table, middleware (request id, recover, body cap, auth hook, JSON error envelope), daemon connection pool. Config is passed in by `cmd/agentd` | client, proto (stdlib otherwise; never daemon/session/config) |
-| `cmd/agentd` | Cobra CLI wiring | client, attach, daemon, mcpserver, httpapi, config, tlsutil |
+| `internal/hcompat` | herdr-core (`hc`) client protocol, generation 1, translated onto daemon ops (Herdr Desktop / Whip compatibility, proof of concept): JSON-RPC 2.0 lines then 9-byte LE frames, per-stream credit, first paint, events, in-memory labels/keep/turn/docs | client, proto (stdlib otherwise; never daemon/session/config) |
+| `cmd/agentd` | Cobra CLI wiring; invoked as `herdr-core`/`hc` (argv[0]) it is the hc CLI subset (`hc.go`) | client, attach, daemon, mcpserver, httpapi, hcompat, config, tlsutil |
 
 ### Key behaviours (normative)
 
@@ -260,7 +238,19 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
 - **Accept loop**: accept errors never stop the daemon; transient ones (EMFILE, ENFILE,
   ECONNABORTED…) are retried with exponential backoff (5 ms → 1 s). Connections beyond `MaxConns`
   (default 1024) are closed on accept.
-- **HTTP gateway** (`agentd serve [--listen addr] [--config path] [--no-autostart] [--log-level l]`, design:
+- **Herdr compatibility** (proof of concept; analysis `docs/architecture/herdr-compatibility-analysis.md`, plan
+  `docs/plans/agentd/herdr-compat_plan.md`): `agentd hc install-shim [--dir D]` makes `herdr-core` and `hc` symlinks
+  to agentd (default `~/.local/share/agentd/hc/`; never replaces an existing file or foreign symlink). Invoked under
+  those names: `--version` prints `hc 0.1.21` (`hcompat.CompatVersion`, plain x.y.z: Herdr Desktop parses it by
+  `.`/`-` and needs >= 0.1.11), `connect [--session S]` speaks hc over stdio (session ignored), `machine ls --json`
+  prints `{"machines":[]}`, `update` and anything else exit 2 with `{"error":{message,hint}}` on stderr. Addresses
+  are agentd session names; default labels `herdr.space` (project: part after `@`, else cwd base), `herdr.tab`
+  (session name), `agentd.harness`. Status: working->working, waiting->blocked (kind question), idle->idle, others
+  null (heuristic, a deviation from hc's OSC 7501). `hello` advertises only implemented methods; `server.status`
+  `installed_by:"agentd"`. Core id persisted in `$STATE/hc/core-id`. Labels, keep, turn and documents live in the
+  `hcompat.Server` (per `connect` process) until the daemon owns them (plan Phase 1). The translator connects to
+  the daemon as the calling process, so identity rules apply unchanged.
+- **HTTP gateway** (frozen 2026-11-14: kept for possible future use, no new features; the Flutter app was removed) (`agentd serve [--listen addr] [--config path] [--no-autostart] [--log-level l]`, design:
   `docs/design/api/http-api.md`): a separate foreground process (logs to stderr, exit non-zero on config
   error) that talks to the daemon over the unix socket and stops on SIGINT/SIGTERM without touching the
   daemon (SSE streams get `bye`, 5 s drain). Config table `[api]` (parsed in `internal/config/api.go`,
@@ -536,7 +526,7 @@ Types into agent terminals: when in doubt it refuses with a coded error instead 
   on the target. Arrow navigation + Enter is used for options without a digit (or `menu_select = "arrows"`).
   SS3 arrows in application cursor mode.
 - **Revision on the other actions**: `prompt`, `keys`, `interrupt` and `cancel` take an OPTIONAL `revision`
-  (+ required `epoch`; the CLI omits it, the app always sends it). When set, the daemon compares the
+  (+ required `epoch`; the CLI omits it, API clients should send it). When set, the daemon compares the
   interaction fingerprint of the current view (`interactionFP`: status, menu instance + options with
   pointer/checks, dialog question, pending-draft state; NOT transcript lines, title, cwd, idle time or a
   ghost suggestion) with the one recorded for that revision (`menuTrack.noteInter`). A change, an unknown or

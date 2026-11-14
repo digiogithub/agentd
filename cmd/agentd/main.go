@@ -33,6 +33,9 @@ import (
 
 func main() {
 	daemon.Version = version.Version
+	if invokedAsHC() {
+		os.Exit(hcMain(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+	}
 	if err := newRootCmd().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "agentd:", err)
 		os.Exit(1)
@@ -49,7 +52,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(
 		daemonCmd(), runCmd(), lsCmd(), attachCmd(), dumpCmd(), viewCmd(), eventsCmd(), typeCmd(), actCmd(), killCmd(), rmCmd(),
 		sendCmd(), inboxCmd(), readCmd(), replyCmd(), peersCmd(), aliasesCmd(), shutdownCmd(),
-		versionCmd(), mcpCmd(), whoamiCmd(), purgeCmd(), serveCmd(),
+		versionCmd(), mcpCmd(), whoamiCmd(), purgeCmd(), serveCmd(), hcCmd(),
 	)
 	return root
 }
