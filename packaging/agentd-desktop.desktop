@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=agentd
+GenericName=Coding agents
+GenericName[es]=Agentes de programación
+Comment=Watch and drive CLI coding agents on this computer and over SSH
+Comment[es]=Supervisa y maneja agentes de programación en este equipo y por SSH
+Exec=agentd-desktop
+Icon=agentd-desktop
+Terminal=false
+Categories=Development;
+Keywords=agent;claude;codex;pando;ssh;terminal;zellij;tmux;
+StartupNotify=true
+StartupWMClass=agentd

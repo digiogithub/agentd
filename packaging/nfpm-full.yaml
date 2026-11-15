@@ -1,0 +1,78 @@
+# nfpm configuration for the full agentd .deb: daemon/CLI plus the native
+# desktop app (agentd-desktop, its .desktop entry and icon).
+#
+# Used by .github/workflows/release.yml; environment variables:
+#   VERSION  package version without the leading "v" (e.g. 1.2.3 or 1.2.3-rc.1)
+#   GOARCH   amd64 | arm64
+# Binaries for GOARCH must be at build/agentd and build/agentd-desktop (nfpm
+# does not expand variables in contents paths). Build with `make deb`.
+# The release workflow still uses packaging/nfpm.yaml (CLI only) until the
+# desktop app joins the release matrix (docs/release.md).
+#
+# Local build: make deb VERSION=x.y.z
+name: agentd
+arch: ${GOARCH}
+platform: linux
+version: ${VERSION}
+version_schema: semver
+section: devel
+priority: optional
+maintainer: Digio Soluciones Digitales SL <noreply@github.com>
+vendor: Digio Soluciones Digitales SL
+homepage: https://github.com/digiogithub/agentd
+license: MIT
+description: |-
+  Lightweight session manager for CLI coding agents, with desktop app.
+  agentd runs CLI coding agents (Claude Code, Codex, Pando...) in persistent
+  PTYs, lets you detach and reattach like zellij/tmux, and lets agents message
+  each other through a local mailbox, from the CLI or MCP.
+
+contents:
+  - src: build/agentd-desktop
+    dst: /usr/bin/agentd-desktop
+    file_info:
+      mode: 0755
+  - src: packaging/agentd-desktop.desktop
+    dst: /usr/share/applications/agentd-desktop.desktop
+    file_info:
+      mode: 0644
+  - src: packaging/agentd-desktop.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/agentd-desktop.svg
+    file_info:
+      mode: 0644
+  - src: internal/desktopui/README.md
+    dst: /usr/share/doc/agentd/desktop/README.md
+    file_info:
+      mode: 0644
+  - src: build/agentd
+    dst: /usr/bin/agentd
+    file_info:
+      mode: 0755
+  - src: packaging/agentd.service
+    dst: /usr/lib/systemd/user/agentd.service
+    file_info:
+      mode: 0644
+  - src: README.md
+    dst: /usr/share/doc/agentd/README.md
+    file_info:
+      mode: 0644
+  - src: LICENSE
+    dst: /usr/share/doc/agentd/LICENSE
+    file_info:
+      mode: 0644
+  - src: contrib/aliases.example.toml
+    dst: /usr/share/doc/agentd/examples/aliases.example.toml
+    file_info:
+      mode: 0644
+
+recommends:
+  - libgl1
+  - libegl1
+suggests:
+  - zellij
+  - tmux
+  - openssh-client
+
+scripts:
+  postinstall: packaging/postinst-desktop.sh
+  postremove: packaging/postinst-desktop.sh
