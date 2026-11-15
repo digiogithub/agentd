@@ -50,6 +50,7 @@ permissions:
 
 env:
   NFPM_VERSION: v2.48.0
+  GOTOOLCHAIN: local
 
 jobs:
   linux:
@@ -93,6 +94,21 @@ jobs:
             -o build/agentd ./cmd/agentd
           file build/agentd
 
+      - name: Build the desktop app
+        # agentd-desktop embeds libghostty-vt for the target (fetched and
+        # checked against MyGo's manifest by scripts/fetch-ghostty-vt).
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          GOOS= GOARCH= make "desktop-natives-linux-${GOARCH}"
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/digiogithub/agentd/internal/version.Version=${VERSION}" \
+            -o build/agentd-desktop ./cmd/agentd-desktop
+          file build/agentd-desktop
+
       - name: Smoke test (amd64)
         if: matrix.goarch == 'amd64'
         run: |
@@ -128,6 +144,26 @@ jobs:
             dpkg-deb --info "$f"
             dpkg-deb --contents "$f"
           done
+
+      - name: Package the desktop app
+        # agentd-desktop_<v>_linux_<arch>.tar.gz (binary, .desktop entry, icon)
+        # and agentd-full_<v>_<arch>.deb: the agentd package plus the desktop
+        # app (packaging/nfpm-full.yaml; same package name, so it replaces the
+        # CLI-only .deb when installed).
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          root="$(mktemp -d)"
+          stage="$root/agentd-desktop"
+          mkdir -p "$stage"
+          cp build/agentd-desktop packaging/agentd-desktop.desktop packaging/agentd-desktop.svg LICENSE "$stage/"
+          cp internal/desktopui/README.md "$stage/README.md"
+          tar -C "$root" -czf "dist/agentd-desktop_${VERSION}_linux_${GOARCH}.tar.gz" agentd-desktop
+          tar -tzvf "dist/agentd-desktop_${VERSION}_linux_${GOARCH}.tar.gz"
+          nfpm package --packager deb --config packaging/nfpm-full.yaml --target "dist/agentd-full_${VERSION}_${GOARCH}.deb"
+          dpkg-deb --info "dist/agentd-full_${VERSION}_${GOARCH}.deb"
+          dpkg-deb --contents "dist/agentd-full_${VERSION}_${GOARCH}.deb"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -192,12 +228,32 @@ jobs:
           keychain-name: agentd-build
           notary-profile: agentd-notary
 
+      - name: Build the desktop app (universal)
+        # Each libghostty-vt.dylib is signed with the Developer ID before
+        # go build embeds it (NATIVES_SIGN=required), so hardened-runtime
+        # library validation accepts it at run time.
+        env:
+          CGO_ENABLED: '0'
+          NATIVES_SIGN: required
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            make "desktop-natives-darwin-$arch"
+            GOOS=darwin GOARCH="$arch" go build -trimpath \
+              -ldflags "-s -w -X github.com/digiogithub/agentd/internal/version.Version=${VERSION}" \
+              -o "build/agentd-desktop-$arch" ./cmd/agentd-desktop
+          done
+          lipo -create -output build/agentd-desktop build/agentd-desktop-amd64 build/agentd-desktop-arm64
+          lipo -info build/agentd-desktop
+
       - name: Sign the binary
         # Hardened runtime (options: runtime) + secure timestamp, the action's
         # defaults; agentd needs no entitlements (no JIT, no unsigned memory).
         uses: digiogithub/ci-actions/macos-codesign@v1
         with:
-          paths: build/agentd
+          paths: |
+            build/agentd
+            build/agentd-desktop
 
       - name: Package the zip and the pkg
         run: |
@@ -206,6 +262,9 @@ jobs:
 
           # zip: the bare signed binary (notarized submit-only below).
           ditto -c -k build/agentd "dist/${base}.zip"
+
+          # Desktop app: the bare signed binary (no .app bundle yet).
+          ditto -c -k build/agentd-desktop "dist/agentd-desktop_${VERSION}_darwin_universal.zip"
 
           # pkg: installs /usr/local/bin/agentd, signed with the Developer ID
           # Installer identity from the ephemeral keychain.
@@ -244,6 +303,7 @@ jobs:
             spctl --assess --type install -vv "$f" || { echo "::error::Gatekeeper rejects: $f"; status=1; }
           done
           codesign --verify --strict --verbose=2 build/agentd
+          codesign --verify --strict --verbose=2 build/agentd-desktop
           exit $status
 
       - name: Clean up the signing keychain
@@ -413,6 +473,8 @@ jobs:
             - Debian/Ubuntu: `agentd_<version>_amd64.deb` / `_arm64.deb` (`sudo apt install ./agentd_*.deb`, then `systemctl --user enable --now agentd`).
             - Other Linux: `agentd_<version>_linux_<arch>.tar.gz`.
             - macOS (universal, Developer ID signed and notarized): `.pkg` installer (stapled, installs `/usr/local/bin/agentd`) or the bare binary in the `.zip`.
+            - Desktop app (agentd-desktop): Debian/Ubuntu `agentd-full_<version>_<arch>.deb` (agentd + agentd-desktop + menu entry; replaces the CLI-only package), other Linux `agentd-desktop_<version>_linux_<arch>.tar.gz`, macOS `agentd-desktop_<version>_darwin_universal.zip` (signed and notarized binary).
+            - Mobile app: https://github.com/digiogithub/agentd-app/releases
             - `SHA256SUMS` lists the SHA-256 of every file.
 
             Windows is not supported yet.
