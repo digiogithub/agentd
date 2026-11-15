@@ -59,6 +59,15 @@ func Dial(path string) (*Client, error) {
 	return &Client{conn: conn, codec: proto.NewCodec(conn), Auth: AuthFromEnv()}, nil
 }
 
+// NewConn wraps an already open connection to the daemon socket, for
+// transports Dial does not cover (a unix socket reached through an SSH
+// direct-streamlocal channel, used by agentd-desktop). auth is sent with
+// every request; nil = none, which a remote daemon resolves to the SSH
+// user's human identity.
+func NewConn(conn net.Conn, auth *proto.Auth) *Client {
+	return &Client{conn: conn, codec: proto.NewCodec(conn), Auth: auth}
+}
+
 // AutoOptions configures DialAuto.
 type AutoOptions struct {
 	// Exe is the agentd binary to start; "" means os.Executable().
