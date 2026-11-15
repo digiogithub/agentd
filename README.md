@@ -192,6 +192,31 @@ can be purged. Inside a session only that session's own `read`/`replied` message
 `--vacuum`). Replies to a purged message keep working (their `reply_to` is cleared), and message
 ids are never reused. There is no MCP tool for purging.
 
+## Desktop app
+
+`agentd-desktop` is a native desktop client (Linux and macOS) for the agents of every host you use: one inbox
+of sessions grouped by what needs an answer, a Chat tab (the semantic view: transcript, the pending question
+with its options, a composer) and a Terminal tab (a real attach), plus hosts, the mailbox and work queues,
+host provisioning and settings. It also lists zellij and tmux sessions and plain SSH shells.
+
+- Hosts: this computer (the local daemon socket) and SSH hosts. SSH is the only remote transport: the app
+  uses ssh-agent, its own ed25519 key or a key file, trusts host keys on first use and reaches the remote
+  daemon through its unix socket over the SSH connection, so the daemon sees you as `human:<ssh user>`.
+  Nothing listens on a port. Its state lives in `~/.config/agentd/desktop/` (`hosts.json`, `known_hosts`,
+  `id_ed25519`, `settings.json`).
+- Requirements: a display and a GPU with OpenGL (the UI is GPU rendered). The terminal uses
+  libghostty-vt: release builds embed it (signed on macOS); a source build fetches it with `make desktop`,
+  or the app downloads it on first use.
+
+```sh
+make desktop                          # build/agentd-desktop (Go 1.27.3; fetches libghostty-vt)
+build/agentd-desktop
+make desktop-run-fake                 # AGENTD_DESKTOP_FAKE=1: sample data, no host is contacted
+```
+
+The mobile app (Android and iOS, Flutter) is a separate project, `agentd-app`, with the same model: SSH only,
+an inbox of sessions across hosts, chat, terminal, mailbox and provisioning.
+
 ## Herdr clients (Desktop and mobile)
 
 agentd speaks the herdr-core protocol, so the [Herdr](https://herdr.dev) desktop app and the official mobile
@@ -348,7 +373,11 @@ See [AGENTS.md](AGENTS.md) for architecture, package contracts and rules.
 
 ```sh
 go build ./... && go vet ./... && go test -race ./...
+make            # build/agentd;  make desktop = build/agentd-desktop;  make help
 ```
+
+The desktop client's packages and development aids are described in
+[internal/desktopui/README.md](internal/desktopui/README.md).
 
 Releases are built, signed and published by GitHub Actions from version tags; see
 [docs/release.md](docs/release.md).

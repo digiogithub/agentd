@@ -67,6 +67,48 @@ never be published by mistake.
 
   The job has `timeout-minutes: 120` because notarization waits for Apple.
 
+## Desktop client (agentd-desktop): planned artifacts
+
+Not in `release.yml` yet: `cmd/agentd-desktop` is still being wired (desktop plan, phase P2; without
+`AGENTD_DESKTOP_FAKE=1` it exits until the real backend lands), so a release must not ship it yet. The
+change below is ready to apply once P2 is done; until then this section is the TODO.
+
+| Artifact | Built by | Contents |
+|---|---|---|
+| `agentd-desktop_<v>_linux_amd64.tar.gz`, `..._linux_arm64.tar.gz` | `linux` job (matrix) | `agentd-desktop` with libghostty-vt embedded for that arch, README, LICENSE |
+| `agentd-desktop_<v>_darwin_universal.zip` | `macos` job | universal `agentd-desktop` (lipo of amd64 + arm64, each embedding its own **signed** libghostty-vt dylib), signed with the Developer ID (hardened runtime, timestamp), notarized submit-only |
+
+Both build with `CGO_ENABLED=0` (MyGo uses purego; cross-compiling linux/arm64 and darwin/amd64 from one
+runner works, checked with `GOOS=… GOARCH=… CGO_ENABLED=0 go build ./cmd/agentd-desktop`). libghostty-vt is
+fetched by `scripts/fetch-ghostty-vt` from the URL and SHA-256 pinned in MyGo's
+`plugins/terminal/mygo-plugin.json` (needs `curl` and `python3`, both on GitHub runners); the agentd binary
+and its archives are unchanged.
+
+Workflow change (TODO):
+
+- `linux` job, after "Build":
+  ```sh
+  make desktop-natives-linux-${GOARCH}
+  go build -trimpath -ldflags "-s -w -X github.com/digiogithub/agentd/internal/version.Version=${VERSION}" \
+    -o build/agentd-desktop ./cmd/agentd-desktop
+  ```
+  then a tar.gz with `build/agentd-desktop README.md LICENSE`, added to the `dist-linux-<arch>` upload.
+- `macos` job: the dylib must be signed **before** `go build` embeds it, so the steps become: set up the
+  signing keychain (move it before the builds) → `make desktop-natives-darwin-amd64 desktop-natives-darwin-arm64
+  NATIVES_SIGN=required` (signs each dylib with `scripts/codesign-macos` using `SIGNING_IDENTITY` and
+  `MACOS_SIGN_KEYCHAIN_PATH` from `macos-signing-keychain`) → build `agentd-desktop-amd64`/`-arm64` →
+  `lipo -create` → `macos-codesign` on `build/agentd-desktop` (no entitlements: no JIT) → `ditto -c -k` →
+  add `dist/agentd-desktop_*.zip` to `macos-notarize` (the existing `dist/*.zip` glob already covers it).
+  A `.app` bundle (Info.plist, icon, stapled ticket) is a later improvement; the bare binary is enough for
+  a first release.
+- `release` job: the existing globs (`*.tar.gz`, `*.zip`) and `SHA256SUMS` already pick the new files up;
+  add a line about `agentd-desktop` to `notes-header`.
+- CI (`ci.yml`): `go test -race ./...` already includes `internal/desktopui/...` (headless tests, no display
+  needed: `ui.NewTester`); terminal tests skip without a fetched libghostty-vt. Add
+  `go build ./cmd/agentd-desktop` to `build-macos` (already covered by `go build ./...`).
+
+`install.sh` stays CLI-only.
+
 ## Signing configuration
 
 Set on the GitHub repository before the first tag. No value is stored in this repository.
@@ -94,6 +136,12 @@ Not supported yet: agentd relies on Unix PTYs, `setsid` and peer credentials
 described in [ROADMAP.md](../ROADMAP.md).
 
 ## Local checks
+
+```sh
+make                                   # build/agentd (as the release build, without -s -w)
+make desktop                           # build/agentd-desktop with libghostty-vt for the host
+GOTOOLCHAIN=go1.27.3 go list -deps ./cmd/agentd | grep -c mygo   # must print 0
+```
 
 ```sh
 python3 -c "import yaml; yaml.safe_load(open('.github/workflows/release.yml'))"

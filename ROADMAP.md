@@ -57,10 +57,11 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[-]` dropped.
 ## Phase 6 — API gateway and native frontends
 Plan: `docs/plans/api-gateway-plan.md` (decisions ADR-A01…A11, stories API-S01…S27); design pages in
 `docs/design/api/`.
-- [ ] Semantic view in the daemon (`internal/screen`): reflowed text, status, input line, options;
-      ops `view`, `act`, `subscribe`; fixed PTY size (API never resizes)
-- [ ] `agentd serve` HTTP gateway: REST + SSE, OpenAPI contract, loopback default
-- [ ] Device tokens, QR pairing, TLS / Tailscale, audit log, webhook notifications
+- [x] Semantic view in the daemon (`internal/screen`): reflowed text, status, input line, options;
+      ops `view`, `act`, `subscribe`; fixed PTY size (API never resizes). In active use by the hc layer
+      and the native clients (Phase 8).
+- [x] `agentd serve` HTTP gateway: REST + SSE, OpenAPI contract, loopback default (frozen)
+- [x] Device tokens, QR pairing, TLS / Tailscale, audit log, webhook notifications (frozen)
 - [-] Flutter app in `app/`: removed 2026-11-14 in favour of Herdr client compatibility (Phase 7).
       The `agentd serve` gateway is frozen (kept, no new features) for possible future use.
 Backlog: gintrack project `AGED` (`docs/.pmngr`).
@@ -75,6 +76,23 @@ Analysis: `docs/architecture/herdr-compatibility-analysis.md`. Plan: `docs/plans
 - [x] Verified with Herdr Desktop 0.1.15 and the official Herdr mobile app (Android); `install-shim --local-bin`
 - [ ] Field test with Whip and the 0cv relay
 - [x] Mailbox work queues (`queue:<name>`, op `claim`) and conditional inbox (`since_digest`), from the herdrup analysis
+
+## Phase 8 — Native clients
+Both clients reach hosts over SSH only (agentd through its unix socket via `direct-streamlocal`, human
+identity) and show agentd, zellij, tmux and plain-shell sessions in one inbox. The gateway (Phase 6) is
+not used.
+- Desktop: `agentd-desktop` (MyGo v0.7.1, `cmd/agentd-desktop` + `internal/desktopui`), plan
+  `docs/plans/agentd/desktop_plan.md`
+  - [x] P0: Go 1.27.3, MyGo + x/crypto pinned, `client.NewConn`, `backend` contract
+  - [x] P1: `remote`, `core`, `mux`, `provision`, UI (`kit`, `shell`, `app`, 8 areas), `backend/fake`,
+        libghostty-vt embedded per platform
+  - [ ] P2: real backend wiring in `cmd/agentd-desktop`, docs and build plumbing (AGENTS.md, README,
+        `Makefile` desktop targets), release artifacts (Linux amd64/arm64, macOS universal signed)
+  - [ ] P3: field test against the local daemon and one SSH host
+- Mobile: `agentd-app` (Flutter, Android/iOS; separate repository)
+  - [x] P0-P2: SSH transport, TOFU host keys, device key, agentd client, mux, provisioning, UI, wired on
+        real repositories (`lib/src/mux` and `lib/src/provision` are the source of the desktop ports)
+  - [ ] P3: field test against a real host (agentd + zellij), Android and iOS builds
 
 ## Later
 - [ ] Session persistence across daemon restarts (re-exec with fd passing, or at least log replay)

@@ -154,10 +154,13 @@ not exist yet is **correct and useful**: it records a concept worth documenting 
 
 ## Toolchain
 
-- Go **1.27.2** (see `go.mod`). If your Go toolchain is not on `PATH` in non-login shells, add it,
-  e.g. `export PATH=$HOME/.go/bin:$HOME/go/bin:$PATH`.
+- Go **1.27.3** (see `go.mod`; MyGo v0.7.1 needs >= 1.27.3). If your Go toolchain is not on `PATH` in
+  non-login shells, add it, e.g. `export PATH=$HOME/.go/bin:$HOME/go/bin:$PATH`; pin it with
+  `GOTOOLCHAIN=go1.27.3` (the `Makefile` exports it).
 - Linux first (amd64/arm64). macOS is supported; Windows is out of scope for now (see `ROADMAP.md`).
-- Module: `github.com/digiogithub/agentd`. Single binary: `cmd/agentd`.
+- Module: `github.com/digiogithub/agentd`. Binaries: `cmd/agentd` (CLI + daemon, `make` →
+  `build/agentd`) and `cmd/agentd-desktop` (native desktop client, `make desktop` →
+  `build/agentd-desktop`; see "Desktop client"). Both build with `CGO_ENABLED=0`.
 - Version: `internal/version.Version` (`0.0.0-dev`), set from the tag at release time with
   `-ldflags "-X github.com/digiogithub/agentd/internal/version.Version=<x.y.z>"`. Release pipeline:
   `docs/release.md`.
@@ -170,6 +173,21 @@ not exist yet is **correct and useful**: it records a concept worth documenting 
   - CLI: `github.com/spf13/cobra`
   - Config: `github.com/BurntSushi/toml`
   - Terminal QR for `agentd serve pair`: `github.com/skip2/go-qrcode` (pure Go, MIT, no transitive deps; used only in `cmd/agentd/pair.go` to render the pairing URL with half-block characters; a hand-written QR encoder would be riskier than this small, stable library)
+  - Desktop UI toolkit (desktop only): `github.com/egoist/mygo` **v0.7.1, pinned exactly** (pure Go via
+    purego, GPU rendered with OpenGL, immediate mode with keyed retained state; same toolkit and version
+    as Pando's desktop). Imported only by `internal/desktopui` (root), `kit`, `shell`, `app` and
+    `app/<area>`. Never bump it without re-checking `scripts/fetch-ghostty-vt` (the libghostty-vt pins
+    come from its `plugins/terminal/mygo-plugin.json`). Docs:
+    `$(go env GOMODCACHE)/github.com/egoist/mygo@v0.7.1/docs/ui/*.md`.
+  - SSH (desktop only): `golang.org/x/crypto` (`ssh`, `ssh/agent`, `ssh/knownhosts`), used only by
+    `internal/desktopui/remote` (and its test server `remote/sshtest`).
+  - Terminal library (desktop only, native, runtime): **libghostty-vt**, loaded by MyGo's
+    `plugins/terminal` with purego. Not a Go module: `make desktop-natives-<goos>-<goarch>`
+    (`scripts/fetch-ghostty-vt`) downloads the build pinned (URL + SHA-256) by the MyGo version in
+    `go.mod` into `internal/desktopui/natives/<goos>-<goarch>/`, where it is embedded with go:embed
+    (darwin: signed with the Developer ID first); fetched files are gitignored, only `.keep` is versioned.
+    The `agentd` binary never links MyGo, x/crypto/ssh or libghostty-vt:
+    `GOTOOLCHAIN=go1.27.3 go list -deps ./cmd/agentd | grep -c mygo` must print `0` (it does).
   - OpenAPI contract tests (test-only, never linked into the binary): `github.com/pb33f/libopenapi` + `github.com/pb33f/libopenapi-validator` (OpenAPI 3.1 parser and request/response/schema validator; used only by `internal/httpapi/contract_*_test.go` and `openapi_lint_test.go` to fail CI when handlers drift from `docs/api/openapi.yaml`; chosen over kin-openapi because the spec is 3.1 (`const`, `examples`, `if/then`, `type` arrays) which kin-openapi does not fully support; no Node/Java tooling needed)
 
 ## Rules
@@ -180,7 +198,11 @@ not exist yet is **correct and useful**: it records a concept worth documenting 
   Use `bash`, `sh`, `cat`, or the fake TUI in `internal/testutil/fakeagent` for tests.
 - Keep packages small and decoupled along the contracts below. If a contract must change,
   update this file in the same commit.
-- Do not add a pane/split UI. One attached session per client terminal; tiling is out of scope.
+- Do not add a pane/split UI. One attached session per client terminal; tiling is out of scope. The
+  desktop client follows the same rule: one session view per window content area (a list beside it on
+  wide windows is not a split of sessions).
+- `internal/desktopui/**` and `cmd/agentd-desktop` are never imported by the daemon, the CLI or any
+  other non-desktop package (dependency direction is desktop → client/proto/config, never back).
 - Commits: conventional commits (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`), one logical change each.
   Releases are cut by pushing a `v*` tag (`docs/release.md`).
 
@@ -212,14 +234,27 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
 | `internal/delivery` | Decide when a session is idle and inject queued messages (via `inject`) | session, mailbox, config, inject |
 | `internal/proto` | Wire protocol: JSON request/response + binary framed attach stream | stdlib |
 | `internal/daemon` | Socket server, registry, op handlers, lifecycle, autostart helpers; per-session view state + watcher (`view.go`, `view_rules.go`: profile → `screen.Rules`) behind ops `view`/`view_ack` and the `ls` summary; event bus + op `subscribe` (`events.go`); the opt-in hc socket listener + op `hc_listener` (`hclisten.go`, peer admission) | all above (incl. hcompat and, through it, client: the listener's translator dials this daemon) |
-| `internal/client` | Go client for the socket API (used by CLI and MCP); `Subscribe` returns a `Subscription` (event channel + `Close`) | proto |
+| `internal/client` | Go client for the socket API (used by CLI, MCP and agentd-desktop); `Subscribe` returns a `Subscription` (event channel + `Close`); `NewConn(conn, auth)` wraps an already open connection (agentd-desktop: a unix socket reached through an SSH `direct-streamlocal` channel; `auth` nil = none, the remote daemon resolves the SSH user's human identity) | proto |
 | `internal/attach` | Client-side terminal: raw mode, SIGWINCH, detach key, redraw | client, x/term |
 | `internal/mcpserver` | MCP stdio server exposing mailbox + peers tools | client (+ proto types), go-sdk |
 | `internal/apitoken` | Device-token store for the gateway: `agd_<id>_<secret>` tokens, `api/devices.json` (0600, flock, SHA-256 hashes), verify/expiry/last-seen/revoke, `httpapi.Authenticator` + revoke guard; pairing: `api/pairing.json` (0600, flock, salted code hashes) + the unauthenticated `POST /v1/pair` route (`PairRoute`) | stdlib, httpapi (types only; httpapi never imports it) |
 | `internal/tlsutil` | Gateway TLS: persisted self-signed cert, files mode with reload, SPKI pin, pin-verifying client callback | stdlib only |
 | `internal/httpapi` | HTTP/JSON + SSE gateway (`agentd serve`): routing table, middleware (request id, recover, body cap, auth hook, JSON error envelope), daemon connection pool. Config is passed in by `cmd/agentd` | client, proto (stdlib otherwise; never daemon/session/config) |
 | `internal/hcompat` | herdr-core (`hc`) client protocol, generation 1, translated onto daemon ops (Herdr Desktop / Whip compatibility, proof of concept): JSON-RPC 2.0 lines then 9-byte LE frames, per-stream credit, first paint, events, in-memory labels/keep/turn/docs; `Listener` (unix socket with herdr-core's `core.lock` ownership, admission hook, cleanup) and `LoadCoreID` | client, proto (stdlib otherwise; never daemon/session/config) |
-| `cmd/agentd` | Cobra CLI wiring; invoked as `herdr-core`/`hc` (argv[0]) it is the hc CLI subset (`hc.go`) | client, attach, daemon, mcpserver, httpapi, hcompat, config, tlsutil |
+| `cmd/agentd` | Cobra CLI wiring; invoked as `herdr-core`/`hc` (argv[0]) it is the hc CLI subset (`hc.go`) | client, attach, daemon, mcpserver, httpapi, hcompat, config, tlsutil (never desktopui, never MyGo) |
+| `internal/desktopui/backend` | Contract between the desktop UI and the code that reaches hosts: `Backend`, `Shell`, `PTY`, `Session`, `Host`, auth kinds, provisioning types; typed connect errors (`HostKeyError` for a key not yet accepted, `ErrHostKeyChanged`, `ErrPasswordRequired`, `HostStatus.ErrCode`) and `TrustHostKey` / `ConnectWithPassword(…, installKey)` (password used once, never stored). Change it only together with every implementation | proto |
+| `internal/desktopui/backend/fake` | In-memory `Backend` with the mockup data (UI work, headless tests, `AGENTD_DESKTOP_FAKE=1`): act choose/prompt bump revisions (stale = conflict), canned PTY echo, provisioning events; never runs a program | backend, proto |
+| `internal/desktopui/remote` | `backend.Shell` over SSH (`golang.org/x/crypto/ssh`: ssh-agent, the app key, key files, password callbacks never stored) and on this computer; `DialUnix` (`direct-streamlocal`); TOFU host keys (`known_hosts`), app key `id_ed25519`, `hosts.json`, `~/.ssh/config` import, per-host connection pool, `InstallAuthorizedKey` (app public key into `~/.ssh/authorized_keys`, idempotent, 0700/0600, refuses anything but one plain public key line); `remote/sshtest` = in-process SSH server for tests | backend, pty, x/crypto (no MyGo) |
+| `internal/desktopui/core` | The real `Backend`: saved hosts + one Shell per host, daemon socket discovery, session aggregation (agentd `ls` + `subscribe` per host, zellij/tmux polled, plain shells), view streams, mailbox/act/attach/run/kill on daemon ops; every op on a fresh connection (`client.Dial` locally, `remote` `DialUnix` + `client.NewConn` over SSH) | backend, remote, client, proto, config (mux and provision through its `MuxAdapter`/`Provisioner` interfaces, wired in `cmd/agentd-desktop`; no MyGo). The local daemon is dialed with no `auth` (inherited `AGENTD_ID`/`AGENTD_TOKEN` are ignored) |
+| `internal/desktopui/mux` | zellij and tmux adapters over a `backend.Shell` (list, attach, launch, kill; status `unknown`/`exited`, guessed harness); port of agentd-app `lib/src/mux`; `mux/muxtest` = fake Shell | backend (no MyGo) |
+| `internal/desktopui/provision` | Host detection (one POSIX sh script), install plan and steps (agentd `install.sh` checked against `SHA256SUMS`, systemd user unit, `[herdr] listen`, MCP snippets, agent CLIs); port of agentd-app `lib/src/provision` | backend, mux (no MyGo) |
+| `internal/desktopui/natives` | libghostty-vt embedded per platform (go:embed, `make desktop-natives-*`), `Install` extracts it to `<user cache>/agentd-desktop/natives/<sha>/` and sets `$MYGO_GHOSTTY_VT` before the terminal loads | stdlib only |
+| `internal/desktopui/kit` | Palette of the mockups mapped onto `ui.Theme`, embedded fonts (Inter, JetBrains Mono, OFL), lucide icon subset, base components | mygo/ui |
+| `internal/desktopui/shell` | MyGo app bootstrap: main window, application menu, desktop notifications; owns the event loop (main goroutine); `ErrNoDisplay` | mygo |
+| `internal/desktopui/app` | UI core: `Context` (backend, router, toasts, prefs `settings.json`, live hosts/sessions/views, `Update`/`Go`/`Batch`), area registry, router, layout (sidebar + content), notifier; `app/apptest` = headless harness on the fake backend | backend, kit, proto, mygo/ui |
+| `internal/desktopui/app/<area>` | One package per area, registered from `init()`: `agents`, `session` (Chat from the semantic view + Terminal via `mygo/plugins/terminal`), `newsession`, `hosts`, `addhost`, `provision`, `mailbox`, `settings` | app, backend, kit, proto, mygo (never remote/core/mux directly) |
+| `internal/desktopui` | `Run(Options)`: context, root view, natives install, shell; blank-imports the areas; dev aids (`AGENTD_DESKTOP_PATH/SIZE/CAPTURE*`) | app, areas, backend, kit, natives, shell, mygo |
+| `cmd/agentd-desktop` | Desktop binary: chooses the backend (`AGENTD_DESKTOP_FAKE=1` = fake; real `core` wiring in P2) and calls `desktopui.Run` on the main goroutine | desktopui, backend, backend/fake (core when wired) |
 
 ### Key behaviours (normative)
 
@@ -772,3 +807,34 @@ Permissions on the resolved identity:
 Limits: this protects against confused or prompt-injected agents claiming another identity, not
 against hostile code running as the same uid (which can read `/proc/<pid>/environ` or ptrace). Any
 process of the user outside sessions is `human:<user>`.
+
+### Desktop client (agentd-desktop)
+
+`cmd/agentd-desktop` + `internal/desktopui/**` (plan `docs/plans/agentd/desktop_plan.md`, package guide
+`internal/desktopui/README.md`). A native window (MyGo, GPU/OpenGL) listing the agents of every host, with a
+Chat tab (semantic view + act) and a Terminal tab (attach through libghostty-vt), hosts, mailbox and
+settings. It is a client only: it never changes daemon behaviour, and the daemon/CLI never import it.
+
+- **Transport**: the local host uses the daemon socket (`client.Dial`, `config.SocketPath()`); every other
+  host is reached **only over SSH** (`golang.org/x/crypto/ssh`; no HTTP gateway, no extra port).
+  agentd ops over SSH = a `direct-streamlocal@openssh.com` channel to the remote daemon socket (found
+  with a probe: `$AGENTD_SOCKET`, `$XDG_RUNTIME_DIR/agentd/agentd.sock`, `/run/user/<uid>/agentd/agentd.sock`,
+  `/tmp/agentd-<uid>/agentd.sock`) wrapped with `client.NewConn(conn, nil)`: no `auth` is sent, the channel's
+  peer is the remote sshd child, so the daemon resolves the caller as `human:<ssh user>` (never a session;
+  see "Identity"). Every op uses a fresh connection; streams (`subscribe`, `attach`, view) hold their own.
+  zellij/tmux and provisioning run as exec/PTY channels on the same SSH connection.
+- **Auth**: ssh-agent, the app's own key, or a key file; passwords/passphrases are asked through a UI
+  callback each time and never stored.
+- **State** (`remote.Dir()`: `$AGENTD_DESKTOP_DIR`, else `$XDG_CONFIG_HOME/agentd/desktop`, else
+  `~/.config/agentd/desktop`): `hosts.json` (saved hosts, 0600, atomic writes), `known_hosts` (host keys
+  accepted on first use; `~/.ssh/known_hosts` is also read, never written; a changed key is a hard error,
+  `HostKeyMismatch`, never a silent re-trust), `id_ed25519` (app key, generated on first use, 0600) +
+  `id_ed25519.pub`, `settings.json` (UI preferences: notifications, mutes, theme; 0600). Never log
+  secrets: no passwords, passphrases, private keys, `AGENTD_TOKEN`s, prompt text or message bodies.
+- **Natives**: libghostty-vt is embedded per platform (`internal/desktopui/natives`, see Toolchain) and
+  extracted to `<user cache>/agentd-desktop/natives/<sha256 prefix>/` at start; a user-set
+  `$MYGO_GHOSTTY_VT` wins. A binary built without it falls back to MyGo's own lookup/download.
+- **UI rules**: one session view per window content area (no pane/split UI, see Rules); UI state is
+  touched only on the UI thread (`app.Context.Update`); acts carry the view's `revision` + `epoch`.
+- **Tests**: headless (`ui.NewTester`, `app/apptest` on `backend/fake`), SSH against `remote/sshtest`, a
+  fake daemon socket in `core`; never a real agent CLI, never a real remote host.
