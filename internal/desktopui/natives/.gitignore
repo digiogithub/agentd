@@ -1,0 +1,4 @@
+# libghostty-vt fetched by `make desktop-natives-*` for go:embed; only the
+# placeholders are versioned.
+*/*
+!*/.keep
