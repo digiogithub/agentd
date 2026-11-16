@@ -190,7 +190,37 @@ type LaunchSpec struct {
 	Project     string // agentd alias or directory
 	Harness     string // claude codex pando opencode gemini bash
 	FirstPrompt string
+	// TerminalOnly opens the user's login shell in Project instead of an
+	// agent (Harness and FirstPrompt are ignored): agentd runs harness
+	// "shell" (`sh -c 'exec "${SHELL:-/bin/sh}" -l'`), zellij/tmux open their
+	// default shell, SSH cds to Project first. Sessions are named
+	// `shell@<project label>` (agentd, zellij, tmux).
+	TerminalOnly bool
 }
+
+// DirEntry is one directory of a ListDir answer.
+type DirEntry struct {
+	Name string
+	// Enterable is false for a directory the user cannot read or traverse.
+	Enterable bool
+}
+
+// DirListing is the folder browser's view of one directory on a host.
+type DirListing struct {
+	Path      string // absolute path of the directory
+	Home      string // the host's $HOME
+	Entries   []DirEntry
+	Truncated bool // more directories than MaxDirEntries
+}
+
+// MaxDirEntries caps a DirListing.
+const MaxDirEntries = 2000
+
+// ListDir failures (errors.Is).
+var (
+	ErrDirNotFound = errors.New("directory does not exist")
+	ErrDirDenied   = errors.New("directory not accessible")
+)
 
 // PlannedStep is one provisioning step, shown before it runs.
 type PlannedStep struct {
@@ -247,6 +277,14 @@ type Backend interface {
 	Terminal(ctx context.Context, s Session, cols, rows int, observe bool) (PTY, error)
 	Launch(ctx context.Context, spec LaunchSpec) (Session, error)
 	Kill(ctx context.Context, s Session) error
+	// Terminate force-closes and deletes s: agentd kill KILL, wait until it
+	// has exited (<= 5 s), rm (an exited session is only rm'ed); zellij kills
+	// and deletes the session; tmux kill-session; an SSH shell is closed.
+	Terminate(ctx context.Context, s Session) error
+	// ListDir lists the directories under path on a host (the folder
+	// browser). path "" = the host's $HOME; hidden includes dot folders.
+	// Errors match ErrDirNotFound / ErrDirDenied.
+	ListDir(ctx context.Context, hostID, path string, hidden bool) (DirListing, error)
 
 	// Mailbox (agentd hosts)
 	Inbox(ctx context.Context, hostID string) ([]proto.Message, error)

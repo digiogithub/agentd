@@ -156,14 +156,17 @@ func TmuxAttachCommand(name string) string { return "tmux attach-session -t " + 
 func TmuxLaunchCommand(session, cwd string, command []string, windowName string) string {
 	s := ShellQuote(session)
 	dir := ShellDir(cwd)
-	cmd := ShellQuote(ShellJoin(command))
+	cmd := ""
+	if len(command) > 0 { // none = the default shell
+		cmd = " " + ShellQuote(ShellJoin(command))
+	}
 	n := ""
 	if windowName != "" {
 		n = " -n " + ShellQuote(windowName)
 	}
 	return "if tmux has-session -t " + tmuxTarget(session) + " 2>/dev/null; " +
-		"then tmux new-window -t " + ShellQuote("="+session+":") + n + " -c " + dir + " " + cmd + "; " +
-		"else tmux new-session -d -s " + s + n + " -c " + dir + " " + cmd + "; fi"
+		"then tmux new-window -t " + ShellQuote("="+session+":") + n + " -c " + dir + cmd + "; " +
+		"else tmux new-session -d -s " + s + n + " -c " + dir + cmd + "; fi"
 }
 
 // Tmux is the tmux Adapter of one host.

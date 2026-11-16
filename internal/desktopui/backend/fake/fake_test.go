@@ -166,3 +166,56 @@ func TestPasswordConnect(t *testing.T) {
 		t.Errorf("connect on the app key: %v", err)
 	}
 }
+
+func TestListDirTreeLocksAndHidden(t *testing.T) {
+	f := New()
+	ctx := context.Background()
+	l, err := f.ListDir(ctx, "estudio", "", false)
+	if err != nil || l.Path != "/home/jose" || l.Home != "/home/jose" {
+		t.Fatalf("home: %+v %v", l, err)
+	}
+	var names []string
+	locked := ""
+	for _, e := range l.Entries {
+		names = append(names, e.Name)
+		if !e.Enterable {
+			locked = e.Name
+		}
+	}
+	if strings.Join(names, ",") != "Documentos,private,src" || locked != "private" {
+		t.Errorf("entries %v locked %q", names, locked)
+	}
+	if l, _ = f.ListDir(ctx, "estudio", "~", true); len(l.Entries) != 4 || l.Entries[0].Name != ".config" {
+		t.Errorf("hidden: %+v", l.Entries)
+	}
+	if l, err = f.ListDir(ctx, "estudio", "/", false); err != nil || len(l.Entries) == 0 || l.Path != "/" {
+		t.Errorf("root: %+v %v", l, err)
+	}
+	if _, err = f.ListDir(ctx, "estudio", "/root", false); !errors.Is(err, backend.ErrDirDenied) {
+		t.Errorf("/root: %v", err)
+	}
+	if _, err = f.ListDir(ctx, "estudio", "/nope", false); !errors.Is(err, backend.ErrDirNotFound) {
+		t.Errorf("/nope: %v", err)
+	}
+	if _, err = f.ListDir(ctx, "raspberry", "", false); err == nil {
+		t.Errorf("offline host listed")
+	}
+}
+
+func TestTerminateRemovesTheSession(t *testing.T) {
+	f := New()
+	ctx := context.Background()
+	s := backend.Session{HostID: "estudio", Source: backend.SourceAgentd, Name: "claude@docs"}
+	if err := f.Terminate(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.Terminated(); len(got) != 1 || got[0] != s.Key() {
+		t.Errorf("terminated %v", got)
+	}
+	if ss := <-f.WatchSessions(ctx); len(ss) != 6 {
+		t.Errorf("%d sessions after terminate", len(ss))
+	}
+	if err := f.Terminate(ctx, s); proto.CodeOf(err) != proto.CodeNotFound {
+		t.Errorf("second terminate: %v", err)
+	}
+}

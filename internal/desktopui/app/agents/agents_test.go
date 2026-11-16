@@ -4,13 +4,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/digiogithub/agentd/internal/desktopui/app"
 	_ "github.com/digiogithub/agentd/internal/desktopui/app/agents"
 	"github.com/digiogithub/agentd/internal/desktopui/app/apptest"
+	_ "github.com/digiogithub/agentd/internal/desktopui/app/newsession"
 	"github.com/digiogithub/agentd/internal/desktopui/backend/fake"
 )
 
+// stateMode switches the list to the Estado grouping (the default is
+// Proyecto).
+func stateMode(e *apptest.Env) {
+	e.T.Helper()
+	e.Click("Estado")
+}
+
 func TestInboxGroupsAndCopy(t *testing.T) {
 	e := apptest.New(t, "/agents", 1400, 900)
+	stateMode(e)
 	e.Has("Agentes", "3 hosts · 7 sesiones", "NECESITAN RESPUESTA · 2", "TRABAJANDO · 2", "LISTOS · 3",
 		"claude@webapp", "Permiso", "Bash · go test ./internal/... -race", "Permitir", "Denegar",
 		"codex@api", "Pregunta", "3 opciones · haz clic para responder", "pando@agentd", "zellij · main",
@@ -46,6 +56,7 @@ func TestDenyPicksTheNoOption(t *testing.T) {
 
 func TestFilterChips(t *testing.T) {
 	e := apptest.New(t, "/agents", 1400, 900)
+	stateMode(e)
 	e.Click("Trabajando · 2")
 	e.Has("pando@agentd", "zellij · main")
 	if e.UI.HasText("claude@docs") || e.UI.HasText("claude@webapp") {
@@ -73,6 +84,7 @@ func TestSearch(t *testing.T) {
 
 func TestOpenSessionBesideListOnWideWindows(t *testing.T) {
 	e := apptest.New(t, "/agents", 1400, 900)
+	stateMode(e)
 	e.Click("pando@agentd: Trabajando")
 	if p := e.A.Router.Path(); p != "/agents/s/estudio/agentd/pando@agentd" {
 		t.Fatalf("path %q", p)
@@ -89,5 +101,92 @@ func TestNarrowWindowShowsSessionAlone(t *testing.T) {
 	e.Click("Volver")
 	if p := e.A.Router.Path(); p != "/agents" {
 		t.Errorf("back went to %q", p)
+	}
+}
+
+func y(t *testing.T, e *apptest.Env, s string) float32 {
+	t.Helper()
+	r, ok := e.UI.Find(s)
+	if !ok {
+		t.Fatalf("%q not found; texts %q", s, e.UI.Texts())
+	}
+	return r.Y
+}
+
+func TestProjectGroupsAreTheDefault(t *testing.T) {
+	e := apptest.New(t, "/agents", 1400, 900)
+	e.Has("Proyecto", "Estado",
+		"webapp", "estudio · 2 sesiones", "api", "vps-hetzner · 1 sesión", "agentd", "docs", "infra",
+		"Nueva sesión en webapp", "claude@webapp", "codex@webapp", "claude@docs")
+	if e.UI.HasText("NECESITAN RESPUESTA · 2") {
+		t.Errorf("state sections shown in project mode")
+	}
+	// Groups with something waiting come first; inside a group the waiting
+	// session comes before the idle one.
+	if !(y(t, e, "Nueva sesión en webapp") < y(t, e, "Nueva sesión en docs")) {
+		t.Errorf("waiting group not first")
+	}
+	if !(y(t, e, "claude@webapp") < y(t, e, "codex@webapp: Listo")) {
+		t.Errorf("waiting session not first in its group")
+	}
+	// The same project on two hosts is two groups, named by host.
+	if y(t, e, "estudio · 2 sesiones") == y(t, e, "portatil · 1 sesión") {
+		t.Errorf("hosts merged")
+	}
+}
+
+func TestGroupToggleIsPersisted(t *testing.T) {
+	e := apptest.New(t, "/agents", 1400, 900)
+	if g := e.A.Prefs.Get().AgentsGroup; g != app.GroupProject {
+		t.Fatalf("default group %q", g)
+	}
+	stateMode(e)
+	e.Has("NECESITAN RESPUESTA · 2", "TRABAJANDO · 2", "LISTOS · 3")
+	if g := e.A.Prefs.Get().AgentsGroup; g != app.GroupState {
+		t.Errorf("group %q after Estado", g)
+	}
+	e.Click("Proyecto")
+	if g := e.A.Prefs.Get().AgentsGroup; g != app.GroupProject || e.UI.HasText("NECESITAN RESPUESTA · 2") {
+		t.Errorf("group %q after Proyecto", g)
+	}
+}
+
+func TestGroupPlusOpensNewSessionPrefilled(t *testing.T) {
+	e := apptest.New(t, "/agents", 1400, 900)
+	e.Click("Nueva sesión en api")
+	if p := e.A.Router.Location(); p != "/new/vps-hetzner?project=api" {
+		t.Fatalf("location %q", p)
+	}
+	e.Has("Nueva sesión", "Host: vps-hetzner", "Se creará", "claude@api")
+}
+
+func TestTerminateFromTheList(t *testing.T) {
+	e := apptest.New(t, "/agents", 1400, 1600)
+	e.Click("Terminar claude@docs")
+	e.Has("Forzar cierre y borrar claude@docs?", "Cancelar")
+	e.Click("Cancelar")
+	if len(e.F.Terminated()) != 0 {
+		t.Fatalf("terminated after Cancelar: %v", e.F.Terminated())
+	}
+	e.Click("Terminar claude@docs")
+	e.Click("Confirmar terminar sesión")
+	if got := e.F.Terminated(); len(got) != 1 || got[0] != "estudio/agentd/claude@docs" {
+		t.Fatalf("terminated %v", got)
+	}
+	if !e.Eventually(time.Second, func() bool { return !e.UI.HasText("Terminar claude@docs") }) {
+		t.Errorf("session still listed: %q", e.UI.Texts())
+	}
+}
+
+func TestTerminateFromTheSessionHeaderGoesBack(t *testing.T) {
+	e := apptest.New(t, "/agents/s/estudio/agentd/claude@docs", 900, 800)
+	e.Click("Terminar sesión")
+	e.Has("Forzar cierre y borrar claude@docs?", "El proceso se detiene a la fuerza")
+	e.Click("Confirmar terminar sesión")
+	if got := e.F.Terminated(); len(got) != 1 || got[0] != "estudio/agentd/claude@docs" {
+		t.Fatalf("terminated %v", got)
+	}
+	if !e.Eventually(time.Second, func() bool { return e.A.Router.Path() == "/agents" }) {
+		t.Errorf("path %q", e.A.Router.Path())
 	}
 }

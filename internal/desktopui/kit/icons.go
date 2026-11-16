@@ -58,6 +58,8 @@ const (
 	IconLaptop      = "laptop"
 	IconDownload    = "download"
 	IconFolderPlus  = "folder-plus"
+	IconFolder      = "folder"
+	IconLock        = "lock"
 	IconFile        = "file-text"
 	IconSun         = "sun"
 	IconMoon        = "moon"

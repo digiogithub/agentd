@@ -23,6 +23,7 @@ The daemon and the `agentd` CLI never import anything here:
 | `backend/fake/` | In-memory `Backend` with the mockup data (hosts estudio, vps-hetzner, portatil, raspberry; a permission dialog, a question with options, a working session...). Act bumps revisions, the PTY echoes, provisioning streams events; never runs a program | no |
 | `remote/` | `backend.Shell` over SSH (`golang.org/x/crypto/ssh`) and on this computer, `DialUnix` (direct-streamlocal), app key, TOFU host keys, `hosts.json`, `~/.ssh/config` import, connection pool. `remote/sshtest/`: in-process SSH server for tests | no |
 | `core/` | The real `Backend`: hosts + shells, daemon socket probe, session aggregation (agentd `ls` + `subscribe`, zellij/tmux polling, plain shells), views, mailbox, act, attach, run, kill. Every daemon op on a fresh `client.Client` (`client.Dial` locally, `client.NewConn` over a direct-streamlocal channel remotely) | no |
+| `dirlist/` | Folder browser, host side: the sh script that lists the directories under a path (run through `Shell.Exec`) and the parser of its NUL-separated output; tested under a real `sh` | **no** |
 | `mux/` | zellij and tmux adapters over a `Shell` (port of agentd-app `lib/src/mux`). `mux/muxtest/`: fake Shell | no |
 | `provision/` | Detect script, install plan and steps (agentd `install.sh` + `SHA256SUMS`, systemd user unit, `[herdr] listen`, MCP snippets, agent CLIs); port of agentd-app `lib/src/provision` | no |
 | `natives/` | libghostty-vt embedded per platform (go:embed); `Install` extracts it to `<user cache>/agentd-desktop/natives/<sha>/` and sets `$MYGO_GHOSTTY_VT` before the terminal loads | no |
@@ -35,6 +36,8 @@ The daemon and the `agentd` CLI never import anything here:
 
 Only `kit`, `shell`, `app`, `app/<area>` and the root import MyGo. Areas talk to hosts only through
 `backend.Backend` (never `remote`, `core` or `mux` directly); `cmd/agentd-desktop` picks the backend.
+
+New session also takes `?project=<alias|path>` (the `+` of a project group in the agents list).
 
 Routes: agents `/agents` (+ `/agents/s/{host}/{source}/{name}`), hosts `/hosts`, addhost `/hosts/add`,
 provision `/hosts/provision/{host}`, newsession `/new` (+ `/new/{host}`), mailbox `/mailbox`

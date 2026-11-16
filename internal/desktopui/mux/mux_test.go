@@ -451,3 +451,34 @@ func TestForHost(t *testing.T) {
 		t.Errorf("ForHost = %v", a)
 	}
 }
+
+func TestTerminalOnlyLaunch(t *testing.T) {
+	ctx := context.Background()
+	spec := backend.LaunchSpec{HostID: "h1", Project: "~/src/my.api", TerminalOnly: true, Harness: "claude", FirstPrompt: "ignored"}
+
+	sh := &muxtest.FakeShell{}
+	s, err := newZellij(sh).Launch(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Name != "shell@my-api" || s.Harness != "shell" {
+		t.Errorf("zellij session %+v", s)
+	}
+	want := []string{
+		"zellij attach --create-background shell@my-api",
+		`zellij --session shell@my-api action new-pane --cwd "$HOME"/src/my.api --name shell`,
+	}
+	if got := sh.Commands(); !reflect.DeepEqual(got, want) {
+		t.Errorf("zellij commands %q, want %q", got, want)
+	}
+
+	sh = &muxtest.FakeShell{}
+	if _, err := newTmux(sh).Launch(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	c := sh.Commands()
+	if len(c) != 1 || strings.Contains(c[0], "''") || !strings.HasSuffix(c[0], `-n shell -c "$HOME"/src/my.api; fi`) ||
+		!strings.Contains(c[0], `tmux new-session -d -s shell@my-api -n shell -c "$HOME"/src/my.api;`) {
+		t.Errorf("tmux commands %q", c)
+	}
+}

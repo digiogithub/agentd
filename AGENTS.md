@@ -242,10 +242,11 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
 | `internal/httpapi` | HTTP/JSON + SSE gateway (`agentd serve`): routing table, middleware (request id, recover, body cap, auth hook, JSON error envelope), daemon connection pool. Config is passed in by `cmd/agentd` | client, proto (stdlib otherwise; never daemon/session/config) |
 | `internal/hcompat` | herdr-core (`hc`) client protocol, generation 1, translated onto daemon ops (Herdr Desktop / Whip compatibility, proof of concept): JSON-RPC 2.0 lines then 9-byte LE frames, per-stream credit, first paint, events, in-memory labels/keep/turn/docs; `Listener` (unix socket with herdr-core's `core.lock` ownership, admission hook, cleanup) and `LoadCoreID` | client, proto (stdlib otherwise; never daemon/session/config) |
 | `cmd/agentd` | Cobra CLI wiring; invoked as `herdr-core`/`hc` (argv[0]) it is the hc CLI subset (`hc.go`) | client, attach, daemon, mcpserver, httpapi, hcompat, config, tlsutil (never desktopui, never MyGo) |
-| `internal/desktopui/backend` | Contract between the desktop UI and the code that reaches hosts: `Backend`, `Shell`, `PTY`, `Session`, `Host`, auth kinds, provisioning types; typed connect errors (`HostKeyError` for a key not yet accepted, `ErrHostKeyChanged`, `ErrPasswordRequired`, `HostStatus.ErrCode`) and `TrustHostKey` / `ConnectWithPassword(…, installKey)` (password used once, never stored). Change it only together with every implementation | proto |
-| `internal/desktopui/backend/fake` | In-memory `Backend` with the mockup data (UI work, headless tests, `AGENTD_DESKTOP_FAKE=1`): act choose/prompt bump revisions (stale = conflict), canned PTY echo, provisioning events; never runs a program | backend, proto |
+| `internal/desktopui/backend` | Contract between the desktop UI and the code that reaches hosts: `Backend`, `Shell`, `PTY`, `Session`, `Host`, auth kinds, provisioning types; `LaunchSpec.TerminalOnly`, `ListDir` (`DirListing`, `ErrDirNotFound`/`ErrDirDenied`) and `Terminate`; typed connect errors (`HostKeyError` for a key not yet accepted, `ErrHostKeyChanged`, `ErrPasswordRequired`, `HostStatus.ErrCode`) and `TrustHostKey` / `ConnectWithPassword(…, installKey)` (password used once, never stored). Change it only together with every implementation | proto |
+| `internal/desktopui/backend/fake` | In-memory `Backend` with the mockup data (UI work, headless tests, `AGENTD_DESKTOP_FAKE=1`): act choose/prompt bump revisions (stale = conflict), canned PTY echo, provisioning events, an in-memory folder tree for `ListDir` (a non-enterable dir, a path above home), recorded `Terminate`/`Launch` calls; never runs a program | backend, proto |
 | `internal/desktopui/remote` | `backend.Shell` over SSH (`golang.org/x/crypto/ssh`: ssh-agent, the app key, key files, password callbacks never stored) and on this computer; `DialUnix` (`direct-streamlocal`); TOFU host keys (`known_hosts`), app key `id_ed25519`, `hosts.json`, `~/.ssh/config` import, per-host connection pool, `InstallAuthorizedKey` (app public key into `~/.ssh/authorized_keys`, idempotent, 0700/0600, refuses anything but one plain public key line); `remote/sshtest` = in-process SSH server for tests | backend, pty, x/crypto (no MyGo) |
-| `internal/desktopui/core` | The real `Backend`: saved hosts + one Shell per host, daemon socket discovery, session aggregation (agentd `ls` + `subscribe` per host, zellij/tmux polled, plain shells), view streams, mailbox/act/attach/run/kill on daemon ops; every op on a fresh connection (`client.Dial` locally, `remote` `DialUnix` + `client.NewConn` over SSH) | backend, remote, client, proto, config (mux and provision through its `MuxAdapter`/`Provisioner` interfaces, wired in `cmd/agentd-desktop`; no MyGo). The local daemon is dialed with no `auth` (inherited `AGENTD_ID`/`AGENTD_TOKEN` are ignored) |
+| `internal/desktopui/core` | The real `Backend`: saved hosts + one Shell per host, daemon socket discovery, session aggregation (agentd `ls` + `subscribe` per host, zellij/tmux polled, plain shells), view streams, mailbox/act/attach/run/kill/terminate on daemon ops, `ListDir` over the host's `Shell`; every op on a fresh connection (`client.Dial` locally, `remote` `DialUnix` + `client.NewConn` over SSH) | backend, remote, client, proto, config (mux and provision through its `MuxAdapter`/`Provisioner` interfaces, wired in `cmd/agentd-desktop`; no MyGo). The local daemon is dialed with no `auth` (inherited `AGENTD_ID`/`AGENTD_TOKEN` are ignored) |
+| `internal/desktopui/dirlist` | Folder browser, host side: the POSIX sh script listing the directories under a path (run through `Shell.Exec`, local or SSH) and the parser of its NUL-separated output (`@@agentd-ls` marker, status `ok`/`notfound`/`denied`, records `D name flag`, end `E`/`T`); no I/O of its own, no MyGo | backend |
 | `internal/desktopui/mux` | zellij and tmux adapters over a `backend.Shell` (list, attach, launch, kill; status `unknown`/`exited`, guessed harness); port of agentd-app `lib/src/mux`; `mux/muxtest` = fake Shell | backend (no MyGo) |
 | `internal/desktopui/provision` | Host detection (one POSIX sh script), install plan and steps (agentd `install.sh` checked against `SHA256SUMS`, systemd user unit, `[herdr] listen`, MCP snippets, agent CLIs); port of agentd-app `lib/src/provision` | backend, mux (no MyGo) |
 | `internal/desktopui/natives` | libghostty-vt embedded per platform (go:embed, `make desktop-natives-*`), `Install` extracts it to `<user cache>/agentd-desktop/natives/<sha>/` and sets `$MYGO_GHOSTTY_VT` before the terminal loads | stdlib only |
@@ -849,11 +850,29 @@ settings. It is a client only: it never changes daemon behaviour, and the daemon
   `~/.config/agentd/desktop`): `hosts.json` (saved hosts, 0600, atomic writes), `known_hosts` (host keys
   accepted on first use; `~/.ssh/known_hosts` is also read, never written; a changed key is a hard error,
   `HostKeyMismatch`, never a silent re-trust), `id_ed25519` (app key, generated on first use, 0600) +
-  `id_ed25519.pub`, `settings.json` (UI preferences: notifications, mutes, theme; 0600). Never log
+  `id_ed25519.pub`, `settings.json` (UI preferences: notifications, mutes, theme, agents grouping; 0600). Never log
   secrets: no passwords, passphrases, private keys, `AGENTD_TOKEN`s, prompt text or message bodies.
 - **Natives**: libghostty-vt is embedded per platform (`internal/desktopui/natives`, see Toolchain) and
   extracted to `<user cache>/agentd-desktop/natives/<sha256 prefix>/` at start; a user-set
   `$MYGO_GHOSTTY_VT` wins. A binary built without it falls back to MyGo's own lookup/download.
+- **Workspace UX** (plan `docs/plans/agentd/workspace-ux_plan.md`, client only, no daemon change):
+  - Agents list has a `Proyecto | Estado` toggle (`Settings.AgentsGroup`, default project, persisted in
+    `settings.json`). Group key = host + project directory (agentd `SessionInfo.cwd`; zellij/tmux/shell: the
+    alias directory of their project label, else the label; none = `Sin proyecto`); label = alias whose
+    directory equals it, else the path with `~`; the `+` opens `/new/<host>?project=<alias|path>`.
+  - New session: `Abrir` = `Agente` | `Solo terminal` (`LaunchSpec.TerminalOnly`): agentd runs
+    `run {target: dir, harness: "shell", cmd: [sh -c 'exec "${SHELL:-/bin/sh}" -l']}` (name `shell@<label>`; `shell`
+    is not a profile so the daemon uses `default`), zellij/tmux open their default shell (new pane/window, no command,
+    same `shell@<label>` session), SSH `cd`s (`~` expanded) then `exec $SHELL -l`. zellij/tmux/SSH receive the alias
+    resolved to its directory (only agentd resolves aliases).
+  - `Backend.ListDir(host, path, hidden)` (folder browser dialog, `dirlist` script over `Shell.Exec`): path `""` = `$HOME`,
+    absolute path + home + directories (symlinks to directories included, hidden only when asked, sorted case
+    insensitively, capped at `MaxDirEntries` = 2000 + `Truncated`), `Enterable` = readable and traversable; a missing
+    or inaccessible path is `ErrDirNotFound` / `ErrDirDenied`. The path is single-quoted, never interpolated.
+  - `Backend.Terminate(s)` (`Terminar`, danger button in the session header and a row action in the list, behind a
+    confirm dialog; then back to `/agents`): agentd `kill KILL`, poll `ls` until exited (<= 5 s), `rm` (an exited
+    session is only `rm`'ed, a removed one is not an error); zellij `delete-session --force` (kills a running session
+    and drops the resurrectable one); tmux `kill-session`; an app-owned SSH shell is closed.
 - **UI rules**: one session view per window content area (no pane/split UI, see Rules); UI state is
   touched only on the UI thread (`app.Context.Update`); acts carry the view's `revision` + `epoch`.
 - **Tests**: headless (`ui.NewTester`, `app/apptest` on `backend/fake`), SSH against `remote/sshtest`, a

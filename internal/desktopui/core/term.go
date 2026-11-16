@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/digiogithub/agentd/internal/desktopui/backend"
-	"github.com/digiogithub/agentd/internal/desktopui/remote"
 	"github.com/digiogithub/agentd/internal/proto"
 )
 
@@ -308,7 +307,7 @@ func (b *Backend) launchShell(ctx context.Context, spec backend.LaunchSpec) (bac
 	}
 	cmd := ""
 	if spec.Project != "" {
-		cmd = "cd " + remote.ShellQuote(spec.Project) + ` 2>/dev/null; exec "${SHELL:-sh}" -l`
+		cmd = "cd " + shellDir(spec.Project) + ` 2>/dev/null; exec "${SHELL:-sh}" -l`
 	}
 	// The shell outlives the request: bound it by the backend's lifetime.
 	p, err := sh.PTY(b.ctx, cmd, 120, 40, nil)

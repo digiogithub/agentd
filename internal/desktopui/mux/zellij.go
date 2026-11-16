@@ -180,9 +180,13 @@ func ZellijLaunchCommands(session, cwd string, command []string, paneName string
 	if paneName != "" {
 		n = " --name " + ShellQuote(paneName)
 	}
+	cmd := ""
+	if len(command) > 0 { // none = the default shell
+		cmd = " -- " + ShellJoin(command)
+	}
 	return []string{
 		"zellij attach --create-background " + s,
-		"zellij --session " + s + " action new-pane --cwd " + ShellDir(cwd) + n + " -- " + ShellJoin(command),
+		"zellij --session " + s + " action new-pane --cwd " + ShellDir(cwd) + n + cmd,
 	}
 }
 

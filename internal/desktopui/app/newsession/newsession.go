@@ -1,13 +1,17 @@
-// Package newsession is the Nueva sesión page (mockup 4): host, where it
-// runs (agentd, zellij, tmux or a plain SSH shell), project (the host's
-// agentd aliases plus folders typed in "+ Carpeta…"), agent grid (missing
-// CLIs offer "Instalar…", which opens Preparar host) and an optional first
-// message; Lanzar calls backend.Launch and opens the session.
+// Package newsession is the Nueva sesión page (mockup 4): what to open
+// (Agente or Solo terminal = the login shell, no agent), host, where it runs
+// (agentd, zellij, tmux or a plain SSH shell), project (the host's agentd
+// aliases, folders typed in "+ Carpeta…" or picked with the folder browser
+// "Explorar…", or prefilled by ?project=), agent grid (missing CLIs offer
+// "Instalar…", which opens Preparar host; hidden for Solo terminal) and an
+// optional first message; Lanzar calls backend.Launch and opens the session.
 package newsession
 
 import (
 	"context"
+	"path"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/digiogithub/agentd/internal/desktopui/app"
@@ -48,7 +52,20 @@ type Agent struct{ ID, Label string }
 // Agents of the grid.
 var Agents = []Agent{
 	{"claude", "Claude Code"}, {"codex", "Codex"}, {"pando", "Pando"},
-	{"opencode", "opencode"}, {"gemini", "Gemini CLI"}, {"bash", "Shell"},
+	{"opencode", "opencode"}, {"gemini", "Gemini CLI"},
+}
+
+// What to open (first choice of the form).
+const (
+	OpenAgent = iota
+	OpenTerminal
+)
+
+var terminalHints = []string{
+	"Shell de login en la carpeta del proyecto, gestionado por agentd (buzón, vista y terminal).",
+	"Terminal sin agente: abre el shell por defecto de zellij en la carpeta.",
+	"Terminal sin agente: abre el shell por defecto de tmux en la carpeta.",
+	"Shell de login por SSH en la carpeta: se pierde al desconectar.",
 }
 
 // View is the page state (UI thread only).
@@ -56,6 +73,10 @@ type View struct {
 	a         *app.Context
 	hostID    string
 	routeHost string
+	// routeProject is the ?project= value already applied.
+	routeProject string
+	// openKind is OpenAgent or OpenTerminal.
+	openKind  int
 	target    int
 	project   string
 	agent     string
@@ -65,6 +86,7 @@ type View struct {
 
 	folderOpen bool
 	folder     string
+	browse     *browser
 
 	projects map[string][]proto.AliasInfo
 	loading  map[string]bool
@@ -72,7 +94,40 @@ type View struct {
 
 // New returns the page.
 func New(a *app.Context) *View {
-	return &View{a: a, agent: "claude", projects: map[string][]proto.AliasInfo{}, loading: map[string]bool{}}
+	v := &View{a: a, agent: "claude", projects: map[string][]proto.AliasInfo{}, loading: map[string]bool{}}
+	v.browse = newBrowser(a, v.addPath)
+	return v
+}
+
+// addPath makes an absolute folder (from the browser) the project.
+func (v *View) addPath(p string) {
+	if !slices.Contains(v.extra, p) {
+		v.extra = append(v.extra, p)
+	}
+	v.project = p
+}
+
+func (v *View) terminal() bool { return v.openKind == OpenTerminal }
+
+// label is the project label agentd and the multiplexers name the session
+// with: the alias, else the base name of the directory.
+func label(project string) string {
+	l := path.Base(strings.TrimRight(project, "/"))
+	if l == "." || l == "/" || l == "~" || l == "" {
+		return "home"
+	}
+	return l
+}
+
+// dirOf resolves an alias of host to its directory (zellij, tmux and SSH
+// take a directory, only agentd resolves aliases itself).
+func (v *View) dirOf(hostID, project string) string {
+	for _, p := range v.projects[hostID] {
+		if p.Name == project && p.Dir != "" {
+			return p.Dir
+		}
+	}
+	return project
 }
 
 func (v *View) host() (backend.HostStatus, bool) {
@@ -135,8 +190,18 @@ func (v *View) loadProjects(hostID string) {
 }
 
 func (v *View) name(project string) string {
+	if v.terminal() {
+		switch v.target {
+		case TargetAgentd, TargetZellij, TargetTmux:
+			return "shell@" + label(project)
+		}
+		return "ssh · terminal en " + project
+	}
 	switch v.target {
 	case TargetAgentd:
+		if strings.ContainsAny(project, "/~") {
+			project = label(project)
+		}
 		return v.agent + "@" + project
 	case TargetShell:
 		return "ssh · " + v.agent + " en " + project
@@ -151,6 +216,12 @@ func (v *View) Build(c *ui.Context, r *ui.Route) {
 		v.routeHost = r.Param("host")
 		if v.routeHost != "" {
 			v.hostID = v.routeHost
+		}
+	}
+	if r != nil && r.Query("project") != v.routeProject {
+		v.routeProject = r.Query("project")
+		if v.routeProject != "" {
+			v.addPath(v.routeProject)
 		}
 	}
 	h, hasHost := v.host()
@@ -191,7 +262,7 @@ func (v *View) Build(c *ui.Context, r *ui.Route) {
 	if hasHost {
 		caps = h.Capabilities
 	}
-	installed := v.agent == "bash" || caps != nil && caps.Has(v.agent)
+	installed := v.terminal() || caps != nil && caps.Has(v.agent)
 
 	ui.Column(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 		if kit.RouteHeader(c, "Nueva sesión", "", nil) {
@@ -203,7 +274,12 @@ func (v *View) Build(c *ui.Context, r *ui.Route) {
 		}
 		ui.Scroll(c.Key("form")).Grow(1).MinHeight(0).Padding(16, 24).Children(func() {
 			ui.Column(c).Gap(10).MaxWidth(720).FillWidth().Children(func() {
-				kit.SectionLabel(c, "Host", t.Muted)
+				kit.SectionLabel(c, "Abrir", t.Muted)
+				open := v.openKind
+				if kit.Segmented(c.Key("open"), &open, []string{"Agente", "Solo terminal"}, nil) {
+					v.openKind = open
+				}
+				kit.SectionLabel(c, "Host", t.Muted).Margin(8, 0, 0, 0)
 				v.hostPicker(c, t, h, hasHost)
 				kit.SectionLabel(c, "Dónde corre", t.Muted).Margin(8, 0, 0, 0)
 				sel := v.target
@@ -212,12 +288,31 @@ func (v *View) Build(c *ui.Context, r *ui.Route) {
 				}) {
 					v.target = sel
 				}
-				ui.Text(c, targetHints[v.target]).FontSize(12).TextColor(t.Muted).LineHeight(1.4)
+				hint := targetHints[v.target]
+				if v.terminal() {
+					hint = terminalHints[v.target]
+				}
+				ui.Text(c, hint).FontSize(12).TextColor(t.Muted).LineHeight(1.4)
 				kit.SectionLabel(c, "Proyecto", t.Muted).Margin(8, 0, 0, 0)
 				ui.Row(c).Gap(8).GapY(8).Wrap().Children(func() {
 					for _, p := range projects {
 						if kit.Chip(c.Key("p:"+p), p, p == v.project, true).Clicked() {
 							v.project = p
+						}
+					}
+					if v.a.Backend != nil && hasHost {
+						eb := ui.ButtonBase(c.Key("explore")).Label("Explorar carpetas").Height(36).Padding(0, 12).Radius(10).Gap(6).
+							Border(1, t.Border).AlignItems(ui.Center).Cursor(ui.CursorPointer).TextColor(t.Muted)
+						eb.Children(func() {
+							kit.Icon(c.Key("explore"), kit.IconFolder).FontSize(15)
+							ui.Text(c, "Explorar…").FontSize(13)
+						})
+						if eb.Clicked() {
+							start := ""
+							if v.project != "" {
+								start = v.dirOf(h.Host.ID, v.project)
+							}
+							v.browse.Open(h.Host.ID, start)
 						}
 					}
 					b := ui.ButtonBase(c.Key("folder")).Label("Añadir carpeta").Height(36).Padding(0, 12).Radius(10).
@@ -227,14 +322,16 @@ func (v *View) Build(c *ui.Context, r *ui.Route) {
 						v.folder, v.folderOpen = "", true
 					}
 				})
-				kit.SectionLabel(c, "Agente", t.Muted).Margin(8, 0, 0, 0)
-				ui.Grid(c).Columns(3).Gap(8).Children(func() {
-					for _, ag := range Agents {
-						v.agentTile(c.Key("ag:"+ag.ID), t, ag, caps, h, hasHost)
-					}
-				})
-				kit.SectionLabel(c, "Primer mensaje (opcional)", t.Muted).Margin(8, 0, 0, 0)
-				kit.Input(c.Key("prompt"), &v.prompt, "Qué debe hacer el agente", false).Label("Primer mensaje")
+				if !v.terminal() {
+					kit.SectionLabel(c, "Agente", t.Muted).Margin(8, 0, 0, 0)
+					ui.Grid(c).Columns(3).Gap(8).Children(func() {
+						for _, ag := range Agents {
+							v.agentTile(c.Key("ag:"+ag.ID), t, ag, caps, h, hasHost)
+						}
+					})
+					kit.SectionLabel(c, "Primer mensaje (opcional)", t.Muted).Margin(8, 0, 0, 0)
+					kit.Input(c.Key("prompt"), &v.prompt, "Qué debe hacer el agente", false).Label("Primer mensaje")
+				}
 			})
 		})
 		ui.Column(c).Shrink(0).Padding(12, 24, 18, 24).Gap(8).BorderWidth(1, 0, 0, 0).BorderColor(t.Divider).Children(func() {
@@ -276,6 +373,7 @@ func (v *View) Build(c *ui.Context, r *ui.Route) {
 			}
 		}})
 	v.folderOpen = open
+	v.browse.Build(c)
 }
 
 func (v *View) addFolder() {
@@ -322,17 +420,12 @@ func (v *View) hostPicker(c *ui.Context, t *kit.Tokens, h backend.HostStatus, ha
 }
 
 func (v *View) agentTile(c *ui.Context, t *kit.Tokens, ag Agent, caps *backend.Capabilities, h backend.HostStatus, has bool) {
-	shell := ag.ID == "bash"
-	missing := !shell && (caps == nil || !caps.Has(ag.ID))
-	sub := "bash"
-	if !shell {
-		if missing {
-			sub = "Instalar…"
-		} else {
-			sub = "instalado"
-			if ver := caps.Tools[ag.ID].Version; ver != "" {
-				sub += " · " + ver
-			}
+	missing := caps == nil || !caps.Has(ag.ID)
+	sub := "Instalar…"
+	if !missing {
+		sub = "instalado"
+		if ver := caps.Tools[ag.ID].Version; ver != "" {
+			sub += " · " + ver
 		}
 	}
 	tile := kit.SelectTile(c, ag.Label+", "+sub, v.agent == ag.ID, false, func() {
@@ -353,8 +446,15 @@ func (v *View) agentTile(c *ui.Context, t *kit.Tokens, ag Agent, caps *backend.C
 }
 
 func (v *View) launch(h backend.HostStatus) {
-	spec := backend.LaunchSpec{HostID: h.Host.ID, Where: targetSources[v.target], Project: v.project, Harness: v.agent,
+	project := v.project
+	if v.target != TargetAgentd {
+		project = v.dirOf(h.Host.ID, project)
+	}
+	spec := backend.LaunchSpec{HostID: h.Host.ID, Where: targetSources[v.target], Project: project, Harness: v.agent,
 		FirstPrompt: strings.TrimSpace(v.prompt)}
+	if v.terminal() {
+		spec.TerminalOnly, spec.Harness, spec.FirstPrompt = true, "", ""
+	}
 	v.launching = true
 	a := v.a
 	a.Go(func(ctx context.Context) {
@@ -366,7 +466,13 @@ func (v *View) launch(h backend.HostStatus) {
 				return
 			}
 			v.prompt = ""
-			a.Router.Replace(app.SessionPath(s))
+			p := app.SessionPath(s)
+			if spec.TerminalOnly {
+				p += "?tab=terminal"
+			}
+			a.Router.Replace(p)
 		})
 	})
 }
+
+func itoa(n int) string { return strconv.Itoa(n) }

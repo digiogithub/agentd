@@ -47,6 +47,8 @@ type View struct {
 	inboxCancel context.CancelFunc
 
 	term *termState
+	// kill is the Terminar confirmation.
+	kill *app.Terminator
 	ctx  context.Context
 	stop context.CancelFunc
 }
@@ -54,7 +56,7 @@ type View struct {
 // New returns the page of session s.
 func New(a *app.Context, s backend.Session) *View {
 	ctx, stop := context.WithCancel(a.Ctx)
-	v := &View{a: a, key: s.Key(), expanded: map[int]bool{}, ctx: ctx, stop: stop}
+	v := &View{a: a, key: s.Key(), expanded: map[int]bool{}, ctx: ctx, stop: stop, kill: app.NewTerminator(a)}
 	if s.Source != backend.SourceAgentd {
 		v.tab = TabTerminal
 	}
@@ -131,6 +133,7 @@ func (v *View) Build(c *ui.Context, s backend.Session, back func()) {
 			v.chatTab(c, t, s, view, viewErr)
 		}
 	})
+	v.kill.Build(c)
 	if view != nil && view.Attention.Set && status != "waiting" && v.tab == TabChat {
 		// Looking at a finished turn clears its attention, as the mobile app.
 		v.ack(s)
@@ -182,6 +185,10 @@ func (v *View) header(c *ui.Context, t *kit.Tokens, s backend.Session, view *pro
 				ui.Text(c, strings.Join(parts, " · ")).FontSize(12).TextColor(t.Muted).SingleLine().Ellipsis("…")
 			})
 			kit.StatusPill(c, status)
+			if kit.Button(c.Key("terminate"), kit.ButtonOpts{Variant: kit.Danger, Label: "Terminar", Height: 34, Round: true, FontSize: 12,
+				Tooltip: "Forzar cierre y borrar la sesión", Aria: "Terminar sesión"}).Clicked() {
+				v.kill.Ask(s)
+			}
 			if v.tab == TabTerminal {
 				observe := v.term != nil && v.term.observe
 				label := "Control"

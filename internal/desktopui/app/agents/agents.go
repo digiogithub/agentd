@@ -6,6 +6,8 @@
 package agents
 
 import (
+	"context"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -46,6 +48,11 @@ type View struct {
 	query     string
 	busy      map[string]bool
 	detail    *session.View
+	// kill is the Terminar confirmation of the list rows.
+	kill *app.Terminator
+	// aliases of each host (loaded once; grouping resolves labels with them).
+	aliases map[string][]proto.AliasInfo
+	loading map[string]bool
 	// missingKey is the routed session not listed yet (a launch whose
 	// session list update is still on its way), since missingSince.
 	missingKey   string
@@ -55,7 +62,31 @@ type View struct {
 }
 
 // New returns the agents area.
-func New(a *app.Context) *View { return &View{a: a, busy: map[string]bool{}, Now: time.Now} }
+func New(a *app.Context) *View {
+	return &View{a: a, busy: map[string]bool{}, Now: time.Now, kill: app.NewTerminator(a),
+		aliases: map[string][]proto.AliasInfo{}, loading: map[string]bool{}}
+}
+
+// byProject reports whether the list is grouped by project.
+func (v *View) byProject() bool { return v.a.Prefs.Get().AgentsGroup != app.GroupState }
+
+func (v *View) loadAliases(hostID string) {
+	if _, ok := v.aliases[hostID]; ok || v.loading[hostID] || v.a.Backend == nil {
+		return
+	}
+	v.loading[hostID] = true
+	a := v.a
+	a.Go(func(ctx context.Context) {
+		ps, err := a.Backend.Projects(ctx, hostID)
+		a.Update(func() {
+			delete(v.loading, hostID)
+			if err != nil {
+				ps = nil
+			}
+			v.aliases[hostID] = ps
+		})
+	})
+}
 
 // Close stops the open session.
 func (v *View) Close() {
@@ -95,7 +126,10 @@ func (v *View) Build(c *ui.Context, r *ui.Route) {
 		} else {
 			list.Grow(1)
 		}
-		list.Children(func() { v.inbox(c, t, key) })
+		list.Children(func() {
+			v.inbox(c, t, key)
+			v.kill.Build(c)
+		})
 		if wide {
 			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).AlignItems(ui.Stretch).Children(func() {
 				if key == "" {
@@ -203,6 +237,17 @@ func (v *View) inbox(c *ui.Context, t *kit.Tokens, open string) {
 		if v.searching {
 			kit.Input(c.Key("query"), &v.query, "Buscar sesión", false).Label("Buscar sesión").AutoFocus()
 		}
+		sel := 0
+		if !v.byProject() {
+			sel = 1
+		}
+		if kit.Segmented(c.Key("group"), &sel, []string{"Proyecto", "Estado"}, nil) {
+			mode := app.GroupProject
+			if sel == 1 {
+				mode = app.GroupState
+			}
+			_ = a.Prefs.Update(func(s *app.Settings) { s.AgentsGroup = mode })
+		}
 		ui.Row(c).Gap(8).Wrap().GapY(8).Children(func() {
 			for i, label := range chips {
 				if kit.Chip(c.Key(i), label, v.filter == i, false).Clicked() {
@@ -239,6 +284,10 @@ func (v *View) inbox(c *ui.Context, t *kit.Tokens, open string) {
 		kit.EmptyState(c, "", "", msg)
 		return
 	}
+	if v.byProject() {
+		v.projects(c, t, visible, show, open)
+		return
+	}
 	ui.Scroll(c.Key("list")).Grow(1).MinHeight(0).Padding(4, 16, 24, 16).Gap(10).Children(func() {
 		section := func(g app.Group, title string, color ui.Color) {
 			if !show(g) || count(g) == 0 {
@@ -254,6 +303,62 @@ func (v *View) inbox(c *ui.Context, t *kit.Tokens, open string) {
 		section(app.GroupNeedsAnswer, "Necesitan respuesta", t.Waiting)
 		section(app.GroupWorking, "Trabajando", t.Working)
 		section(app.GroupDone, "Listos", t.Muted)
+	})
+}
+
+// projects renders the Proyecto grouping.
+func (v *View) projects(c *ui.Context, t *kit.Tokens, visible []entry, show func(app.Group) bool, open string) {
+	a := v.a
+	hosts := map[string]hostInfo{}
+	for _, h := range a.Live.Hosts {
+		hi := hostInfo{}
+		if h.Capabilities != nil {
+			hi.home = h.Capabilities.Home
+		}
+		hosts[h.Host.ID] = hi
+	}
+	var shown []entry
+	for _, e := range visible {
+		if show(e.g) {
+			shown = append(shown, e)
+			hi := hosts[e.s.HostID]
+			hi.aliases = v.aliases[e.s.HostID]
+			hosts[e.s.HostID] = hi
+			v.loadAliases(e.s.HostID)
+		}
+	}
+	groups := buildGroups(shown, hosts)
+	multiHost := len(a.Live.Hosts) > 1
+	ui.Scroll(c.Key("list")).Grow(1).MinHeight(0).Padding(4, 16, 24, 16).Gap(10).Children(func() {
+		for _, g := range groups {
+			gc := c.Key("grp:" + g.key)
+			ui.Row(gc).Gap(8).AlignItems(ui.Center).Padding(8, 4, 0, 4).Children(func() {
+				ui.Column(gc).Grow(1).Shrink(1).MinWidth(0).Gap(2).Children(func() {
+					ui.Row(gc).Gap(8).AlignItems(ui.Center).Children(func() {
+						kit.Icon(gc, kit.IconFolder).FontSize(14).TextColor(t.Muted)
+						ui.Text(gc, g.label).FontSize(14).FontWeight(600).SingleLine().Ellipsis("…")
+						if g.waiting > 0 {
+							kit.Pill(gc, itoa(g.waiting), t.OnWaiting, t.Waiting)
+						}
+					})
+					sub := app.Plural(len(g.entries), "sesión", "sesiones")
+					if multiHost {
+						sub = a.Live.HostName(g.host) + " · " + sub
+					}
+					ui.Text(gc, sub).FontSize(12).TextColor(t.Muted).SingleLine().Ellipsis("…")
+				})
+				if kit.IconButton(gc.Key("add"), kit.IconPlus, "Nueva sesión en "+g.label).Clicked() {
+					p := "/new/" + url.PathEscape(g.host)
+					if g.newArg != "" {
+						p += "?project=" + url.QueryEscape(g.newArg)
+					}
+					a.Navigate(p)
+				}
+			})
+			for _, e := range g.entries {
+				v.card(c.Key("card:"+e.s.Key()), t, e, e.s.Key() == open)
+			}
+		}
 	})
 }
 
@@ -273,7 +378,15 @@ func (v *View) subtitle(s backend.Session) string {
 
 func (v *View) open(s backend.Session) { v.a.Navigate(app.SessionPath(s)) }
 
-func head(c *ui.Context, t *kit.Tokens, s backend.Session, sub, pill string, avFg, avBg ui.Color) {
+// killButton is the row action Terminar.
+func (v *View) killButton(c *ui.Context, s backend.Session) {
+	if kit.Button(c.Key("kill"), kit.ButtonOpts{Variant: kit.Ghost, Icon: kit.IconTrash, Height: 32, Round: true,
+		Tooltip: "Terminar sesión", Aria: "Terminar " + s.Name}).Clicked() {
+		v.kill.Ask(s)
+	}
+}
+
+func (v *View) head(c *ui.Context, t *kit.Tokens, s backend.Session, sub, pill string, avFg, avBg ui.Color) {
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 		kit.Avatar(c, app.AvatarLetter(s), "", avFg, avBg)
 		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(2).Children(func() {
@@ -283,6 +396,7 @@ func head(c *ui.Context, t *kit.Tokens, s backend.Session, sub, pill string, avF
 		if pill != "" {
 			kit.Pill(c, pill, t.OnWaiting, t.Waiting)
 		}
+		v.killButton(c, s)
 	})
 }
 
@@ -297,7 +411,7 @@ func (v *View) card(c *ui.Context, t *kit.Tokens, e entry, selected bool) {
 			border = t.WaitingBorder
 		}
 		kit.Card(c, border, func() {
-			head(c, t, s, v.subtitle(s), "Permiso", t.Waiting, t.WaitingBg)
+			v.head(c, t, s, v.subtitle(s), "Permiso", t.Waiting, t.WaitingBg)
 			kit.CodeBox(c, view.Dialog.Question)
 			ui.Row(c).Gap(8).Children(func() {
 				busy := v.busy[s.Key()]
@@ -315,30 +429,41 @@ func (v *View) card(c *ui.Context, t *kit.Tokens, e entry, selected bool) {
 		return
 	}
 	if e.g == app.GroupNeedsAnswer {
-		b := ui.ButtonBase(c).Label(app.SessionTitle(s)+": pregunta").Column().Gap(8).Padding(14).Radius(18).
-			Background(t.Surface).Border(1, border).AlignItems(ui.Stretch).Cursor(ui.CursorPointer)
-		if b.Hovered() {
-			b.Background(t.Raised)
-		}
-		b.Children(func() {
-			head(c, t, s, v.subtitle(s), "Pregunta", t.Accent, t.AccentBg)
-			q := s.Preview
-			n := 0
-			if view != nil {
-				n = len(view.Options)
-				if view.Dialog != nil && view.Dialog.Question != "" {
-					q = view.Dialog.Question
+		var b ui.Element
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+			b = ui.ButtonBase(c).Label(app.SessionTitle(s)+": pregunta").Column().Gap(8).Padding(14).Radius(18).Grow(1).Shrink(1).MinWidth(0).
+				Background(t.Surface).Border(1, border).AlignItems(ui.Stretch).Cursor(ui.CursorPointer)
+			if b.Hovered() {
+				b.Background(t.Raised)
+			}
+			b.Children(func() {
+				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+					kit.Avatar(c, app.AvatarLetter(s), "", t.Accent, t.AccentBg)
+					ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(2).Children(func() {
+						ui.Text(c, app.SessionTitle(s)).FontSize(15).FontWeight(600).SingleLine().Ellipsis("…")
+						ui.Text(c, v.subtitle(s)).FontSize(12).TextColor(t.Muted).SingleLine().Ellipsis("…")
+					})
+					kit.Pill(c, "Pregunta", t.OnWaiting, t.Waiting)
+				})
+				q := s.Preview
+				n := 0
+				if view != nil {
+					n = len(view.Options)
+					if view.Dialog != nil && view.Dialog.Question != "" {
+						q = view.Dialog.Question
+					}
 				}
-			}
-			if q == "" {
-				q = "Esperando una respuesta"
-			}
-			ui.Text(c, q).FontSize(14).TextColor(t.Secondary).LineHeight(1.45)
-			hint := "Haz clic para responder"
-			if n > 0 {
-				hint = app.Plural(n, "opción", "opciones") + " · haz clic para responder"
-			}
-			ui.Text(c, hint).FontSize(12).TextColor(t.Muted)
+				if q == "" {
+					q = "Esperando una respuesta"
+				}
+				ui.Text(c, q).FontSize(14).TextColor(t.Secondary).LineHeight(1.45)
+				hint := "Haz clic para responder"
+				if n > 0 {
+					hint = app.Plural(n, "opción", "opciones") + " · haz clic para responder"
+				}
+				ui.Text(c, hint).FontSize(12).TextColor(t.Muted)
+			})
+			v.killButton(c, s)
 		})
 		if b.Clicked() {
 			v.open(s)
@@ -382,37 +507,41 @@ func (v *View) row(c *ui.Context, t *kit.Tokens, s backend.Session, border ui.Co
 			sub += " · «" + s.Preview + "»"
 		}
 	}
-	b := ui.ButtonBase(c).Label(app.SessionTitle(s)+": "+kit.StatusLabel(s.Status)).Padding(12, 14).Gap(10).Radius(18).
-		Background(t.Surface).Border(1, border).AlignItems(ui.Center).Cursor(ui.CursorPointer)
-	if b.Hovered() {
-		b.Background(t.Raised)
-	}
-	b.Children(func() {
-		switch {
-		case mux:
-			kit.Avatar(c, "", kit.IconTerminal, t.Secondary, t.Raised)
-		case s.Status == "working" || s.Status == "starting":
-			kit.Avatar(c, app.AvatarLetter(s), "", t.Working, t.WorkingBg)
-		default:
-			kit.Avatar(c, app.AvatarLetter(s), "", t.Muted, t.Raised)
+	var b ui.Element
+	ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+		b = ui.ButtonBase(c).Label(app.SessionTitle(s)+": "+kit.StatusLabel(s.Status)).Padding(12, 14).Gap(10).Radius(18).
+			Grow(1).Shrink(1).MinWidth(0).Background(t.Surface).Border(1, border).AlignItems(ui.Center).Cursor(ui.CursorPointer)
+		if b.Hovered() {
+			b.Background(t.Raised)
 		}
-		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(3).Children(func() {
-			ui.Text(c, app.SessionTitle(s)).FontSize(15).FontWeight(600).SingleLine().Ellipsis("…")
-			st := ui.Text(c, sub).FontSize(12).TextColor(t.Muted).SingleLine().Ellipsis("…")
-			if s.Status == "working" && !mux {
-				st.Font(kit.MonoFamily())
+		b.Children(func() {
+			switch {
+			case mux:
+				kit.Avatar(c, "", kit.IconTerminal, t.Secondary, t.Raised)
+			case s.Status == "working" || s.Status == "starting":
+				kit.Avatar(c, app.AvatarLetter(s), "", t.Working, t.WorkingBg)
+			default:
+				kit.Avatar(c, app.AvatarLetter(s), "", t.Muted, t.Raised)
+			}
+			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(3).Children(func() {
+				ui.Text(c, app.SessionTitle(s)).FontSize(15).FontWeight(600).SingleLine().Ellipsis("…")
+				st := ui.Text(c, sub).FontSize(12).TextColor(t.Muted).SingleLine().Ellipsis("…")
+				if s.Status == "working" && !mux {
+					st.Font(kit.MonoFamily())
+				}
+			})
+			switch {
+			case s.Status == "working" || s.Status == "starting":
+				label := app.ShortDuration(s.Updated, v.Now())
+				if mux {
+					label = "activo"
+				}
+				ui.Text(c, label).FontSize(12).TextColor(t.Working).SingleLine()
+			case s.Attention:
+				ui.Box(c).Size(8, 8).Radius(4).Background(t.Accent).Label("Sin ver")
 			}
 		})
-		switch {
-		case s.Status == "working" || s.Status == "starting":
-			label := app.ShortDuration(s.Updated, v.Now())
-			if mux {
-				label = "activo"
-			}
-			ui.Text(c, label).FontSize(12).TextColor(t.Working).SingleLine()
-		case s.Attention:
-			ui.Box(c).Size(8, 8).Radius(4).Background(t.Accent).Label("Sin ver")
-		}
+		v.killButton(c, s)
 	})
 	if b.Clicked() {
 		v.open(s)

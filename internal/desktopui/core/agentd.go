@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -275,10 +276,23 @@ func (b *Backend) Launch(ctx context.Context, spec backend.LaunchSpec) (backend.
 	if args.Target == "" {
 		args.Target = home
 	}
+	if spec.TerminalOnly {
+		// The user's login shell in the project directory. "shell" is not a
+		// profile: the daemon falls back to the default one.
+		args.Harness = "shell"
+		args.Cmd = []string{"sh", "-c", `exec "${SHELL:-/bin/sh}" -l`}
+		spec.FirstPrompt = ""
+	}
 	var info proto.SessionInfo
 	err = b.withClient(ctx, spec.HostID, func(c *client.Client) error {
 		var err error
 		info, err = c.Run(args)
+		// Several terminals may share a project: shell@<label> taken means
+		// shell@<label>-2, -3, ...
+		for n := 2; spec.TerminalOnly && client.ErrorCode(err) == proto.CodeExists && n <= 50; n++ {
+			args.Name = fmt.Sprintf("shell@%s-%d", nameLabel(args.Target), n)
+			info, err = c.Run(args)
+		}
 		return err
 	})
 	if err != nil {
@@ -352,4 +366,20 @@ func (b *Backend) Kill(ctx context.Context, s backend.Session) error {
 		b.wakeMonitor(s.HostID)
 		return nil
 	}
+}
+
+// nameLabel is the session-name label of a run target: an alias as is, a
+// directory by its base name, mapped to the session-name charset.
+func nameLabel(target string) string {
+	l := path.Base(strings.TrimRight(target, "/"))
+	l = strings.Map(func(r rune) rune {
+		if r < 128 && (r == '.' || r == '_' || r == '-' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z') {
+			return r
+		}
+		return '-'
+	}, l)
+	if l == "" || l == "." || l == "-" {
+		return "shell"
+	}
+	return l
 }

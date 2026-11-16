@@ -103,6 +103,10 @@ type launchPlan struct {
 	harness string
 }
 
+// TerminalHarness is the harness name of a terminal-only session
+// (`shell@<label>`).
+const TerminalHarness = "shell"
+
 var unsafeNameChars = regexp.MustCompile(`[^A-Za-z0-9_@-]+`)
 
 // promptArgHarnesses take a first prompt as their first positional argument
@@ -115,6 +119,9 @@ var promptArgHarnesses = map[string]bool{"claude": true, "codex": true}
 // `:`) or shells dislike replaced by `-`.
 func planLaunch(spec backend.LaunchSpec) (launchPlan, error) {
 	h := strings.TrimSpace(spec.Harness)
+	if spec.TerminalOnly {
+		h = TerminalHarness
+	}
 	if h == "" {
 		return launchPlan{}, errors.New("mux: launch needs a harness")
 	}
@@ -131,7 +138,9 @@ func planLaunch(spec backend.LaunchSpec) (launchPlan, error) {
 		label = "home"
 	}
 	argv := []string{h}
-	if p := strings.TrimSpace(spec.FirstPrompt); p != "" && promptArgHarnesses[h] {
+	if spec.TerminalOnly {
+		argv = nil // the multiplexer's default shell
+	} else if p := strings.TrimSpace(spec.FirstPrompt); p != "" && promptArgHarnesses[h] {
 		argv = append(argv, p)
 	}
 	return launchPlan{session: h + "@" + label, cwd: cwd, argv: argv, harness: h}, nil

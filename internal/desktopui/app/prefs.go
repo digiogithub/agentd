@@ -20,7 +20,16 @@ type Settings struct {
 	ReplyFromAlert bool     `json:"reply_from_notification"`
 	Theme          kit.Mode `json:"theme"`
 	Muted          []Mute   `json:"muted,omitempty"`
+	// AgentsGroup is how the agents list groups sessions: GroupProject
+	// (default) or GroupState.
+	AgentsGroup string `json:"agents_group,omitempty"`
 }
+
+// Values of Settings.AgentsGroup.
+const (
+	GroupProject = "project"
+	GroupState   = "state"
+)
 
 // Mute silences the notifications of one session until a time.
 type Mute struct {
@@ -30,7 +39,7 @@ type Mute struct {
 }
 
 // DefaultSettings match the mockup: waiting, turn done and reply on.
-var DefaultSettings = Settings{NotifyWaiting: true, NotifyTurnDone: true, NotifyExit: false, ReplyFromAlert: true, Theme: kit.ModeDark}
+var DefaultSettings = Settings{NotifyWaiting: true, NotifyTurnDone: true, NotifyExit: false, ReplyFromAlert: true, Theme: kit.ModeDark, AgentsGroup: GroupProject}
 
 // Prefs stores Settings, in a file or in memory.
 type Prefs struct {

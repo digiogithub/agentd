@@ -51,6 +51,8 @@ type Fake struct {
 	sent          []proto.SendArgs
 	launched      []backend.LaunchSpec
 	killed        []string
+	terminated    []string
+	listed        []string
 	installs      []backend.ProvisionOptions
 	typed         []string
 	resizes       [][2]int
@@ -254,6 +256,20 @@ func (f *Fake) Launched() []backend.LaunchSpec {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.launched)
+}
+
+// Terminated returns the keys of the sessions Terminate removed.
+func (f *Fake) Terminated() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.terminated)
+}
+
+// Listed returns the ListDir calls as "host:path" (hidden adds "+h").
+func (f *Fake) Listed() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.listed)
 }
 
 // Installs returns the recorded Install options.
@@ -618,13 +634,20 @@ func (f *Fake) Launch(ctx context.Context, spec backend.LaunchSpec) (backend.Ses
 	if harness == "" {
 		harness = "claude"
 	}
+	if spec.TerminalOnly {
+		harness = "shell"
+	}
 	s := backend.Session{HostID: spec.HostID, Source: spec.Where, Harness: harness, Project: project, Status: "starting", Updated: time.Now()}
 	r := &sessRec{}
 	switch spec.Where {
 	case backend.SourceAgentd:
 		s.Name = harness + "@" + project
-		s.Info = &proto.SessionInfo{Name: s.Name, State: "running", Cwd: "~/src/" + project, Cols: 160, Rows: 50, Status: "starting", StartedAt: time.Now()}
-		r.view = &proto.View{Name: s.Name, Epoch: Epoch, Revision: 1, Status: "starting", Cwd: "~/src/" + project, Input: proto.ViewInput{State: "empty"}}
+		cwd := "~/src/" + project
+		if strings.HasPrefix(spec.Project, "/") || strings.HasPrefix(spec.Project, "~") {
+			cwd = spec.Project
+		}
+		s.Info = &proto.SessionInfo{Name: s.Name, State: "running", Cwd: cwd, Cols: 160, Rows: 50, Status: "starting", StartedAt: time.Now()}
+		r.view = &proto.View{Name: s.Name, Epoch: Epoch, Revision: 1, Status: "starting", Cwd: cwd, Input: proto.ViewInput{State: "empty"}}
 	case backend.SourceShell:
 		s.Name = "ssh-" + project
 		s.Status = "working"
@@ -683,6 +706,25 @@ func (f *Fake) Kill(ctx context.Context, s backend.Session) error {
 	}
 	f.publishLocked()
 	return nil
+}
+
+// Terminate implements backend.Backend: the session disappears from the list.
+func (f *Fake) Terminate(ctx context.Context, s backend.Session) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.terminated = append(f.terminated, s.Key())
+	for i, r := range f.sessions {
+		if r.s.Key() != s.Key() {
+			continue
+		}
+		f.sessions = slices.Delete(f.sessions, i, i+1)
+		if h := f.hostLocked(s.HostID); h != nil && h.st.Sessions > 0 {
+			h.st.Sessions--
+		}
+		f.publishLocked()
+		return nil
+	}
+	return proto.Errorf(proto.CodeNotFound, "no such session")
 }
 
 // ---- hosts ----
@@ -1137,4 +1179,86 @@ func (p *pty) Close() error {
 func (p *pty) Wait() (int, error) {
 	<-p.done
 	return 0, nil
+}
+
+// fakeDirs is the in-memory tree of ListDir (every host shares it).
+var fakeDirs = []string{
+	"/etc", "/srv", "/root", "/tmp",
+	"/home/jose/src/webapp", "/home/jose/src/api", "/home/jose/src/agentd", "/home/jose/src/docs", "/home/jose/src/infra",
+	"/home/jose/Documentos", "/home/jose/.config", "/home/jose/private",
+	"/home/dev/src/api", "/home/dev/src/infra", "/home/shared",
+}
+
+// fakeLocked are the directories the user cannot enter.
+var fakeLocked = map[string]bool{"/root": true, "/home/jose/private": true}
+
+// ListDir implements backend.Backend with a fixed in-memory tree: /root and
+// ~/private are not enterable, "/" is above the home.
+func (f *Fake) ListDir(ctx context.Context, hostID, path string, hidden bool) (backend.DirListing, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	h := f.hostLocked(hostID)
+	if h == nil || h.st.State != backend.HostOnline {
+		return backend.DirListing{}, errors.New("host offline")
+	}
+	home := "/home/jose"
+	if h.st.Capabilities != nil && h.st.Capabilities.Home != "" {
+		home = h.st.Capabilities.Home
+	}
+	rec := hostID + ":" + path
+	if hidden {
+		rec += "+h"
+	}
+	f.listed = append(f.listed, rec)
+	p := path
+	switch {
+	case p == "":
+		p = home
+	case p == "~":
+		p = home
+	case strings.HasPrefix(p, "~/"):
+		p = home + p[1:]
+	}
+	p = strings.TrimRight(p, "/")
+	if p == "" {
+		p = "/"
+	}
+	known := p == "/"
+	prefix := p + "/"
+	if p == "/" {
+		prefix = "/"
+	}
+	set := map[string]bool{}
+	for _, d := range fakeDirs {
+		if d == p || strings.HasPrefix(d, prefix) && p != "/" || p == "/" {
+			known = true
+		}
+		if rest, ok := strings.CutPrefix(d, prefix); ok && rest != "" {
+			set[strings.SplitN(rest, "/", 2)[0]] = true
+		}
+	}
+	if p == "/" {
+		set["home"] = true
+	}
+	if !known {
+		return backend.DirListing{}, backend.ErrDirNotFound
+	}
+	if fakeLocked[p] {
+		return backend.DirListing{}, backend.ErrDirDenied
+	}
+	l := backend.DirListing{Path: p, Home: home}
+	for n := range set {
+		if strings.HasPrefix(n, ".") && !hidden {
+			continue
+		}
+		child := prefix + n
+		if p == "/" {
+			child = "/" + n
+		}
+		l.Entries = append(l.Entries, backend.DirEntry{Name: n, Enterable: !fakeLocked[child]})
+	}
+	slices.SortFunc(l.Entries, func(a, b backend.DirEntry) int {
+		return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+	})
+	return l, nil
 }
