@@ -11,13 +11,18 @@ pages/
   assets/site.css   hand-drawn postcard / wax-crayon look (SVG noise + #wobble filter, no images)
   assets/site.js    copy buttons, scroll reveal, OS detection, latest-release download links
   assets/fonts/     Caveat, Patrick Hand, Courier Prime (OFL-1.1, latin subset, woff2)
-  assets/favicon.svg
+  assets/favicon.svg         the app icon (same as packaging/agentd-desktop.svg)
+  assets/app-icon.svg        the app icon, shown in the Apps section
+  assets/apple-touch-icon.png  180x180 render of the app icon
 ```
 
 Download links are filled at run time from the GitHub API
 (`repos/digiogithub/agentd/releases/latest`), matched by asset name pattern (`.deb` amd64/arm64,
 Linux `tar.gz`, macOS `.pkg`/`.zip`, `SHA256SUMS`). Without JavaScript, or when the API is rate
-limited, every link points at the releases page, so a new release needs no redeploy.
+limited, every link points at the releases page, so a new release needs no redeploy. The desktop app
+assets (`agentd-full_*.deb`, `agentd-desktop_*_linux_*.tar.gz`, `agentd-desktop_*_darwin_universal.zip`) come
+from the same release. The Android APKs (`agentd-app-<v>-<abi>.apk`, `SHA256SUMS`) come from a second fetch of
+`repos/digiogithub/agentd-app/releases/latest`, with their own version tag (`data-app-*` attributes) and fallback.
 
 Preview locally:
 

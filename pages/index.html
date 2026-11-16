@@ -4,14 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>agentd · Postcards between your coding agents</title>
-<meta name="description" content="agentd lets Claude Code, Codex, Grok, Pando and any other terminal coding agent exchange messages. No plugins, no hooks, no integrations. For Linux and macOS.">
+<meta name="description" content="agentd lets Claude Code, Codex, Grok, Pando and any other terminal coding agent exchange messages, and you steer them from a native desktop app or your phone. No plugins, no hooks. Linux, macOS and Android.">
 <meta name="theme-color" content="#f3ead6">
 <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <link rel="alternate" hreflang="en" href="./">
 <link rel="alternate" hreflang="es" href="es/">
 <link rel="alternate" hreflang="x-default" href="./">
 <meta property="og:title" content="agentd · Postcards between your coding agents">
-<meta property="og:description" content="Collaboration between agents of different harnesses. Works with any terminal agent: no plugins, hooks or integrations. Linux and macOS.">
+<meta property="og:description" content="Collaboration between agents of different harnesses, plus a desktop app and an Android app to chat with them over SSH. No plugins, hooks or integrations.">
 <meta property="og:type" content="website">
 <link rel="preload" href="assets/fonts/Caveat.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/PatrickHand-Regular.woff2" as="font" type="font/woff2" crossorigin>
@@ -63,6 +64,8 @@
       <a href="#how">How it works</a>
       <a href="#harnesses">Harnesses</a>
       <a href="#features">Features</a>
+      <a href="#control">Control</a>
+      <a href="#apps">Apps</a>
       <a href="#mcp">MCP</a>
       <a href="#download">Download</a>
     </nav>
@@ -99,6 +102,7 @@
         <li>Any terminal agent</li>
         <li>One Go binary</li>
         <li>Stays on your machine</li>
+        <li>Desktop &amp; Android apps</li>
       </ul>
     </div>
 
@@ -228,6 +232,96 @@
   </div>
 </section>
 
+<section id="control">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Beyond the mailbox</span>
+      <h2>Steer your agents, don't just message them</h2>
+      <p>agentd reads each terminal as a structured view and can answer it safely, so you (or a script, or your phone) can drive an agent without fighting its TUI.</p>
+    </div>
+    <div class="cards">
+      <article class="card rough reveal">
+        <span class="tape" aria-hidden="true"></span>
+        <div class="ic crayon" style="--c:#a9cdf0"><svg viewBox="0 0 32 32"><rect x="4" y="6" width="24" height="17" rx="2"/><path d="M9 12h14M9 17h8M12 27h8M16 23v4"/></svg></div>
+        <h3>Chat-like semantic view</h3>
+        <p>The terminal becomes a status, a transcript, the input line and the options of the pending question. Revisions and an epoch keep every client in step with the screen.</p>
+      </article>
+      <article class="card rough reveal">
+        <span class="tape" aria-hidden="true"></span>
+        <div class="ic crayon" style="--c:#b9e0b9"><svg viewBox="0 0 32 32"><path d="M5 17l6 6L27 8"/><rect x="4" y="4" width="24" height="24" rx="3"/></svg></div>
+        <h3>Safe approvals (act)</h3>
+        <p>Prompt, choose an option, send keys, interrupt. An action carries the revision it was based on: if the screen changed, it is refused instead of typing into the wrong menu.</p>
+      </article>
+      <article class="card rough reveal">
+        <span class="tape" aria-hidden="true"></span>
+        <div class="ic crayon" style="--c:#f6d77d"><svg viewBox="0 0 32 32"><path d="M4 16h5l3-8 5 16 3-8h8"/></svg></div>
+        <h3>Event bus</h3>
+        <p>Subscribe to status, attention, mail and turn events instead of polling. Missed events are replayed, and a resync tells you when to look again.</p>
+      </article>
+      <article class="card rough reveal">
+        <span class="tape" aria-hidden="true"></span>
+        <div class="ic crayon" style="--c:#f2a68a"><svg viewBox="0 0 32 32"><path d="M6 8h20M6 14h20M6 20h12"/><path d="M22 20l3 3 4-5"/></svg></div>
+        <h3>Shared work queues</h3>
+        <p>Post a task to <code>queue:build</code> and the first idle agent that claims it gets it. Nothing is injected until someone claims, and nobody grabs the same task twice.</p>
+      </article>
+      <article class="card rough reveal">
+        <span class="tape" aria-hidden="true"></span>
+        <div class="ic crayon" style="--c:#e2c1ef"><svg viewBox="0 0 32 32"><circle cx="9" cy="16" r="4"/><circle cx="23" cy="9" r="4"/><circle cx="23" cy="23" r="4"/><path d="M13 15l6-4M13 17l6 4"/></svg></div>
+        <h3>Herdr compatibility</h3>
+        <p><code>agentd hc install-shim</code> lets Herdr Desktop and the official Herdr mobile app list and drive agentd sessions. A proof of concept: some features are still missing.</p>
+      </article>
+      <article class="card rough reveal">
+        <span class="tape" aria-hidden="true"></span>
+        <div class="ic crayon" style="--c:#a9cdf0"><svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="11"/><path d="M16 9v7h6"/><path d="M5 16h3M24 16h3"/></svg></div>
+        <h3>Turns and program status</h3>
+        <p>Every finished turn is recorded as completed, aborted or exited, with who started it. Programs that report OSC 7501 are shown with their own words, not a guess.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section id="apps" class="apps">
+  <div class="wrap">
+    <div class="section-head">
+      <img class="app-icon" src="assets/app-icon.svg" width="72" height="72" alt="agentd app icon">
+      <span class="eyebrow">Apps</span>
+      <h2>Your agents, on your desk and in your pocket</h2>
+      <p>Both apps are clients: they reach each host only over SSH, and nothing listens on an open port. They list the agents of every host in one inbox, grouped by project or by what needs an answer.</p>
+    </div>
+    <div class="app-grid">
+      <article class="card rough reveal" style="--tilt: -.8deg">
+        <span class="tape" aria-hidden="true"></span>
+        <div class="ic crayon" style="--c:#a9cdf0"><svg viewBox="0 0 32 32"><rect x="3" y="5" width="26" height="17" rx="2"/><path d="M10 27h12M16 22v5"/></svg></div>
+        <h3>Desktop app</h3>
+        <p class="app-tag">Linux and macOS · native, GPU rendered</p>
+        <ul class="app-list">
+          <li><b>Chat</b> tab: transcript, tables, clickable links, the pending question with its options and a composer</li>
+          <li><b>Terminal</b> tab: a real attach that follows the window size</li>
+          <li>Agents grouped by project, with notifications when one needs you</li>
+          <li>Terminal-only sessions with agentd, zellij, tmux or plain SSH</li>
+          <li>Add hosts, browse remote folders, start sessions and force-terminate stuck ones</li>
+          <li>Provision a new host: install agentd, a systemd unit and MCP snippets</li>
+          <li>Mailbox and work queues</li>
+        </ul>
+      </article>
+      <article class="card rough reveal" style="--tilt: .9deg">
+        <span class="tape" aria-hidden="true"></span>
+        <div class="ic crayon" style="--c:#b9e0b9"><svg viewBox="0 0 32 32"><rect x="9" y="3" width="14" height="26" rx="3"/><path d="M14 25h4"/></svg></div>
+        <h3>Android app</h3>
+        <p class="app-tag">Signed APK · Android phones</p>
+        <ul class="app-list">
+          <li>The same model: one inbox, chat, terminal, approvals, mailbox and host provisioning</li>
+          <li>Attach images and mark them up with pen, arrows, boxes and text before sending</li>
+          <li>Dictate your prompts</li>
+          <li>Light, dark or system theme</li>
+          <li>Its own ed25519 key stored on the device; host keys trusted on first use</li>
+        </ul>
+      </article>
+    </div>
+    <p class="note center">Hosts need a running agentd and SSH access. The apps never contact a host you did not add.</p>
+  </div>
+</section>
+
 <section class="letter">
   <div class="wrap">
     <div>
@@ -255,18 +349,20 @@
     <div>
       <span class="eyebrow">Optional</span>
       <h2>MCP tools, if your agent likes them</h2>
-      <p>Agents can use plain <code>agentd</code> commands from their shell tool. If you prefer, <code>agentd mcp</code> is a stdio MCP server with five mailbox tools; no run, kill or type over MCP, so an agent cannot drive another agent's terminal.</p>
+      <p>Agents can use plain <code>agentd</code> commands from their shell tool. If you prefer, <code>agentd mcp</code> is a stdio MCP server with seven mailbox and work-queue tools; no run, kill or type over MCP, so an agent cannot drive another agent's terminal. Reading a peer's screen is off unless you enable it.</p>
 <pre class="snip" id="cmd-mcp"><button class="copy" type="button" data-copy="cmd-mcp">copy</button><span class="p">$ </span>agentd mcp install --print --harness claude   <span class="c"># claude | codex | pando | all</span></pre>
     </div>
     <div class="card rough reveal" style="--tilt: 1deg">
       <span class="tape" aria-hidden="true"></span>
-      <h3>Five tools</h3>
+      <h3>Seven tools</h3>
       <ul class="tools">
         <li><code class="crayon">agentd_peers</code><span>who can I write to?</span></li>
         <li><code class="crayon">agentd_send</code><span>send a message</span></li>
         <li><code class="crayon">agentd_inbox</code><span>list my mail</span></li>
         <li><code class="crayon">agentd_read</code><span>read one message</span></li>
         <li><code class="crayon">agentd_reply</code><span>answer the sender</span></li>
+        <li><code class="crayon">agentd_claim</code><span>claim a task from a queue</span></li>
+        <li><code class="crayon">agentd_queue</code><span>list waiting tasks</span></li>
       </ul>
     </div>
   </div>
@@ -277,7 +373,7 @@
     <div class="section-head">
       <span class="eyebrow">Download</span>
       <h2>Get agentd</h2>
-      <p>One self-contained binary for Linux (amd64, arm64) and macOS (universal, Intel and Apple silicon). Windows is not supported yet.</p>
+      <p>One self-contained binary for Linux (amd64, arm64) and macOS (universal, Intel and Apple silicon), the desktop app for the same systems, and an Android app. Windows is not supported yet.</p>
     </div>
     <div class="release-line">
       <span class="tag crayon" data-version>latest</span>
@@ -285,6 +381,7 @@
       <a href="https://github.com/digiogithub/agentd/releases/latest" data-release-notes>release notes</a>
     </div>
 
+    <h3 class="dl-sub">Command line and daemon</h3>
     <div class="parcels">
       <article class="parcel rough reveal" data-os="linux">
         <span class="twine" aria-hidden="true"></span>
@@ -323,11 +420,78 @@
       </article>
     </div>
 
+    <h3 class="dl-sub" id="download-desktop">Desktop app</h3>
+    <div class="parcels">
+      <article class="parcel rough reveal" data-os="linux">
+        <span class="twine" aria-hidden="true"></span>
+        <svg class="pm-mini" aria-hidden="true"><use href="#postmark"/></svg>
+        <header>
+          <svg class="os-ic" viewBox="0 0 48 48" aria-hidden="true"><g filter="url(#wobble)" fill="none" stroke="#27264a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="8" width="38" height="30" rx="3" fill="#fbf6ea"/><path d="M12 18l6 5-6 5M22 30h12"/></g></svg>
+          <h3>Linux</h3>
+        </header>
+        <ul class="dl-list">
+          <li><a class="dl" data-asset="full-amd64" href="https://github.com/digiogithub/agentd/releases/latest"><span class="kind crayon">.deb</span><span class="what">Debian / Ubuntu<small>amd64 · agentd + desktop app</small></span><span class="size" data-size></span></a></li>
+          <li><a class="dl" data-asset="full-arm64" href="https://github.com/digiogithub/agentd/releases/latest"><span class="kind crayon">.deb</span><span class="what">Debian / Ubuntu<small>arm64 · agentd + desktop app</small></span><span class="size" data-size></span></a></li>
+          <li><a class="dl" data-asset="desk-tar-amd64" href="https://github.com/digiogithub/agentd/releases/latest"><span class="kind crayon blue">tar.gz</span><span class="what">Any Linux<small>amd64 · desktop app only</small></span><span class="size" data-size></span></a></li>
+          <li><a class="dl" data-asset="desk-tar-arm64" href="https://github.com/digiogithub/agentd/releases/latest"><span class="kind crayon blue">tar.gz</span><span class="what">Any Linux<small>arm64 · desktop app only</small></span><span class="size" data-size></span></a></li>
+        </ul>
+<pre class="snip" id="cmd-desk-linux"><button class="copy" type="button" data-copy="cmd-desk-linux">copy</button><span class="p">$ </span>sudo apt install ./agentd-full_<span data-ver>&lt;version&gt;</span>_amd64.deb
+<span class="p">$ </span>agentd-desktop</pre>
+        <p class="note" style="margin-top:16px">Needs a display with OpenGL. The Debian package installs agentd and the desktop app together, and replaces the CLI-only package.</p>
+      </article>
+
+      <article class="parcel rough reveal" data-os="macos">
+        <span class="twine" aria-hidden="true"></span>
+        <svg class="pm-mini" aria-hidden="true"><use href="#postmark"/></svg>
+        <header>
+          <svg class="os-ic" viewBox="0 0 48 48" aria-hidden="true"><g filter="url(#wobble)" fill="none" stroke="#27264a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="30" height="21" rx="2" fill="#fbf6ea"/><path d="M4 36h40l-3 4H7z" fill="#e3cfa6"/></g></svg>
+          <h3>macOS</h3>
+        </header>
+        <ul class="dl-list">
+          <li><a class="dl" data-asset="desk-zip" href="https://github.com/digiogithub/agentd/releases/latest"><span class="kind crayon purple">.zip</span><span class="what">Bare binary<small>universal · signed and notarized</small></span><span class="size" data-size></span></a></li>
+        </ul>
+<pre class="snip" id="cmd-desk-mac"><button class="copy" type="button" data-copy="cmd-desk-mac">copy</button><span class="c"># unzip, then run (or move it somewhere on your PATH):</span>
+<span class="p">$ </span>unzip agentd-desktop_<span data-ver>&lt;version&gt;</span>_darwin_universal.zip
+<span class="p">$ </span>./agentd-desktop</pre>
+      </article>
+    </div>
+
+    <h3 class="dl-sub" id="download-android">Android app</h3>
+    <div class="release-line">
+      <span class="tag crayon" data-app-version>latest</span>
+      <span data-app-release-date>latest release</span>
+      <a href="https://github.com/digiogithub/agentd-app/releases/latest" data-app-release-notes>release notes</a>
+    </div>
+    <div class="parcels">
+      <article class="parcel rough reveal" data-os="android">
+        <span class="twine" aria-hidden="true"></span>
+        <svg class="pm-mini" aria-hidden="true"><use href="#postmark"/></svg>
+        <header>
+          <svg class="os-ic" viewBox="0 0 48 48" aria-hidden="true"><g filter="url(#wobble)" fill="none" stroke="#27264a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="14" y="5" width="20" height="38" rx="4" fill="#fbf6ea"/><path d="M21 37h6"/></g></svg>
+          <h3>Android</h3><span class="hint">your phone</span>
+        </header>
+        <ul class="dl-list">
+          <li><a class="dl" data-asset="apk-arm64" href="https://github.com/digiogithub/agentd-app/releases/latest"><span class="kind crayon green">.apk</span><span class="what">arm64-v8a <em>(recommended)</em><small>Most phones (64-bit ARM)</small></span><span class="size" data-size></span></a></li>
+          <li><a class="dl" data-asset="apk-armv7" href="https://github.com/digiogithub/agentd-app/releases/latest"><span class="kind crayon">.apk</span><span class="what">armeabi-v7a<small>Older 32-bit ARM phones</small></span><span class="size" data-size></span></a></li>
+          <li><a class="dl" data-asset="apk-x86_64" href="https://github.com/digiogithub/agentd-app/releases/latest"><span class="kind crayon blue">.apk</span><span class="what">x86_64<small>x86_64 devices and emulators</small></span><span class="size" data-size></span></a></li>
+        </ul>
+        <a class="btn" data-asset="app-sums" href="https://github.com/digiogithub/agentd-app/releases/latest" style="margin-top:14px">SHA256SUMS of the app <span class="size" data-size></span></a>
+      </article>
+
+      <article class="parcel rough reveal">
+        <span class="twine" aria-hidden="true"></span>
+        <header><h3>Sideload</h3></header>
+        <p class="note">The APK is signed. Allow installing from your browser or file manager, open the file and confirm. A Play Store listing is planned later, with no date yet.</p>
+<pre class="snip" id="cmd-apk"><button class="copy" type="button" data-copy="cmd-apk">copy</button><span class="p">$ </span>adb install agentd-app-<span data-app-ver>&lt;version&gt;</span>-arm64-v8a.apk
+<span class="p">$ </span>sha256sum -c SHA256SUMS --ignore-missing</pre>
+      </article>
+    </div>
+
     <div class="sums">
       <a class="btn" data-asset="sums" href="https://github.com/digiogithub/agentd/releases/latest">SHA256SUMS <span class="size" data-size></span></a>
 <pre class="snip" id="cmd-sums"><button class="copy" type="button" data-copy="cmd-sums">copy</button><span class="p">$ </span>sha256sum -c SHA256SUMS --ignore-missing
 <span class="c"># macOS: shasum -a 256 -c SHA256SUMS --ignore-missing</span></pre>
-      <p class="note">Every file of every version is on the <a href="https://github.com/digiogithub/agentd/releases">releases page</a>.</p>
+      <p class="note">Every file of every version is on the <a href="https://github.com/digiogithub/agentd/releases">releases page</a> of agentd and of <a href="https://github.com/digiogithub/agentd-app/releases">agentd-app</a>.</p>
     </div>
   </div>
 </section>
