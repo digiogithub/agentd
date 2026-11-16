@@ -82,7 +82,9 @@ type Request struct {
 	// insensitive), tied to this paste: it counts only if it appears in the
 	// input region (InputRegion) where it was not before, or if its number of
 	// occurrences on the screen grew versus a baseline taken just before the
-	// paste. Empty = the first 48 runes of the first non-blank line of the
+	// paste. The profile's paste placeholder (paste_placeholder_regex) counts
+	// too: more matches on the ghost-filtered screen, or in the input region,
+	// than in the baseline. Empty = the first 48 runes of the first non-blank line of the
 	// paste-safe Text; if there is none, Input fails with ErrEmptyNeedle.
 	Needle string
 	// InputRegion, when set, returns the text of the input region (the
@@ -238,6 +240,25 @@ func Input(ctx context.Context, t Target, p config.Profile, r Request) (Result, 
 	scr0, _ := t.ScreenFiltered(opts)
 	base := countVisible(scr0, needle)
 	inRegion0 := r.InputRegion != nil && PasteVisible(r.InputRegion(), needle)
+	// A harness that collapses long pastes into a placeholder
+	// (paste_placeholder_regex) shows that instead of the needle: one more
+	// placeholder on the ghost-filtered screen, or in the input region, than
+	// just before the paste counts.
+	ph := p.PastePlaceholder
+	phCount := func(s string) int { return len(ph.FindAllStringIndex(s, -1)) }
+	var phScreen0, phRegion0 int
+	if ph != nil {
+		phScreen0 = phCount(scr0)
+		if r.InputRegion != nil {
+			phRegion0 = phCount(r.InputRegion())
+		}
+	}
+	phGrew := func(scr string) bool {
+		if ph == nil {
+			return false
+		}
+		return phCount(scr) > phScreen0 || (r.InputRegion != nil && phCount(r.InputRegion()) > phRegion0)
+	}
 	pasted := time.Now()
 	if err := t.Paste(r.Text); err != nil {
 		return res, err
@@ -248,7 +269,8 @@ func Input(ctx context.Context, t Target, p config.Profile, r Request) (Result, 
 	for {
 		scr, _ := t.ScreenFiltered(opts)
 		if countVisible(scr, needle) > base ||
-			(r.InputRegion != nil && !inRegion0 && PasteVisible(r.InputRegion(), needle)) {
+			(r.InputRegion != nil && !inRegion0 && PasteVisible(r.InputRegion(), needle)) ||
+			phGrew(scr) {
 			break
 		}
 		if time.Since(pasted) >= PasteVerifyTimeout {

@@ -20,6 +20,10 @@
 //     (the harness behaviour agentd must never trigger);
 //   - -droppaste ignores the content of the first bracketed paste (no echo,
 //     the ghost stays), simulating a paste the TUI lost.
+//   - -collapse N shows a bracketed paste longer than N bytes as a
+//     placeholder "[Pasted text #K]" or "[Pasted text #K +L lines]" (L = the
+//     line breaks inside it), like Claude Code; the message still gets the
+//     full text.
 //
 // Widget modes (semantic-model §8; see widgets.go) replace the line prompt by
 // one interactive widget, resolve it, print "chose: <label>" (or "cancelled"),
@@ -52,6 +56,26 @@ import (
 
 	"golang.org/x/term"
 )
+
+// collapse is -collapse: pastes longer than it are shown as a placeholder.
+var collapse = flag.Int("collapse", 0, "show pastes longer than N bytes as a [Pasted text #K] placeholder (0 = never)")
+
+// pastes counts the placeholders shown so far (-collapse).
+var pastes int
+
+// pasteEcho is what the TUI draws for pasted text (line breaks as "\n"):
+// the text itself (breaks as "↵"), or a placeholder when it is longer than
+// -collapse.
+func pasteEcho(text string) string {
+	if *collapse <= 0 || len(text) <= *collapse {
+		return strings.ReplaceAll(text, "\n", "↵")
+	}
+	pastes++
+	if n := strings.Count(text, "\n"); n > 0 {
+		return fmt.Sprintf("[Pasted text #%d +%d lines]", pastes, n)
+	}
+	return fmt.Sprintf("[Pasted text #%d]", pastes)
+}
 
 const (
 	pasteStart = "\x1b[200~"
@@ -153,6 +177,7 @@ func main() {
 	dropping := false // inside the paste being dropped (-droppaste)
 	dropped := false  // the first paste was already dropped
 	var esc []byte    // pending escape sequence bytes
+	var pbuf []byte   // content of the paste being received (-collapse)
 
 	for c := range in {
 		if len(esc) > 0 || c == 0x1b {
@@ -165,6 +190,14 @@ func main() {
 					dropping, dropped = true, true
 				}
 			case s == pasteEnd:
+				if *collapse > 0 && pasting && !dropping {
+					clearGhost()
+					text := strings.ReplaceAll(string(pbuf), "\r", "\n")
+					line.WriteString(text)
+					out.WriteString(pasteEcho(text))
+					flush()
+				}
+				pbuf = nil
 				pasting, dropping, esc = false, false, nil
 			case strings.HasPrefix(pasteStart, s) || strings.HasPrefix(pasteEnd, s):
 				// keep accumulating
@@ -181,6 +214,10 @@ func main() {
 		}
 
 		if dropping {
+			continue
+		}
+		if pasting && *collapse > 0 {
+			pbuf = append(pbuf, c)
 			continue
 		}
 		if pasting || c >= 0x20 || c == '\t' {

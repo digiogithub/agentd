@@ -45,10 +45,12 @@ func TestDraftEffect(t *testing.T) {
 		{"\n", draftClear},
 		{"abc\x03", draftClear},
 		{"run\rnext", draftSet},
-		{"\x1b[A", draftNone},        // cursor up
-		{"\x1bOB", draftNone},        // SS3 cursor down
-		{"\x1b[I", draftNone},        // focus in
-		{"\x1b[<0;10;5M", draftNone}, // SGR mouse
+		{"\x1b[A", draftNone},                              // cursor up
+		{"\x1bOB", draftNone},                              // SS3 cursor down
+		{"\x1b[I", draftNone},                              // focus in
+		{"\x1b[<0;10;5M", draftNone},                       // SGR mouse
+		{"\x1b[M" + string([]byte{32, 42, 37}), draftNone}, // X10 mouse press
+		{"\x1b[M" + string([]byte{32, 42, 37}) + "a", draftSet},
 		{"\x1b]11;rgb:0/0/0\x07", draftNone},
 		{"\x1b[200~pasted\x1b[201~", draftSet},
 		{"x\x1b[D", draftSet},

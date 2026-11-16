@@ -63,6 +63,28 @@ type ActResult struct {
 	Warning   string `json:"warning,omitempty"`   // e.g. "human typed during submit delay"
 }
 
+// Reasons of a busy act error (ActBusy.Reason).
+const (
+	// BusyDraft: a pending draft (typed by a human without Enter, or text
+	// a prompt pasted and did not submit), younger than 10 minutes.
+	BusyDraft = "draft"
+	// BusyHuman: a human keystroke from an attached terminal within the
+	// profile's human_grace_ms (force overrides).
+	BusyHuman = "human"
+	// BusyInput: the harness's input line already holds text (typed in a
+	// terminal, or left there by an earlier paste); it has to be sent or
+	// cleared in the terminal first. force does not override it.
+	BusyInput = "input"
+	// BusyLock: another input operation (an act or a mailbox delivery) held
+	// the session for too long.
+	BusyLock = "lock"
+)
+
+// ActBusy is the Data of a busy act error: why the act was refused.
+type ActBusy struct {
+	Reason string `json:"reason"`
+}
+
 // ActConflict is the Data of a conflict error: the fresh state so the client
 // can redraw without a second round trip.
 type ActConflict struct {

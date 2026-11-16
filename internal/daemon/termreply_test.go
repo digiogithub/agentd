@@ -30,11 +30,49 @@ func TestSplitTermReplies(t *testing.T) {
 		{"osc title not reply", "\x1b]0;title\x07", "\x1b]0;title\x07", ""},
 		{"F-key R without semicolon", "\x1b[2R", "\x1b[2R", ""},
 		{"DA query is not reply", "\x1b[c", "\x1b[c", ""},
+		{"dsr ok", "\x1b[0n", "", "\x1b[0n"},
+		{"color scheme 2031", "\x1b[?997;1n", "", "\x1b[?997;1n"},
+		{"xtwinops size", "\x1b[8;50;160t", "", "\x1b[8;50;160t"},
+		{"xtwinops pixels", "\x1b[4;800;1280t", "", "\x1b[4;800;1280t"},
 	}
 	for _, c := range cases {
 		in, rep := splitTermReplies([]byte(c.in))
 		if string(in) != c.input || string(rep) != c.replies {
 			t.Errorf("%s: split(%q) = (%q, %q), want (%q, %q)", c.name, c.in, in, rep, c.input, c.replies)
+		}
+	}
+}
+
+func TestAmbientOnly(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"focus in", "\x1b[I", true},
+		{"focus out", "\x1b[O", true},
+		{"focus pair", "\x1b[O\x1b[I", true},
+		{"sgr motion no button", "\x1b[<35;10;5M", true},
+		{"sgr motion with shift", "\x1b[<39;10;5M", true},
+		{"sgr wheel up", "\x1b[<64;10;5M", true},
+		{"sgr wheel down", "\x1b[<65;3;4M", true},
+		{"several motions", "\x1b[<35;10;5M\x1b[<35;11;5M\x1b[<35;12;6M", true},
+		{"urxvt motion", "\x1b[67;10;5M", true},
+		{"x10 motion", "\x1b[M" + string([]byte{32 + 35, 32 + 10, 32 + 5}), true},
+		{"x10 press", "\x1b[M" + string([]byte{32, 32 + 10, 32 + 5}), false},
+		{"sgr press", "\x1b[<0;10;5M", false},
+		{"sgr release", "\x1b[<0;10;5m", false},
+		{"sgr drag", "\x1b[<32;10;5M", false},
+		{"key", "a", false},
+		{"motion then key", "\x1b[<35;10;5Mx", false},
+		{"cursor key", "\x1b[A", false},
+		{"enter", "\r", false},
+		{"truncated", "\x1b[<35;10", false},
+		{"empty", "", false},
+	}
+	for _, c := range cases {
+		if got := ambientOnly([]byte(c.in)); got != c.want {
+			t.Errorf("%s: ambientOnly(%q) = %v, want %v", c.name, c.in, got, c.want)
 		}
 	}
 }

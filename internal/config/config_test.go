@@ -307,6 +307,7 @@ func TestLoadErrors(t *testing.T) {
 		{"invalid regex in named profile", "[profiles.codex]\nprompt_regex = '(['\n", "prompt_regex"},
 		{"invalid regex in default", "[profiles.default]\nprompt_regex = '(['\n", "prompt_regex"},
 		{"invalid regex in custom", "[profiles.x]\nprompt_regex = '*'\n", "prompt_regex"},
+		{"invalid paste placeholder", "[profiles.claude]\npaste_placeholder_regex = '(['\n", "paste_placeholder_regex"},
 		{"negative value", "[profiles.default]\nidle_ms = -1\n", "idle_ms"},
 		{"bad acl glob", "[acl]\n\"a\" = [\"[\"]\n", "bad glob"},
 		{"unknown key", "[profiles.default]\nidle = 3\n", "unknown keys"},
@@ -531,5 +532,38 @@ func TestMailboxConfig(t *testing.T) {
 		if _, err := Load(writeConfig(t, body)); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+func TestPastePlaceholderBuiltins(t *testing.T) {
+	c := Default()
+	ph := c.Profile("claude").PastePlaceholder
+	if ph == nil {
+		t.Fatal("claude has no paste placeholder rule")
+	}
+	for _, s := range []string{"❯ [Pasted text #1]", "❯ [Pasted text #12 +40 lines] and more"} {
+		if !ph.MatchString(s) {
+			t.Errorf("no match: %q", s)
+		}
+	}
+	if ph.MatchString("Pasted text #1") {
+		t.Error("matched without brackets")
+	}
+	for _, n := range []string{"default", "codex", "pando"} {
+		if c.Profile(n).PastePlaceholder != nil {
+			t.Errorf("%s: unexpected paste placeholder rule", n)
+		}
+	}
+	dir := t.TempDir()
+	p := filepath.Join(dir, "c.toml")
+	if err := os.WriteFile(p, []byte("[profiles.claude]\npaste_placeholder_regex = ''\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c2, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c2.Profile("claude").PastePlaceholder != nil {
+		t.Error("empty paste_placeholder_regex did not disable the rule")
 	}
 }

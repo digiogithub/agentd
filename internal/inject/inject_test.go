@@ -3,6 +3,7 @@ package inject
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -282,5 +283,63 @@ func TestDraftMarkedWhenNotSubmitted(t *testing.T) {
 	}
 	if g.marked != 0 || g.cleared != 1 {
 		t.Errorf("submitted: marked=%d cleared=%d", g.marked, g.cleared)
+	}
+}
+
+// placeholderProf collapses pastes like Claude Code ("[Pasted text #N]").
+func placeholderProf() config.Profile {
+	p := prof()
+	p.PastePlaceholder = regexp.MustCompile(`\[Pasted text #\d+( \+\d+ lines)?\]`)
+	return p
+}
+
+func TestInputPlaceholderVerifies(t *testing.T) {
+	f := &fake{screen: "transcript\n"}
+	f.onPaste = func() {
+		f.mu.Lock()
+		f.screen += "❯ [Pasted text #1 +12 lines]"
+		f.mu.Unlock()
+	}
+	res, err := Input(context.Background(), f, placeholderProf(), Request{Text: "line one\nline two", Submit: true})
+	if err != nil || !res.Submitted {
+		t.Fatalf("res=%+v err=%v writes=%q", res, err, f.writes)
+	}
+}
+
+func TestInputPlaceholderInRegionVerifies(t *testing.T) {
+	region := "❯ "
+	f := &fake{screen: "older: [Pasted text #1]\n"} // in the transcript, not the input
+	f.onPaste = func() {
+		f.mu.Lock()
+		region = "❯ [Pasted text #2]"
+		f.mu.Unlock()
+	}
+	in := func() string { f.mu.Lock(); defer f.mu.Unlock(); return region }
+	res, err := Input(context.Background(), f, placeholderProf(), Request{Text: "long", Submit: true, InputRegion: in})
+	if err != nil || !res.Submitted {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+}
+
+func TestInputPlaceholderAlreadyThereDoesNotVerify(t *testing.T) {
+	// A placeholder left in the input line before the paste is not proof.
+	f := &fake{screen: "❯ [Pasted text #1]"}
+	in := func() string { return "❯ [Pasted text #1]" }
+	res, err := Input(context.Background(), f, placeholderProf(), Request{Text: "long", Submit: true, InputRegion: in})
+	if !errors.Is(err, ErrPasteNotVisible) || res.Submitted {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+}
+
+func TestInputNoPlaceholderRuleFails(t *testing.T) {
+	f := &fake{}
+	f.onPaste = func() {
+		f.mu.Lock()
+		f.screen += "❯ [Pasted text #1 +12 lines]"
+		f.mu.Unlock()
+	}
+	res, err := Input(context.Background(), f, prof(), Request{Text: "long", Submit: true})
+	if !errors.Is(err, ErrPasteNotVisible) || res.Submitted {
+		t.Fatalf("res=%+v err=%v", res, err)
 	}
 }

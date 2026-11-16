@@ -42,6 +42,10 @@ type ProfileConfig struct {
 	Submit        *string `toml:"submit"`
 	SubmitDelayMS *int    `toml:"submit_delay_ms"`
 	InlineMax     *int    `toml:"inline_max"`
+	// PastePlaceholderRegex matches the placeholder a harness draws in its
+	// input line instead of a long paste (Claude Code: "[Pasted text #1 +12
+	// lines]"); a new match after a paste verifies it. "" = none.
+	PastePlaceholderRegex *string `toml:"paste_placeholder_regex"`
 	// Cols and Rows are the fixed PTY size of sessions started without an
 	// explicit size (default 160x50).
 	Cols *int `toml:"cols"`
@@ -265,6 +269,11 @@ type Profile struct {
 	Cols, Rows int
 	// Prompt is PromptRegex compiled; nil when PromptRegex is empty.
 	Prompt *regexp.Regexp
+	// PastePlaceholderRegex matches the placeholder the harness shows in its
+	// input line instead of a long paste ("" = none); PastePlaceholder is it
+	// compiled.
+	PastePlaceholderRegex string
+	PastePlaceholder      *regexp.Regexp
 
 	// GhostFaint classifies faint (SGR 2) cells of the input line as ghost
 	// text (a suggested prompt or placeholder, never user input).
@@ -324,29 +333,34 @@ func strsp(s []string) *[]string { return &s }
 // generic defaults.
 var builtinProfiles = map[string]ProfileConfig{
 	DefaultProfile: {
-		IdleMS:             intp(DefaultIdleMS),
-		HumanGraceMS:       intp(DefaultHumanGraceMS),
-		PromptRegex:        strp(""),
-		Submit:             strp(DefaultSubmit),
-		SubmitDelayMS:      intp(DefaultSubmitDelayMS),
-		InlineMax:          intp(DefaultInlineMax),
-		Cols:               intp(DefaultCols),
-		Rows:               intp(DefaultRows),
-		GhostFaint:         boolp(true),
-		GhostColors:        strsp(nil),
-		GhostRightOfCursor: boolp(false),
-		PromptMarker:       strp(""),
-		MenuConfig:         defaultMenuConfig(),
-		RegionConfig:       defaultRegionConfig(),
-		StatusConfig:       defaultStatusConfig(),
-		ActConfig:          defaultActConfig(),
+		IdleMS:                intp(DefaultIdleMS),
+		HumanGraceMS:          intp(DefaultHumanGraceMS),
+		PromptRegex:           strp(""),
+		PastePlaceholderRegex: strp(""),
+		Submit:                strp(DefaultSubmit),
+		SubmitDelayMS:         intp(DefaultSubmitDelayMS),
+		InlineMax:             intp(DefaultInlineMax),
+		Cols:                  intp(DefaultCols),
+		Rows:                  intp(DefaultRows),
+		GhostFaint:            boolp(true),
+		GhostColors:           strsp(nil),
+		GhostRightOfCursor:    boolp(false),
+		PromptMarker:          strp(""),
+		MenuConfig:            defaultMenuConfig(),
+		RegionConfig:          defaultRegionConfig(),
+		StatusConfig:          defaultStatusConfig(),
+		ActConfig:             defaultActConfig(),
 	},
 	"claude": {
-		PromptRegex:        strp(`(?m)^❯([ \x{a0}]|$)`),
-		GhostRightOfCursor: boolp(true),
-		PromptMarker:       strp("❯"),
-		MenuConfig:         MenuConfig{MenuPointers: strsp([]string{"❯"}), MenuDigitAction: strp(MenuDigitSelect)}, // digit action to confirm (F8)
-		ActConfig:          ActConfig{InterruptKeys: strsp([]string{"esc"})},                                       // to confirm (F8)
+		PromptRegex: strp(`(?m)^❯([ \x{a0}]|$)`),
+		// Claude Code collapses a long or multi-line paste into
+		// "[Pasted text #N]" or "[Pasted text #N +M lines]" (seen in session
+		// logs, v2.1.x).
+		PastePlaceholderRegex: strp(`\[Pasted text #\d+( \+\d+ lines)?\]`),
+		GhostRightOfCursor:    boolp(true),
+		PromptMarker:          strp("❯"),
+		MenuConfig:            MenuConfig{MenuPointers: strsp([]string{"❯"}), MenuDigitAction: strp(MenuDigitSelect)}, // digit action to confirm (F8)
+		ActConfig:             ActConfig{InterruptKeys: strsp([]string{"esc"})},                                       // to confirm (F8)
 	},
 	"codex": {
 		PromptRegex:        strp(`(?m)^›( |$)`),
@@ -520,15 +534,16 @@ func (c *Config) resolve(name string) error {
 		pc.merge(l)
 	}
 	p := &Profile{
-		Name:          name,
-		IdleMS:        *pc.IdleMS,
-		HumanGraceMS:  *pc.HumanGraceMS,
-		PromptRegex:   *pc.PromptRegex,
-		Submit:        *pc.Submit,
-		SubmitDelayMS: *pc.SubmitDelayMS,
-		InlineMax:     *pc.InlineMax,
-		Cols:          *pc.Cols,
-		Rows:          *pc.Rows,
+		Name:                  name,
+		IdleMS:                *pc.IdleMS,
+		HumanGraceMS:          *pc.HumanGraceMS,
+		PromptRegex:           *pc.PromptRegex,
+		PastePlaceholderRegex: *pc.PastePlaceholderRegex,
+		Submit:                *pc.Submit,
+		SubmitDelayMS:         *pc.SubmitDelayMS,
+		InlineMax:             *pc.InlineMax,
+		Cols:                  *pc.Cols,
+		Rows:                  *pc.Rows,
 
 		GhostFaint:         *pc.GhostFaint,
 		GhostColors:        append([]string(nil), *pc.GhostColors...),
@@ -566,6 +581,13 @@ func (c *Config) resolve(name string) error {
 		}
 		p.Prompt = re
 	}
+	if p.PastePlaceholderRegex != "" {
+		re, err := regexp.Compile(p.PastePlaceholderRegex)
+		if err != nil {
+			return fmt.Errorf("profiles.%s: invalid paste_placeholder_regex: %w", name, err)
+		}
+		p.PastePlaceholder = re
+	}
 	c.resolved[name] = p
 	return nil
 }
@@ -579,6 +601,9 @@ func (pc *ProfileConfig) merge(o ProfileConfig) {
 	}
 	if o.PromptRegex != nil {
 		pc.PromptRegex = o.PromptRegex
+	}
+	if o.PastePlaceholderRegex != nil {
+		pc.PastePlaceholderRegex = o.PastePlaceholderRegex
 	}
 	if o.Submit != nil {
 		pc.Submit = o.Submit

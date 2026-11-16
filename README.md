@@ -307,6 +307,10 @@ human_grace_ms = 5000
 submit = "\r"
 submit_delay_ms = 150
 inline_max = 400
+# A harness that shows a placeholder instead of a long paste: a new match verifies the paste.
+# Built-in claude: '\[Pasted text #\d+( \+\d+ lines)?\]'; others none. Setting it here (in
+# [profiles.default]) would override the claude built-in: set it per profile instead.
+# paste_placeholder_regex = '…'
 
 # Ghost text (suggested prompt / placeholder) on the input line = the cursor's row, from the
 # cursor to the right. Built-in: ghost_faint = true everywhere; claude/codex add

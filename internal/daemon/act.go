@@ -294,10 +294,20 @@ func (e *entry) current() actState {
 	}
 }
 
+// busyErr is a busy error whose Data (proto.ActBusy) names the reason.
+func busyErr(reason, format string, args ...any) error {
+	err := proto.Errorf(proto.CodeBusy, format, args...)
+	var ce *proto.CodedError
+	if errors.As(err, &ce) {
+		ce.Data = proto.ActBusy{Reason: reason}
+	}
+	return err
+}
+
 // draftBusy is the busy error for a pending human draft.
 func draftBusy(e *entry, now time.Time) error {
 	if inject.DraftPending(e.sess, now) {
-		return proto.Errorf(proto.CodeBusy, "session %q has a pending draft in its input line (typed by a human or pasted and not submitted); not acting", e.sess.Name())
+		return busyErr(proto.BusyDraft, "session %q has a pending draft in its input line (typed by a human or pasted and not submitted); not acting", e.sess.Name())
 	}
 	return nil
 }
@@ -307,7 +317,7 @@ func lockInput(ctx context.Context, e *entry) (func(), error) {
 	defer cancel()
 	unlock, err := inject.Lock(lctx, e.sess)
 	if err != nil {
-		return nil, proto.Errorf(proto.CodeBusy, "session %q is busy with another input operation", e.sess.Name())
+		return nil, busyErr(proto.BusyLock, "session %q is busy with another input operation", e.sess.Name())
 	}
 	return unlock, nil
 }
@@ -401,14 +411,14 @@ func (s *Server) actPrompt(ctx context.Context, e *entry, who caller, a proto.Ac
 				return err
 			}
 			if !a.Force && humanRecent(e, now) {
-				return proto.Errorf(proto.CodeBusy, "session %q: a human typed within the last %s; not acting (force overrides)", e.sess.Name(), e.profile.HumanGrace())
+				return busyErr(proto.BusyHuman, "session %q: a human typed within the last %s; not acting (force overrides)", e.sess.Name(), e.profile.HumanGrace())
 			}
 			st := e.current()
 			guardOptions = st.options
 			// Never paste over text that is already in the input line (force
 			// does not override: it would be submitted together with ours).
 			if strings.TrimSpace(st.inputText) != "" {
-				return proto.Errorf(proto.CodeBusy, "session %q: the input line is not empty; not acting", e.sess.Name())
+				return busyErr(proto.BusyInput, "session %q: the input line already holds text (typed in a terminal or left by an earlier paste); send or clear it in the terminal first", e.sess.Name())
 			}
 			if a.Force {
 				return nil
@@ -449,7 +459,11 @@ func (s *Server) actPrompt(ctx context.Context, e *entry, who caller, a proto.Ac
 	})
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			return nil, proto.WithCode(proto.CodeBusy, fmt.Errorf("act prompt: input busy: %w", err))
+			ce := &proto.CodedError{Code: proto.CodeBusy, Msg: "act prompt: input busy: " + err.Error(), Data: proto.ActBusy{Reason: proto.BusyLock}, Err: err}
+			return nil, ce
+		}
+		if errors.Is(err, inject.ErrPasteNotVisible) {
+			return nil, proto.Errorf(proto.CodeVerifyFailed, "act prompt: the pasted text did not show up on screen within %s; Enter not sent (the harness may still hold it in its input line: check the terminal): %w", inject.PasteVerifyTimeout, err)
 		}
 		return nil, err
 	}
@@ -628,7 +642,7 @@ func (s *Server) actChoose(ctx context.Context, e *entry, who caller, a proto.Ac
 		return nil, err
 	}
 	if !a.Force && humanRecent(e, time.Now()) {
-		return nil, proto.Errorf(proto.CodeBusy, "session %q: a human typed within the last %s; not acting (force overrides)", e.sess.Name(), e.profile.HumanGrace())
+		return nil, busyErr(proto.BusyHuman, "session %q: a human typed within the last %s; not acting (force overrides)", e.sess.Name(), e.profile.HumanGrace())
 	}
 	v := e.view
 

@@ -128,9 +128,9 @@ Typed text is never faint in either harness, and once a human types the ghost te
    it is not there, **no submit** is sent (Enter on an empty Claude Code input may submit the
    suggestion), the message stays queued and is retried after the cooldown.
 
-Known limits: a paste longer than Claude Code's paste-collapse threshold (not measured here; believed
-to be several hundred characters) shows as `[Pasted text …]` and would fail verification, so the
-message would never be submitted. Notices are single-line and capped (`inline_max`, default 400, plus
+Known limits: a paste longer than Claude Code's paste-collapse threshold shows as `[Pasted text #N]` (or
+`[Pasted text #N +M lines]` when multi-line); the claude profile's `paste_placeholder_regex` accepts a new
+placeholder as proof of the paste, so such notices and long act prompts are submitted. Notices are single-line and capped (`inline_max`, default 400, plus
 a ~150–200 char header); lower `inline_max` if a harness collapses them. A paste that renders only after the 1 s window stays in
 the input line un-submitted until the retry pastes the notice again. Multi-row ghost text (a
 suggestion wrapped onto the next row) is only hidden on the cursor's row.

@@ -78,6 +78,11 @@ func skipEscape(p []byte, i int) int {
 	}
 	switch p[i+1] {
 	case '[': // CSI: parameters/intermediates 0x20–0x3f, final 0x40–0x7e
+		if i+2 < len(p) && p[i+2] == 'M' {
+			// X10 mouse report: CSI M plus three raw bytes (no key sends
+			// CSI M), which must not count as typed text.
+			return min(i+5, len(p)-1)
+		}
 		for j := i + 2; j < len(p); j++ {
 			if p[j] >= 0x40 && p[j] <= 0x7e {
 				return j

@@ -1,5 +1,10 @@
 package daemon
 
+import (
+	"strconv"
+	"strings"
+)
+
 // Terminal replies in the attach input stream.
 //
 // While clients are attached, their real terminals answer the queries the
@@ -16,6 +21,9 @@ package daemon
 //   - CSI ? … c, CSI > … c, CSI = … c   device attributes (DA1/DA2/DA3)
 //   - CSI ? … $ y, CSI … $ y       mode reports (DECRPM)
 //   - CSI ? … u                    keyboard protocol flags report
+//   - CSI … n                      device status reports (DSR "0n", the
+//     colour-scheme report "?997;1n" of mode 2031, …)
+//   - CSI … t                      window reports (XTWINOPS "8;rows;cols t", …)
 //   - OSC 4/10/11/12/… ; … (BEL|ST) colour query answers (OSC with a numeric
 //     code followed by "rgb:" data)
 //   - DCS … ST                     DECRQSS / XTVERSION / XTGETTCAP answers
@@ -113,8 +121,96 @@ func isCSIReply(params []byte, final byte) bool {
 		return len(params) > 0 && params[len(params)-1] == '$'
 	case 'u': // keyboard flags report: ? flags u
 		return len(params) > 0 && params[0] == '?'
+	case 'n': // DSR answers ("0n", "?997;1n", "?10n"); no key ends in n
+		ps := params
+		if len(ps) > 0 && ps[0] == '?' {
+			ps = ps[1:]
+		}
+		return onlyDigitsSemis(ps)
+	case 't': // XTWINOPS reports ("4;h;w t", "8;rows;cols t"); no key ends in t
+		return onlyDigitsSemis(params)
 	}
 	return false
+}
+
+// ambientOnly reports whether attach input p (terminal replies already
+// removed) consists only of pointer and focus reports that a terminal sends
+// without a keystroke: focus in/out (CSI I, CSI O; DEC 1004), mouse motion
+// with no button held and mouse wheel events (SGR "CSI < b;x;y M|m", urxvt
+// "CSI b;x;y M" and X10 "CSI M bxy"). Such input reaches the child but is
+// not human typing: it does not update LastHumanInput (human_grace_ms), the
+// draft state or the turn origin, and does not make the client active. A
+// terminal view that only has the pointer over it (a desktop client's
+// Terminal tab with Claude Code's any-event mouse tracking, mode 1003) would
+// otherwise keep acts busy. Clicks and drags still count as human input.
+func ambientOnly(p []byte) bool {
+	if len(p) == 0 {
+		return false
+	}
+	for i := 0; i < len(p); {
+		n := ambientLen(p[i:])
+		if n == 0 {
+			return false
+		}
+		i += n
+	}
+	return true
+}
+
+// ambientLen returns the length of the focus or ambient mouse report at the
+// start of p, or 0 when p does not start with one.
+func ambientLen(p []byte) int {
+	if len(p) < 3 || p[0] != 0x1b || p[1] != '[' {
+		return 0
+	}
+	switch p[2] {
+	case 'I', 'O': // focus in / out
+		return 3
+	case 'M': // X10: CSI M then three bytes (button+32, x+32, y+32)
+		if len(p) < 6 || !ambientButton(int(p[3])-32) {
+			return 0
+		}
+		return 6
+	}
+	j := 2
+	sgr := p[j] == '<'
+	if sgr {
+		j++
+	}
+	start := j
+	for j < len(p) && (p[j] >= '0' && p[j] <= '9' || p[j] == ';') {
+		j++
+	}
+	if j >= len(p) || j == start || (p[j] != 'M' && (!sgr || p[j] != 'm')) {
+		return 0
+	}
+	fields := strings.Split(string(p[start:j]), ";")
+	if len(fields) != 3 {
+		return 0
+	}
+	b, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return 0
+	}
+	if !sgr {
+		b -= 32 // urxvt (1015) sends the button code + 32 like X10
+	}
+	if !ambientButton(b) {
+		return 0
+	}
+	return j + 1
+}
+
+// ambientButton reports whether mouse button code b (modifier bits included)
+// is a motion with no button held (32 + 3) or a wheel event (64..127).
+func ambientButton(b int) bool {
+	if b < 0 {
+		return false
+	}
+	if b&64 != 0 {
+		return true // wheel (and extra buttons 8-11 sent as 128+: not here)
+	}
+	return b&32 != 0 && b&3 == 3
 }
 
 // isOSCReply reports whether an OSC body (without ESC ]) is a colour answer:

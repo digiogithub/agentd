@@ -131,7 +131,8 @@ func (s *Server) handleAttach(conn net.Conn, codec *proto.Codec, req proto.Reque
 
 	in := newInputQueue()
 	go in.run(func(p []byte) error {
-		_, err := sess.Write(p, true)
+		// Focus and pointer-only chunks (ambientOnly) are not keystrokes.
+		_, err := sess.Write(p, !ambientOnly(p))
 		if err != nil && !errors.Is(err, session.ErrExited) {
 			s.Log.Debug("attach write", "name", a.Name, "err", err)
 		}
@@ -178,8 +179,10 @@ loop:
 		case proto.FrameData:
 			input, reply := splitTermReplies(f.Payload)
 			if len(input) > 0 {
-				e.noteInput(OriginHuman, isStopInput(input))
-				e.activate(c)
+				if !ambientOnly(input) {
+					e.noteInput(OriginHuman, isStopInput(input))
+					e.activate(c)
+				}
 				if !in.push(input) {
 					s.Log.Debug("attach input dropped (child not reading)", "name", a.Name, "bytes", len(input))
 				}

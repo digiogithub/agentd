@@ -383,16 +383,33 @@ func runBox(out *bufio.Writer, in <-chan byte, ghost string, exit func(int)) {
 	}
 	draw()
 	pasting := false
+	var pbuf strings.Builder // paste being collected (-collapse)
 	for {
 		k, ok := readKey(in)
 		if !ok {
 			exit(0)
 		}
+		if pasting && *collapse > 0 && k != "paste]" {
+			// Collected and shown at the end of the paste.
+			switch {
+			case k == "enter":
+				pbuf.WriteByte('\n')
+			case len(k) == 1 || utf8.RuneCountInString(k) == 1:
+				pbuf.WriteString(k)
+			}
+			continue
+		}
 		switch k {
 		case "paste[":
 			pasting = true
+			pbuf.Reset()
 		case "paste]":
 			pasting = false
+			if *collapse > 0 {
+				clearGhost()
+				line.WriteString(pbuf.String())
+				out.WriteString(pasteEcho(pbuf.String()))
+			}
 		case "ctrl-c":
 			exit(130)
 		case "ctrl-d":

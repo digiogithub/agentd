@@ -54,7 +54,10 @@ func (b *Backend) attachAgentd(ctx context.Context, s backend.Session, cols, row
 		return nil, err
 	}
 	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
-	conn, err := c.AttachWith(proto.AttachArgs{Name: s.Name, Cols: clampU16(cols), Rows: clampU16(rows), Observe: observe})
+	// Passive: opening the Terminal tab neither resizes the session nor takes
+	// it over; the view becomes the active client on its first key, resize
+	// or focus (AGENTS.md "Wire protocol", attach).
+	conn, err := c.AttachWith(proto.AttachArgs{Name: s.Name, Cols: clampU16(cols), Rows: clampU16(rows), Observe: observe, Passive: !observe})
 	stop()
 	if err != nil {
 		_ = c.Close()
@@ -134,6 +137,20 @@ func (p *attachPTY) Read(b []byte) (int, error) {
 }
 
 func (p *attachPTY) Write(b []byte) (int, error) {
+	// The terminal writes a focus report (DEC 1004) as one write of its own:
+	// send it as an F frame, so the daemon makes this client active on focus
+	// and never takes the report for a keystroke (human_grace_ms).
+	switch string(b) {
+	case "\x1b[I", "\x1b[O":
+		in := byte(0)
+		if b[2] == 'I' {
+			in = 1
+		}
+		if err := p.fw.Write(proto.FrameFocus, []byte{in}); err != nil {
+			return 0, err
+		}
+		return len(b), nil
+	}
 	if err := p.fw.Data(b); err != nil {
 		return 0, err
 	}

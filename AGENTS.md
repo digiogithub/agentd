@@ -455,9 +455,15 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   `human_grace_ms` (default 5000) AND the session has
   produced output at least once AND it started at least max(`idle_ms`, 3 s) ago AND no pending human
   draft (human typed bytes that were not followed by `\r`, `\n` or Ctrl-C, or text an act pasted without
-  submitting; cursor/focus/mouse sequences ignored) younger than 10 min. Terminal replies from attached clients (CPR, DA, DECRPM,
-  OSC colour answers, DCS) are not human input and are forwarded only from the most recently active
-  client (`internal/daemon/termreply.go`). The `prompt_regex` check uses the ghost-filtered screen.
+  submitting; cursor/focus/mouse sequences ignored, X10 mouse `CSI M` + 3 bytes included) younger than 10 min. Terminal replies from attached clients (CPR, DA, DECRPM,
+  OSC colour answers, DCS, DSR answers `CSI … n` such as the mode-2031 colour-scheme report `CSI ?997;1n`, XTWINOPS
+  reports `CSI … t`) are not human input and are forwarded only from the most recently active
+  client (`internal/daemon/termreply.go`). **Ambient attach input** (`ambientOnly`): a D-frame chunk made only of
+  focus reports (`CSI I`/`CSI O`), mouse motion with no button held or mouse wheel events (SGR, urxvt or X10
+  encoding) is written to the child unchanged but as non-human input: it does not update `LastHumanInput`, the draft
+  state or the turn origin, and does not make the client active (a terminal view under Claude Code's any-event mouse
+  tracking, mode 1003, otherwise reports every pointer move as a "keystroke" and keeps acts `busy`). Clicks, drags and
+  any chunk that mixes in other bytes stay human input. The `prompt_regex` check uses the ghost-filtered screen.
 - **Ghost text** (placeholder / suggested next prompt drawn by the harness in its input line, e.g.
   `❯ Try "fix lint errors"`; captures in `docs/ghost-text.md`): it is output, never user input.
   `session.ScreenFiltered(ScreenOpts{HideGhost, Ghost: GhostRules})` blanks it and returns it. Scope is
@@ -501,7 +507,13 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   first non-blank line of the paste-safe text; none = `ErrEmptyNeedle`/`invalid`, nothing written) counts
   only if its number of occurrences on the ghost-filtered screen grew versus a baseline taken just before
   the paste, or it appears in the input region (`Request.InputRegion`, from `screen.Split`) where it was
-  not before. `Request.BeforeSubmit` can veto the submit after the delay (text stays pasted, recorded as a
+  not before. **Paste placeholders**: a harness that collapses long or multi-line pastes shows a placeholder
+  instead of the text (Claude Code: `[Pasted text #1]`, `[Pasted text #2 +12 lines]`); profile key
+  `paste_placeholder_regex` (built-in claude `\[Pasted text #\d+( \+\d+ lines)?\]`, others none; `""` disables)
+  makes one more match than in the baseline, on the ghost-filtered screen or in the input region, count as the paste
+  being visible. A paste that is never verified is not recorded as a draft (agentd cannot tell whether it landed); if
+  it did land, the non-empty input line refuses later prompts (`busy`, reason `input`) until it is sent or cleared in
+  a terminal. `Request.BeforeSubmit` can veto the submit after the delay (text stays pasted, recorded as a
   draft via `Session.MarkDraft`; text pasted without submit is a draft too; a submit clears it).
   The submit delay is measured from the paste. Human input is re-checked
   right before the paste (abort) and before the submit (submit anyway + warning log: the paste is
@@ -642,7 +654,11 @@ Types into agent terminals: when in doubt it refuses with a coded error instead 
   not visible). Needs status `idle`, or `waiting` with no options (free text), else `not_ready`; `force`
   overrides the status. A pending draft (human-typed, or pasted by a prompt and not submitted; < 10 min) is
   always `busy` (`force` never overrides it); a non-empty input line (`view.input.text`) is `busy` too; a
-  real human keystroke within `human_grace_ms` is `busy` unless `force`. Text 1..64 KiB with at least one
+  real human keystroke within `human_grace_ms` is `busy` unless `force`. Every `busy` act error carries
+  `data = {reason}` (`proto.ActBusy`): `draft` (pending draft), `human` (keystroke within `human_grace_ms`), `input`
+  (the input line already holds text, e.g. a placeholder left by an unverified paste; `force` never overrides it) or
+  `lock` (another input operation held the session too long). A `verify_failed` prompt sent no Enter; its message
+  says the text may still sit in the harness's input line. Text 1..64 KiB with at least one
   non-blank line after `PasteSafe` (else `invalid`). The paste verification is tied to the paste (see
   "Injection"); right before the Enter a `BeforeSubmit` re-check runs (draft, human keystroke, a menu that
   appeared since the guard): on failure nothing is submitted, the text stays pasted, is recorded as a draft
@@ -823,6 +839,8 @@ settings. It is a client only: it never changes daemon behaviour, and the daemon
   peer is the remote sshd child, so the daemon resolves the caller as `human:<ssh user>` (never a session;
   see "Identity"). Every op uses a fresh connection; streams (`subscribe`, `attach`, view) hold their own.
   zellij/tmux and provisioning run as exec/PTY channels on the same SSH connection.
+  The Terminal tab attaches `passive` (opening it neither resizes nor takes over the session; it becomes the active
+  client on its first key, resize or focus) and sends the terminal's focus reports as `F` frames, never as `D` data.
 - **Auth**: ssh-agent, the app's own key, or a key file; passwords/passphrases are asked through a UI
   callback each time and never stored.
 - **State** (`remote.Dir()`: `$AGENTD_DESKTOP_DIR`, else `$XDG_CONFIG_HOME/agentd/desktop`, else
