@@ -53,6 +53,7 @@ type Fake struct {
 	killed        []string
 	installs      []backend.ProvisionOptions
 	typed         []string
+	resizes       [][2]int
 	keysInstalled []string
 
 	hostSubs []chan []backend.HostStatus
@@ -1108,7 +1109,17 @@ func (p *pty) Resize(cols, rows int) error {
 	p.mu.Lock()
 	p.cols, p.rows = cols, rows
 	p.mu.Unlock()
+	p.f.mu.Lock()
+	p.f.resizes = append(p.f.resizes, [2]int{cols, rows})
+	p.f.mu.Unlock()
 	return nil
+}
+
+// Resizes returns the sizes asked of the fake PTYs, oldest first.
+func (f *Fake) Resizes() [][2]int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([][2]int(nil), f.resizes...)
 }
 
 func (p *pty) Close() error {

@@ -120,9 +120,11 @@ func (v *View) openTerminal(s backend.Session) {
 	light, dark := themes()
 	opts := terminal.Options{Conn: pc, Theme: light, DarkTheme: dark, Scrollback: 4 << 20,
 		Font: terminal.Font{Family: kit.MonoFamily(), Size: 12.5}}
-	// agentd sessions keep their PTY size (profile size, shared with other
-	// clients): the screen follows it, the window only shows it.
-	fixed := s.Source == backend.SourceAgentd && s.Info != nil && s.Info.Cols > 0
+	// In Control mode the PTY follows the view: the daemon gives the session
+	// the size of its most recently active client and restores the profile
+	// size when the last one detaches. Observe never resizes, so its screen
+	// keeps the session's size and the window only shows it.
+	fixed := ts.observe && s.Source == backend.SourceAgentd && s.Info != nil && s.Info.Cols > 0
 	if fixed {
 		opts.ResizeByConn = true
 		pc.fixedCols, pc.fixedRows = int(s.Info.Cols), int(s.Info.Rows)
@@ -212,7 +214,7 @@ func (v *View) terminalTab(c *ui.Context, t *kit.Tokens, s backend.Session, view
 				v.interrupt(s)
 			}
 		})
-		hint := "Control: tus teclas llegan al agente. El tamaño del PTY no cambia."
+		hint := "Control: tus teclas llegan al agente y el PTY se ajusta a esta ventana."
 		if !control {
 			hint = "Observar: solo lectura, nadie ve tus pulsaciones."
 		}
@@ -281,8 +283,14 @@ type ptyConn struct {
 	connecting bool
 	closed     bool
 	cols, rows int
+	sent       [2]int      // size last sent to the PTY
+	resizeT    *time.Timer // coalesces the view's resizes (window drags)
 	cancel     context.CancelFunc
 }
+
+// resizeDelay coalesces the view's size changes before the PTY is resized:
+// every resize makes the agent redraw its whole screen.
+const resizeDelay = 150 * time.Millisecond
 
 func newPtyConn(a *app.Context, s backend.Session, ts *termState) *ptyConn {
 	pr, pw := io.Pipe()
@@ -304,7 +312,7 @@ func (p *ptyConn) Write(b []byte) (int, error) {
 }
 
 // Resize implements the plugin's size interface: it opens the PTY, then
-// follows the view, except for agentd sessions whose size is fixed.
+// follows the view (coalesced), except in Observe where the size is fixed.
 func (p *ptyConn) Resize(cols, rows int) error {
 	if cols <= 0 || rows <= 0 {
 		return nil
@@ -312,15 +320,31 @@ func (p *ptyConn) Resize(cols, rows int) error {
 	p.mu.Lock()
 	pt := p.pty
 	p.cols, p.rows = cols, rows
+	if pt != nil && p.fixedCols == 0 && !p.closed {
+		if p.resizeT == nil {
+			p.resizeT = time.AfterFunc(resizeDelay, p.applySize)
+		} else {
+			p.resizeT.Reset(resizeDelay)
+		}
+	}
 	p.mu.Unlock()
 	if pt == nil {
 		p.connect(cols, rows)
-		return nil
 	}
-	if p.fixedCols > 0 {
-		return nil
+	return nil
+}
+
+// applySize sends the view's latest size to the PTY if it changed.
+func (p *ptyConn) applySize() {
+	p.mu.Lock()
+	pt, cols, rows := p.pty, p.cols, p.rows
+	if pt == nil || p.closed || p.fixedCols > 0 || p.ts.observe || cols <= 0 || rows <= 0 || p.sent == [2]int{cols, rows} {
+		p.mu.Unlock()
+		return
 	}
-	return pt.Resize(cols, rows)
+	p.sent = [2]int{cols, rows}
+	p.mu.Unlock()
+	_ = pt.Resize(cols, rows)
 }
 
 func (p *ptyConn) connect(cols, rows int) {
@@ -347,6 +371,9 @@ func (p *ptyConn) connect(cols, rows int) {
 		}
 		if err == nil {
 			p.pty = pt
+			if cols > 0 && rows > 0 {
+				p.sent = [2]int{cols, rows}
+			}
 		}
 		p.mu.Unlock()
 		if err != nil {
@@ -354,6 +381,15 @@ func (p *ptyConn) connect(cols, rows int) {
 				p.a.Update(func() { p.ts.err = "No se pudo abrir la terminal: " + app.ErrorText(err) })
 			}
 			return
+		}
+		// An agentd attach is passive (opening the tab does not take the
+		// session over), so the size it was opened with is not applied yet:
+		// in Control mode the view's size is sent now.
+		if !observe && p.fixedCols == 0 {
+			p.mu.Lock()
+			p.sent = [2]int{}
+			p.mu.Unlock()
+			p.applySize()
 		}
 		go p.pump(pt)
 	})
@@ -393,6 +429,9 @@ func (p *ptyConn) Close() error {
 		return nil
 	}
 	p.closed = true
+	if p.resizeT != nil {
+		p.resizeT.Stop()
+	}
 	pt, cancel := p.pty, p.cancel
 	p.mu.Unlock()
 	if cancel != nil {

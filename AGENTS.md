@@ -839,8 +839,10 @@ settings. It is a client only: it never changes daemon behaviour, and the daemon
   peer is the remote sshd child, so the daemon resolves the caller as `human:<ssh user>` (never a session;
   see "Identity"). Every op uses a fresh connection; streams (`subscribe`, `attach`, view) hold their own.
   zellij/tmux and provisioning run as exec/PTY channels on the same SSH connection.
-  The Terminal tab attaches `passive` (opening it neither resizes nor takes over the session; it becomes the active
-  client on its first key, resize or focus) and sends the terminal's focus reports as `F` frames, never as `D` data.
+  The Terminal tab attaches `passive` and sends the terminal's focus reports as `F` frames, never as `D` data. In
+  Control mode it then sends the view's size (`R` frame, window resizes coalesced 150 ms), so the session takes the
+  window's size while it is the most recently active client; the daemon restores the profile size when the last
+  client detaches. Observe mode never resizes: its screen keeps the session's size.
 - **Auth**: ssh-agent, the app's own key, or a key file; passwords/passphrases are asked through a UI
   callback each time and never stored.
 - **State** (`remote.Dir()`: `$AGENTD_DESKTOP_DIR`, else `$XDG_CONFIG_HOME/agentd/desktop`, else

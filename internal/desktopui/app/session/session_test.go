@@ -120,11 +120,18 @@ func TestTerminalTabShowsPTYAndSendsKeys(t *testing.T) {
 	if msg := v.TerminalError(); msg != "" {
 		t.Skipf("terminal unavailable: %s", msg)
 	}
-	e.Has("Interrumpir", "Control", "Control: tus teclas llegan al agente. El tamaño del PTY no cambia.", "160×50 · 2 clientes")
+	e.Has("Interrumpir", "Control", "Control: tus teclas llegan al agente y el PTY se ajusta a esta ventana.", "160×50 · 2 clientes")
 	if !e.Eventually(3*time.Second, func() bool {
 		return v.Terminal() != nil && strings.Contains(v.Terminal().Text(), "Revisando la entrada del hijo")
 	}) {
 		t.Fatalf("screen %q", v.Terminal().Text())
+	}
+	// Control mode: the PTY takes the view's size, not the session's 160x50.
+	if !e.Eventually(2*time.Second, func() bool {
+		r := e.F.Resizes()
+		return len(r) > 0 && r[len(r)-1][0] > 20 && r[len(r)-1] != [2]int{160, 50}
+	}) {
+		t.Errorf("PTY not resized to the view: %v", e.F.Resizes())
 	}
 	v.Terminal().Send([]byte("ls\r"))
 	if !e.Eventually(2*time.Second, func() bool { return strings.Contains(e.F.Typed(), "ls\r") }) {
