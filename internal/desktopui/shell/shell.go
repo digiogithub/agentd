@@ -115,6 +115,12 @@ func Run(o Options) error {
 			StateKey:  "main",
 			Content:   ui.View(o.View),
 		})
+		// The app icon (packaging/agentd-desktop.svg rendered): title bar and
+		// taskbar on Linux, the Dock on macOS. Failures only lose the icon.
+		_ = w.SetIcon(appIcon)
+		if runtime.GOOS == "darwin" {
+			_ = app.Dock.SetIcon(appIcon)
+		}
 		c.mu.Lock()
 		c.win = w
 		c.mu.Unlock()
