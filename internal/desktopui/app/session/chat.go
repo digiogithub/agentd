@@ -2,6 +2,8 @@ package session
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"math"
 	"regexp"
 	"strconv"
@@ -175,11 +177,11 @@ func (v *View) item(c *ui.Context, t *kit.Tokens, i int, it Item) {
 	case ItemUser:
 		ui.Row(c).Justify(ui.End).Children(func() {
 			ui.Column(c).MaxWidthPercent(82).Padding(10, 14).Radius(18, 18, 6, 18).Background(t.AccentBg).Children(func() {
-				ui.Text(c, it.Text).FontSize(14.5).LineHeight(1.45).Selectable()
+				v.prose(c, t, it.Text, 14.5, 1.45, false)
 			})
 		})
 	case ItemAgent:
-		ui.Text(c, it.Text).FontSize(14.5).LineHeight(1.5).MaxWidthPercent(92).Selectable()
+		v.agentBody(c, t, i, it.Text)
 	case ItemSystem:
 		ui.Text(c, it.Text).FontSize(12).TextColor(t.Muted).TextAlign(ui.Center).FillWidth()
 	case ItemTool:
@@ -216,7 +218,9 @@ func (v *View) item(c *ui.Context, t *kit.Tokens, i int, it Item) {
 				}
 			})
 			if open && hasBody {
-				ui.Text(c, it.Text).Font(kit.MonoFamily()).FontSize(12).TextColor(t.Muted).LineHeight(1.45).Margin(0, 0, 10, 0).Selectable()
+				ui.Column(c).Margin(0, 0, 10, 0).AlignItems(ui.Stretch).Children(func() {
+					v.prose(c, t, it.Text, 12, 1.45, true)
+				})
 			}
 		})
 	}
@@ -404,7 +408,8 @@ func (v *View) send(s backend.Session, view *proto.View, text string) {
 				if cv := app.ConflictView(err); cv != nil {
 					a.Views.Set(s, cv)
 				}
-				a.Toasts.Error("No se pudo enviar: el agente está ocupado o tienes un borrador pendiente", app.ErrorText(err))
+				title, detail := SendErrorText(err)
+				a.Toasts.Error(title, detail)
 				return
 			}
 			if strings.TrimSpace(v.draft) == text {
@@ -412,4 +417,46 @@ func (v *View) send(s backend.Session, view *proto.View, text string) {
 			}
 		})
 	})
+}
+
+// SendErrorText maps the error of a failed prompt act to the toast title and
+// detail, by the daemon's error code.
+func SendErrorText(err error) (title, detail string) {
+	switch proto.CodeOf(err) {
+	case proto.CodeBusy:
+		return busyText(err), ""
+	case proto.CodeNotReady:
+		return "El agente está trabajando o esperando una respuesta: espera a que quede libre", ""
+	case proto.CodeVerifyFailed:
+		return "El agente no mostró el texto pegado y no se pulsó Enter. Puede haber quedado en su entrada: revisa la pestaña Terminal antes de reintentar", ""
+	case proto.CodeExited:
+		return "La sesión ha terminado", ""
+	case proto.CodeInvalid:
+		return "El texto está vacío o es demasiado largo (máx. 64 KiB)", ""
+	case proto.CodeConflict:
+		return "La pantalla del agente cambió: revisa la vista y reintenta", ""
+	case proto.CodeTimeout:
+		return "El agente no responde", ""
+	}
+	return "No se pudo enviar", app.ErrorText(err)
+}
+
+// busyText explains a busy act error by its reason (proto.ActBusy; daemons
+// before 0.5.1 send none).
+func busyText(err error) string {
+	var re *proto.RemoteError
+	var b proto.ActBusy
+	if errors.As(err, &re) && len(re.Data) > 0 && json.Unmarshal(re.Data, &b) == nil {
+		switch b.Reason {
+		case proto.BusyInput:
+			return "El agente ya tiene texto en su entrada (quizá de un envío anterior). Envíalo o bórralo en la pestaña Terminal y reintenta"
+		case proto.BusyDraft:
+			return "Hay un borrador sin enviar en la entrada del agente (tecleado en la terminal o pegado sin Enter). Envíalo o bórralo en la Terminal"
+		case proto.BusyHuman:
+			return "Acabas de teclear en la terminal; espera unos segundos y reintenta"
+		case proto.BusyLock:
+			return "El agente está recibiendo otra entrada (un mensaje o acción); reintenta en un momento"
+		}
+	}
+	return "Hay texto pendiente en la entrada del agente o acabas de teclear en la terminal"
 }

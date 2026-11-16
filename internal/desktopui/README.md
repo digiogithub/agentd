@@ -26,6 +26,7 @@ The daemon and the `agentd` CLI never import anything here:
 | `mux/` | zellij and tmux adapters over a `Shell` (port of agentd-app `lib/src/mux`). `mux/muxtest/`: fake Shell | no |
 | `provision/` | Detect script, install plan and steps (agentd `install.sh` + `SHA256SUMS`, systemd user unit, `[herdr] listen`, MCP snippets, agent CLIs); port of agentd-app `lib/src/provision` | no |
 | `natives/` | libghostty-vt embedded per platform (go:embed); `Install` extracts it to `<user cache>/agentd-desktop/natives/<sha>/` and sets `$MYGO_GHOSTTY_VT` before the terminal loads | no |
+| `chatfmt/` | Pure Chat text parsing, no MyGo: `Split` finds tables in an assistant block (box-drawing light/heavy/double, columns from the border junctions, wrapped cell fragments joined with a space, header = first row before a separator, markdown pipe tables with alignment; anything inconsistent stays plain text), `Linkify`/`TrimURL` (http/https, trailing punctuation trimmed unless balanced), `OpenURL` (xdg-open / open, replaceable in tests) | no |
 | `kit/` | Palette of the mockups -> `ui.Theme`, embedded fonts (Inter, JetBrains Mono; OFL), lucide icon subset (`kit/icons`, ISC), base components | yes |
 | `shell/` | `mygo.App`, main window, application menu, desktop notifications; owns the event loop (main goroutine) | yes |
 | `app/` | `Context`, area registry, router, layout (sidebar + content), `Live` hosts/sessions, `Views` cache, notifier, prefs (`settings.json`). `app/apptest/`: headless harness on the fake backend | yes |

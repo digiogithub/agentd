@@ -1,6 +1,9 @@
 package session_test
 
 import (
+	"encoding/json"
+	"errors"
+	"github.com/digiogithub/agentd/internal/desktopui/chatfmt"
 	"strings"
 	"testing"
 	"time"
@@ -158,4 +161,56 @@ func agentsView(t *testing.T, e *apptest.Env) *session.View {
 		t.Fatalf("no session page open: %q", e.UI.Texts())
 	}
 	return v.Detail()
+}
+
+func TestChatRendersTableAsCellsAndLink(t *testing.T) {
+	var opened []string
+	old := chatfmt.OpenURL
+	chatfmt.OpenURL = func(u string) error { opened = append(opened, u); return nil }
+	defer func() { chatfmt.OpenURL = old }()
+	e := apptest.New(t, "/agents/s/estudio/agentd/claude@docs", 1400, 900)
+	// Each cell is its own text; the box-drawing characters are gone.
+	e.Has("Cola", "Uso", "builds", "trabajos de compilar y empaquetar", "reviews", "revisiones pendientes")
+	for _, s := range e.UI.Texts() {
+		if strings.ContainsAny(s, "┌│├└") {
+			t.Errorf("box drawing left in %q", s)
+		}
+	}
+	if err := e.UI.Click("https://example.com/docs/colas"); err != nil {
+		t.Fatal(err)
+	}
+	e.Settle()
+	if len(opened) != 1 || opened[0] != "https://example.com/docs/colas" {
+		t.Errorf("opened %v", opened)
+	}
+}
+
+func TestSendErrorText(t *testing.T) {
+	cases := map[string]string{
+		proto.CodeBusy:         "Hay texto pendiente",
+		proto.CodeNotReady:     "está trabajando",
+		proto.CodeVerifyFailed: "no mostró el texto pegado",
+		proto.CodeConflict:     "pantalla del agente cambió",
+		proto.CodeTimeout:      "no responde",
+	}
+	for code, want := range cases {
+		title, _ := session.SendErrorText(proto.Errorf(code, "x"))
+		if !strings.Contains(title, want) {
+			t.Errorf("%s -> %q", code, title)
+		}
+	}
+	for reason, want := range map[string]string{
+		proto.BusyInput: "ya tiene texto en su entrada",
+		proto.BusyDraft: "borrador sin enviar",
+		proto.BusyHuman: "Acabas de teclear",
+		proto.BusyLock:  "recibiendo otra entrada",
+	} {
+		err := &proto.RemoteError{Msg: "busy", Code: proto.CodeBusy, Data: json.RawMessage(`{"reason":"` + reason + `"}`)}
+		if title, _ := session.SendErrorText(err); !strings.Contains(title, want) {
+			t.Errorf("busy/%s -> %q", reason, title)
+		}
+	}
+	if title, d := session.SendErrorText(errors.New("boom")); title != "No se pudo enviar" || d == "" {
+		t.Errorf("default %q %q", title, d)
+	}
 }

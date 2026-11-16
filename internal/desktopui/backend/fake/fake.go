@@ -174,6 +174,15 @@ func (f *Fake) seed(now time.Time) {
 		Attention: proto.ViewAttention{Set: true, Reason: "turn_done", Since: ago(20 * time.Minute)}, Cwd: "~/src/docs",
 		Lines: []proto.ViewLine{
 			{Text: "❯ Actualiza el README con la sección de colas.", Role: "transcript"},
+			{Text: "● Resumen de las colas (más detalle en https://example.com/docs/colas).", Role: "transcript"},
+			{Text: "  ┌──────────┬───────────────────────┐", Role: "transcript"},
+			{Text: "  │ Cola     │ Uso                   │", Role: "transcript"},
+			{Text: "  ├──────────┼───────────────────────┤", Role: "transcript"},
+			{Text: "  │ builds   │ trabajos de compilar  │", Role: "transcript"},
+			{Text: "  │          │ y empaquetar          │", Role: "transcript"},
+			{Text: "  ├──────────┼───────────────────────┤", Role: "transcript"},
+			{Text: "  │ reviews  │ revisiones pendientes │", Role: "transcript"},
+			{Text: "  └──────────┴───────────────────────┘", Role: "transcript"},
 			{Text: "● README actualizado con la sección de colas de trabajo y un ejemplo de agentd claim.", Role: "transcript"},
 		}, Input: proto.ViewInput{State: "suggestion", Ghost: "Try \"commit the changes\""}}
 	codexWebView := &proto.View{Name: "codex@webapp", Epoch: Epoch, Revision: 4, Status: "idle", Cwd: "~/src/webapp",
