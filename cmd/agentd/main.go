@@ -526,6 +526,8 @@ func dumpCmd() *cobra.Command {
 	cmd.Flags().IntVar(&row, "row", 0, "row for --cells, 0-based (default: the cursor's row; implies --cells)")
 	cmd.Flags().BoolVar(&a.Scrollback, "scrollback", false, "include the scrollback")
 	cmd.Flags().BoolVar(&a.ANSI, "ansi", false, "keep colors and styles as ANSI escapes (ghost text is not hidden)")
+	cmd.Flags().BoolVar(&a.Plain, "plain", false, "clean text: drop box/frame glyphs and rule lines (TUIs drawn in cards and tables), collapse blank lines")
+	cmd.Flags().BoolVar(&a.Compact, "compact", false, "--plain, plus tool calls folded to their header and reasoning blocks to their title")
 	cmd.Flags().BoolVar(&a.Ghost, "ghost", false, "show the raw screen, including the harness's ghost text (suggested prompt / placeholder)")
 	return cmd
 }

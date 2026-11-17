@@ -584,6 +584,12 @@ type DumpArgs struct {
 	Scrollback bool   `json:"scrollback,omitempty"`
 	ANSI       bool   `json:"ansi,omitempty"`
 	Ghost      bool   `json:"ghost,omitempty"`
+	// Plain normalizes the text for reading (screen.PlainText): box/frame
+	// glyphs and rule lines removed. Not combined with ANSI.
+	Plain bool `json:"plain,omitempty"`
+	// Compact implies Plain and folds tool calls and reasoning blocks
+	// (screen.CompactTools).
+	Compact bool `json:"compact,omitempty"`
 	// Cells adds a per-cell description of one row (diagnostics): Row, or
 	// the cursor's row when Row is nil.
 	Cells bool `json:"cells,omitempty"`

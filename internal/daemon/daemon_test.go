@@ -552,3 +552,23 @@ func TestDumpCells(t *testing.T) {
 		t.Fatalf("row 0 cells = %+v", res.Cells)
 	}
 }
+
+func TestDumpPlain(t *testing.T) {
+	e := startServer(t, nil, nil)
+	c := e.dial(t)
+	if _, err := c.Run(proto.RunArgs{Name: "plain", Cmd: []string{"sh", "-c",
+		`printf '\033[2J\033[1;1H╭──────────╮\033[2;1H│ hello    │\033[3;1H╰──────────╯'; exec sleep 60`}, Cols: 20, Rows: 5}); err != nil {
+		t.Fatal(err)
+	}
+	waitDump(t, c, "plain", "hello")
+	txt, err := c.Dump(proto.DumpArgs{Name: "plain", Plain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if txt != "hello\n" {
+		t.Fatalf("plain dump = %q", txt)
+	}
+	if _, err := c.Dump(proto.DumpArgs{Name: "plain", Plain: true, ANSI: true}); err == nil {
+		t.Fatal("plain+ansi should be invalid")
+	}
+}

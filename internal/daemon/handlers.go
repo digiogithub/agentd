@@ -21,6 +21,7 @@ import (
 	"github.com/digiogithub/agentd/internal/inject"
 	"github.com/digiogithub/agentd/internal/mailbox"
 	"github.com/digiogithub/agentd/internal/proto"
+	"github.com/digiogithub/agentd/internal/screen"
 	"github.com/digiogithub/agentd/internal/session"
 )
 
@@ -599,6 +600,8 @@ func (s *Server) dump(a proto.DumpArgs) (proto.DumpResult, error) {
 	opts.HideGhost = !a.Ghost && !a.ANSI
 	var res proto.DumpResult
 	switch {
+	case (a.Plain || a.Compact) && a.ANSI:
+		return proto.DumpResult{}, proto.Errorf(proto.CodeInvalid, "dump: plain and ansi cannot be combined")
 	case a.Scrollback && a.ANSI:
 		return proto.DumpResult{}, proto.Errorf(proto.CodeInvalid, "dump: ansi output is not supported with scrollback")
 	case a.Scrollback:
@@ -609,6 +612,12 @@ func (s *Server) dump(a proto.DumpArgs) (proto.DumpResult, error) {
 		res.Text, res.Ghost = e.sess.ScreenFiltered(opts)
 	}
 	res.GhostHidden = opts.HideGhost && res.Ghost != ""
+	if a.Plain || a.Compact {
+		res.Text = screen.PlainText(res.Text)
+	}
+	if a.Compact {
+		res.Text = screen.CompactTools(res.Text)
+	}
 	if a.Cells {
 		row := -1
 		if a.Row != nil {
