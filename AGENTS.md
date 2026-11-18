@@ -874,6 +874,7 @@ settings. It is a client only: it never changes daemon behaviour, and the daemon
     confirm dialog; then back to `/agents`): agentd `kill KILL`, poll `ls` until exited (<= 5 s), `rm` (an exited
     session is only `rm`'ed, a removed one is not an error); zellij `delete-session --force` (kills a running session
     and drops the resurrectable one); tmux `kill-session`; an app-owned SSH shell is closed.
+- **Window frame** (same as Pando's desktop): Linux = `Frameless` (GTK client-side decorations on Wayland, edge resize on X11), Windows = `TitleBarHidden` + `HideWindowButtons` (keeps DWM shadow, snap and resize edges), macOS = native title bar. Where there is no native bar (`shell.CustomFrame`, `app.CustomFrame`) the UI draws a 36 px title bar (`app/layout.go` `titleBar`: drag area + `kit.WindowControls`) and forwards minimise/maximise/close to the shell through `app.WindowHost` (`shell.Controller`). `app` never imports `shell`.
 - **UI rules**: one session view per window content area (no pane/split UI, see Rules); UI state is
   touched only on the UI thread (`app.Context.Update`); acts carry the view's `revision` + `epoch`.
 - **Tests**: headless (`ui.NewTester`, `app/apptest` on `backend/fake`), SSH against `remote/sshtest`, a

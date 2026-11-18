@@ -65,6 +65,11 @@ const (
 	IconMoon        = "moon"
 	IconMonitor     = "monitor"
 	IconCircle      = "circle"
+
+	// Custom window controls (minimise, maximise, restore).
+	IconMinus    = "minus"
+	IconMaximize = "square"
+	IconRestore  = "copy"
 )
 
 var (

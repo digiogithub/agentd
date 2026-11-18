@@ -27,18 +27,24 @@ func (r *Root) View(c *ui.Context) {
 	a.Toasts.Flush(c)
 	all := Areas()
 	r.shortcuts(c, all)
-	ui.Row(c).Fill().AlignItems(ui.Stretch).Background(t.Bg).Children(func() {
-		r.sidebar(c, t, all)
-		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).AlignItems(ui.Stretch).Children(func() {
-			a.Router.View(c, func(route *ui.Route) {
-				ar, ok := r.match(route, all)
-				if !ok {
-					kit.EmptyState(c, kit.IconError, "No encontrado", route.Path())
-					return
-				}
-				route.Title(ar.Title)
-				ui.Column(c).Grow(1).Shrink(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
-					r.view(ar).Build(c, route)
+	host := r.windowHost()
+	ui.Column(c).Fill().AlignItems(ui.Stretch).Background(t.Bg).Children(func() {
+		if host != nil {
+			r.titleBar(c, t, host)
+		}
+		ui.Row(c).Grow(1).Shrink(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
+			r.sidebar(c, t, all)
+			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).AlignItems(ui.Stretch).Children(func() {
+				a.Router.View(c, func(route *ui.Route) {
+					ar, ok := r.match(route, all)
+					if !ok {
+						kit.EmptyState(c, kit.IconError, "No encontrado", route.Path())
+						return
+					}
+					route.Title(ar.Title)
+					ui.Column(c).Grow(1).Shrink(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
+						r.view(ar).Build(c, route)
+					})
 				})
 			})
 		})
@@ -206,4 +212,43 @@ func HostSubtitle(h backend.HostStatus) string {
 		return "agentd " + h.AgentdVer + " · " + via
 	}
 	return via + " · sin agentd"
+}
+
+// windowHost returns the shell when the window has no native title bar and
+// the shell can drive it, else nil (macOS, tests, no shell yet).
+func (r *Root) windowHost() WindowHost {
+	if !CustomFrame() {
+		return nil
+	}
+	h, _ := r.App.ShellHost().(WindowHost)
+	return h
+}
+
+// titleBarHeight is the height of the custom title bar.
+const titleBarHeight = 36
+
+// titleBar draws the window's own title bar: the app name, a drag area and
+// the minimise, maximise/restore and close buttons flush to the right edge.
+func (r *Root) titleBar(c *ui.Context, t *kit.Tokens, h WindowHost) {
+	ui.Row(c.Key("titlebar")).Height(titleBarHeight).Shrink(0).AlignItems(ui.Center).
+		Background(t.NavBg).BorderWidth(0, 0, 1, 0).BorderColor(t.Divider).DragWindow().Children(func() {
+		ui.Row(c).Grow(1).Padding(0, 0, 0, 14).Gap(8).AlignItems(ui.Center).Children(func() {
+			kit.Icon(c, kit.IconAgents).FontSize(14).TextColor(t.Accent)
+			ui.Text(c, "agentd").FontSize(13).FontWeight(600).TextColor(t.Secondary)
+		})
+		switch kit.WindowControls(c, kit.WindowControlsOpts{
+			Maximized: h.IsMaximized(),
+			Minimize:  "Minimizar",
+			Maximize:  "Maximizar",
+			Restore:   "Restaurar",
+			Close:     "Cerrar",
+		}) {
+		case kit.ControlMinimize:
+			h.Minimize()
+		case kit.ControlMaximize:
+			h.ToggleMaximize()
+		case kit.ControlClose:
+			h.CloseWindow()
+		}
+	})
 }

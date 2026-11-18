@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"runtime/debug"
 	"sync"
 
@@ -30,6 +31,21 @@ type Shell interface {
 	Notify(id, title, body string, onClick func())
 	Focused() bool
 }
+
+// WindowHost is implemented by a Shell whose window has no native title bar
+// (shell.Controller on Linux and Windows): the UI draws the title bar and
+// forwards the buttons to it.
+type WindowHost interface {
+	Minimize()
+	ToggleMaximize()
+	CloseWindow()
+	IsMaximized() bool
+}
+
+// CustomFrame reports whether the window has no native title bar and the UI
+// draws its own: Linux and Windows (same rule as shell.CustomFrame; app never
+// imports shell). A variable so tests can force it.
+var CustomFrame = func() bool { return runtime.GOOS != "darwin" }
 
 // Context is the app-wide context every view receives. Mutate view state
 // only on the UI thread (in Build, or through Update from goroutines).

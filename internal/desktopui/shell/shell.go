@@ -41,9 +41,67 @@ type Options struct {
 // Controller is the window shell handed to the app: focus state and
 // notifications.
 type Controller struct {
-	mu      sync.Mutex
-	win     *mygo.Window
-	focused atomic.Bool
+	mu        sync.Mutex
+	win       *mygo.Window
+	focused   atomic.Bool
+	maximized atomic.Bool // the window is maximised (title bar icon)
+}
+
+// CustomFrame reports whether the window has no native title bar and the UI
+// draws its own with minimise, maximise and close buttons: Linux and Windows.
+// macOS keeps the native title bar (traffic lights) and menu bar.
+func CustomFrame() bool { return runtime.GOOS != "darwin" }
+
+// windowFrame returns the frame options of the main window for a GOOS.
+//
+// Linux is Frameless: GTK decorates it itself on Wayland (client-side
+// decorations with shadow and resize borders, and MyGo announces CSD so the
+// compositor draws no title bar) and resizes it from the outer edge on X11.
+// Windows uses a hidden title bar without its buttons, which keeps the DWM
+// shadow, rounded corners, snap layouts and the resizing edges (a plain
+// frameless window lacks the top one). Same choice as Pando's desktop.
+func windowFrame(goos string) (frameless bool, style mygo.TitleBarStyle, hideButtons bool) {
+	switch goos {
+	case "darwin":
+		return false, mygo.TitleBarDefault, false
+	case "windows":
+		return false, mygo.TitleBarHidden, true
+	default:
+		return true, mygo.TitleBarDefault, false
+	}
+}
+
+func (c *Controller) window() *mygo.Window {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.win == nil || c.win.IsDestroyed() {
+		return nil
+	}
+	return c.win
+}
+
+// Minimize is the title bar's minimise button.
+func (c *Controller) Minimize() {
+	if w := c.window(); w != nil {
+		w.Minimize()
+	}
+}
+
+// ToggleMaximize maximises the window or restores it.
+func (c *Controller) ToggleMaximize() {
+	if w := c.window(); w != nil {
+		w.ToggleMaximize()
+	}
+}
+
+// IsMaximized reports whether the window is maximised.
+func (c *Controller) IsMaximized() bool { return c.maximized.Load() }
+
+// CloseWindow is the title bar's close button; being the last window, it quits.
+func (c *Controller) CloseWindow() {
+	if w := c.window(); w != nil {
+		w.Close()
+	}
 }
 
 // Focused reports whether the main window has the keyboard focus.
@@ -106,14 +164,18 @@ func Run(o Options) error {
 	app.SetMenu(DefaultMenu())
 	c := &Controller{}
 	app.WhenReady(func() {
+		frameless, style, hideButtons := windowFrame(runtime.GOOS)
 		w := mygo.NewWindow(mygo.WindowOptions{
-			Title:     o.Title,
-			Width:     o.Width,
-			Height:    o.Height,
-			MinWidth:  720,
-			MinHeight: 520,
-			StateKey:  "main",
-			Content:   ui.View(o.View),
+			Title:             o.Title,
+			Width:             o.Width,
+			Height:            o.Height,
+			MinWidth:          720,
+			MinHeight:         520,
+			StateKey:          "main",
+			Content:           ui.View(o.View),
+			Frameless:         frameless,
+			TitleBarStyle:     style,
+			HideWindowButtons: hideButtons,
 		})
 		// The app icon (packaging/agentd-desktop.svg rendered): title bar and
 		// taskbar on Linux, the Dock on macOS. Failures only lose the icon.
@@ -127,6 +189,15 @@ func Run(o Options) error {
 		c.focused.Store(true)
 		w.OnFocus(func() { c.focused.Store(true) })
 		w.OnBlur(func() { c.focused.Store(false) })
+		c.maximized.Store(w.IsMaximized())
+		syncMax := func() {
+			if m := w.IsMaximized(); m != c.maximized.Swap(m) {
+				w.Invalidate()
+			}
+		}
+		w.OnMaximize(syncMax)
+		w.OnUnmaximize(syncMax)
+		w.OnResize(syncMax)
 		if o.OnWindow != nil {
 			o.OnWindow(w, c)
 		}
