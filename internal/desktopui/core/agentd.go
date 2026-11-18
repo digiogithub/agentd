@@ -286,13 +286,9 @@ func (b *Backend) Launch(ctx context.Context, spec backend.LaunchSpec) (backend.
 	var info proto.SessionInfo
 	err = b.withClient(ctx, spec.HostID, func(c *client.Client) error {
 		var err error
+		// A taken default name (agent or terminal) is numbered by the daemon:
+		// claude@webapp, claude@webapp2, shell@webapp2.
 		info, err = c.Run(args)
-		// Several terminals may share a project: shell@<label> taken means
-		// shell@<label>-2, -3, ...
-		for n := 2; spec.TerminalOnly && client.ErrorCode(err) == proto.CodeExists && n <= 50; n++ {
-			args.Name = fmt.Sprintf("shell@%s-%d", nameLabel(args.Target), n)
-			info, err = c.Run(args)
-		}
 		return err
 	})
 	if err != nil {

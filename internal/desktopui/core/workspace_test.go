@@ -89,7 +89,7 @@ func TestTerminalOnlyAgentdAndTerminate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s2.Name != "shell@my-proj-2" {
+	if s2.Name != "shell@my-proj2" {
 		t.Fatalf("second terminal %q", s2.Name)
 	}
 

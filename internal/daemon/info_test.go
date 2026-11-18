@@ -7,11 +7,13 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/digiogithub/agentd/internal/client"
 	"github.com/digiogithub/agentd/internal/config"
 	"github.com/digiogithub/agentd/internal/daemon"
 	"github.com/digiogithub/agentd/internal/proto"
+	"github.com/digiogithub/agentd/internal/testutil"
 )
 
 func TestPingEpochAndInfo(t *testing.T) {
@@ -96,9 +98,12 @@ func TestRunTargetHarness(t *testing.T) {
 			t.Fatalf("run %+v: err = %v (code %q), want invalid", ra, err, client.ErrorCode(err))
 		}
 	}
-	// Same derived name twice -> exists.
-	if _, err := c.Run(proto.RunArgs{Target: "webapp", Cmd: []string{"cat"}}); !client.IsCode(err, proto.CodeExists) {
-		t.Fatalf("duplicate = %v", err)
+	// Same derived name twice -> numbered; the same explicit name -> exists.
+	if d, err := c.Run(proto.RunArgs{Target: "webapp", Cmd: []string{"cat"}}); err != nil || d.Name != "cat@webapp2" {
+		t.Fatalf("duplicate = %+v, %v", d, err)
+	}
+	if _, err := c.Run(proto.RunArgs{Name: "cat@webapp", Target: "webapp", Cmd: []string{"cat"}}); !client.IsCode(err, proto.CodeExists) {
+		t.Fatalf("explicit duplicate = %v", err)
 	}
 	// Without target, Harness only supplies default cmd/profile.
 	info, err = c.Run(proto.RunArgs{Name: "plain", Cwd: root, Harness: "cat"})
@@ -182,5 +187,38 @@ func TestAliasesFromEnvBase(t *testing.T) {
 	// Without env_base the daemon's own environment applies: none of them.
 	if _, err := c.Run(proto.RunArgs{Name: "r-none", Target: "viaenv", Cwd: "/", Cmd: []string{"cat"}}); err == nil {
 		t.Fatal("alias leaked from another caller's env")
+	}
+}
+
+// A default name that is taken is numbered; an explicit one stays an error.
+func TestRunNumbersTakenDefaultNames(t *testing.T) {
+	root := t.TempDir()
+	proj := filepath.Join(root, "proj")
+	if err := os.MkdirAll(proj, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := config.LoadAliases("", "webapp="+proj)
+	e := startServer(t, nil, func(s *daemon.Server) { s.Aliases = a })
+	c := e.dial(t)
+	for _, want := range []string{"cat@webapp", "cat@webapp2", "cat@webapp3"} {
+		info, err := c.Run(proto.RunArgs{Target: "webapp", Cmd: []string{"cat"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Name != want {
+			t.Fatalf("name = %q, want %q", info.Name, want)
+		}
+	}
+	// Freed numbers are reused; an explicit name that exists is still an error.
+	if err := c.Kill("cat@webapp2", "KILL"); err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitFor(t, 5*time.Second, func() bool { return c.Rm("cat@webapp2") == nil }, "cat@webapp2 removed", nil)
+	info, err := c.Run(proto.RunArgs{Target: "webapp", Cmd: []string{"cat"}})
+	if err != nil || info.Name != "cat@webapp2" {
+		t.Fatalf("reuse: %+v %v", info, err)
+	}
+	if _, err := c.Run(proto.RunArgs{Name: "cat@webapp", Target: "webapp", Cmd: []string{"cat"}}); client.ErrorCode(err) != proto.CodeExists {
+		t.Fatalf("explicit name collision: %v", err)
 	}
 }

@@ -408,7 +408,7 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
     `target`, `harness` and its cwd; the daemon resolves them): cwd = resolved dir, default
     command = harness binary, default name `<harness>@<label>`, default profile = harness.
     `agentd aliases` lists them with their source (file/env).
-- **Session names**: `[a-zA-Z0-9._@-]+`, unique; convention `<harness>@<project>` (e.g. `codex@webapp`).
+- **Session names**: `[a-zA-Z0-9._@-]+`, unique; convention `<harness>@<project>` (e.g. `codex@webapp`). When `run` has no explicit name and the derived default is taken (running, exited or starting), the daemon numbers it: `codex@webapp`, `codex@webapp2`, `codex@webapp3` (first free; `daemon.freeName`; a number freed by `rm` is reused). An explicit `--name` that exists is still `exists`.
 - **Child env**: the daemon sets `AGENTD_ID=<session name>`, `AGENTD_SOCKET=<path>` and `TERM=xterm-256color`
   in each child, plus `AGENTD_TOKEN` (random per-session secret, see "Identity"). Who is speaking is
   decided by the daemon, not by these variables (`AGENTD_ID` is only a hint).

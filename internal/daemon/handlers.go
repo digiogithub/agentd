@@ -330,10 +330,38 @@ func (s *Server) dispatch(ctx context.Context, req proto.Request, peer peerInfo)
 
 // ---- Sessions ----
 
+// freeName returns base if no session (running, exited or starting) uses it,
+// else the first of base2, base3, ... that is free. The name is not reserved:
+// run still reserves it under the registry lock (a lost race is `exists`).
+func (s *Server) freeName(base string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	taken := func(n string) bool {
+		_, a := s.sessions[n]
+		_, b := s.starting[n]
+		return a || b
+	}
+	if !taken(base) {
+		return base
+	}
+	for i := 2; ; i++ {
+		if n := base + strconv.Itoa(i); !taken(n) {
+			return n
+		}
+	}
+}
+
 func (s *Server) run(ctx context.Context, a proto.RunArgs) (proto.SessionInfo, error) {
+	autoName := a.Name == ""
 	a, err := s.resolveRun(a)
 	if err != nil {
 		return proto.SessionInfo{}, err
+	}
+	if autoName {
+		// A default name (<harness>@<project>) that is taken gets a number:
+		// claude@webapp, claude@webapp2, claude@webapp3. An explicit name that
+		// exists stays an error.
+		a.Name = s.freeName(a.Name)
 	}
 	if err := config.ValidName(a.Name); err != nil {
 		return proto.SessionInfo{}, proto.WithCode(proto.CodeInvalid, err)
