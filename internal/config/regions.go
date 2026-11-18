@@ -25,13 +25,14 @@ const (
 // RegionConfig is the partial (config.toml) form of the region keys; it is
 // embedded in ProfileConfig so the keys sit directly under [profiles.<name>].
 //
-// busy_regex, footer_regex, spinner_chars and reflow_break_regex have no
+// busy_regex, footer_regex, header_regex, spinner_chars and reflow_break_regex have no
 // built-in value for claude/codex yet: the semantic-model marks them
 // provisional until a recorded capture confirms them.
 type RegionConfig struct {
 	RuleChars         *string   `toml:"rule_chars"`
 	InputBgColors     *[]string `toml:"input_bg_colors"`
 	FooterRegex       *string   `toml:"footer_regex"`
+	HeaderRegex       *string   `toml:"header_regex"`
 	BusyRegex         *string   `toml:"busy_regex"`
 	SpinnerChars      *string   `toml:"spinner_chars"`
 	ReflowBreakRegex  *string   `toml:"reflow_break_regex"`
@@ -46,6 +47,8 @@ type RegionProfile struct {
 	InputBgSpecs     []termcolor.Spec
 	FooterRegex      string
 	Footer           *regexp.Regexp // nil when FooterRegex is ""
+	HeaderRegex      string
+	Header           *regexp.Regexp // nil when HeaderRegex is ""
 	BusyRegex        string
 	Busy             *regexp.Regexp
 	SpinnerChars     string
@@ -61,6 +64,7 @@ func defaultRegionConfig() RegionConfig {
 		RuleChars:         strp(DefaultRuleChars),
 		InputBgColors:     strsp(nil),
 		FooterRegex:       strp(""),
+		HeaderRegex:       strp(""),
 		BusyRegex:         strp(""),
 		SpinnerChars:      strp(""),
 		ReflowBreakRegex:  strp(""),
@@ -78,6 +82,9 @@ func (r *RegionConfig) merge(o RegionConfig) {
 	}
 	if o.FooterRegex != nil {
 		r.FooterRegex = o.FooterRegex
+	}
+	if o.HeaderRegex != nil {
+		r.HeaderRegex = o.HeaderRegex
 	}
 	if o.BusyRegex != nil {
 		r.BusyRegex = o.BusyRegex
@@ -154,6 +161,7 @@ func (r RegionConfig) validate() error {
 		empty bool
 	}{
 		{"footer_regex", r.FooterRegex, true},
+		{"header_regex", r.HeaderRegex, true},
 		{"busy_regex", r.BusyRegex, true},
 		{"reflow_break_regex", r.ReflowBreakRegex, true},
 	} {
@@ -178,6 +186,7 @@ func (r RegionConfig) resolve() (RegionProfile, error) {
 		RuleChars:         *r.RuleChars,
 		InputBgColors:     append([]string(nil), *r.InputBgColors...),
 		FooterRegex:       *r.FooterRegex,
+		HeaderRegex:       *r.HeaderRegex,
 		BusyRegex:         *r.BusyRegex,
 		SpinnerChars:      strings.Clone(*r.SpinnerChars),
 		ReflowBreakRegex:  *r.ReflowBreakRegex,
@@ -189,6 +198,9 @@ func (r RegionConfig) resolve() (RegionProfile, error) {
 		return p, fmt.Errorf("input_bg_colors: %w", err)
 	}
 	if p.Footer, err = stateRegex("footer_regex", p.FooterRegex, true); err != nil {
+		return p, err
+	}
+	if p.Header, err = stateRegex("header_regex", p.HeaderRegex, true); err != nil {
 		return p, err
 	}
 	if p.Busy, err = stateRegex("busy_regex", p.BusyRegex, true); err != nil {

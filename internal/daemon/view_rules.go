@@ -26,6 +26,7 @@ func screenRules(p config.Profile) screen.Rules {
 		r.RuleChars = rg.RuleChars
 	}
 	r.FooterRegex = rg.Footer
+	r.HeaderRegex = rg.Header
 	r.BusyRegex = rg.Busy
 	r.SpinnerChars = rg.SpinnerChars
 	r.NoJoin = rg.ReflowBreak

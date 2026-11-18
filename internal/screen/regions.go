@@ -15,6 +15,7 @@ const (
 	RegionTranscript Region = "transcript"
 	RegionInput      Region = "input"
 	RegionFooter     Region = "footer"
+	RegionHeader     Region = "header"
 	RegionDialog     Region = "dialog"
 	RegionStatus     Region = "status"
 	RegionRule       Region = "rule"
@@ -72,6 +73,12 @@ type Regions struct {
 	Status []Line
 	// Footer holds the text of the footer rows, blanks dropped.
 	Footer []string
+	// Header holds the text of the top chrome rows (profile header_regex: tab
+	// bars, title strips), blanks dropped. They are not transcript.
+	Header []string
+	// Side holds the text of a right-hand info panel split off by a
+	// full-height vertical rule (see sidebar.go), one entry per row.
+	Side   []string
 	Dialog *DialogInfo
 	// Input is valid when HasInput.
 	Input    InputInfo
@@ -146,8 +153,9 @@ const maxBoxRows = 20 // search distance for input box borders
 // dialog, footer, status line and reflowed transcript (§4). Pure function of
 // s and r.
 func Split(s *Snapshot, r Rules) Regions {
+	s, side := cutSidePanel(s)
 	n := len(s.Screen)
-	res := Regions{Of: make([]Region, n)}
+	res := Regions{Of: make([]Region, n), Side: side}
 	for y := range res.Of {
 		res.Of[y] = RegionTranscript
 	}
@@ -195,6 +203,22 @@ func Split(s *Snapshot, r Rules) Regions {
 			if t := rowText(s.Screen[y], s.Cols); t != "" {
 				res.Footer = append(res.Footer, t)
 			}
+		}
+	}
+
+	// Header: the top rows matching header_regex (a tab bar, a title strip),
+	// skipping blank rows, up to the first row that does not match.
+	if r.HeaderRegex != nil {
+		for y := 0; y < min(boxTop, footerFrom); y++ {
+			t := rowText(s.Screen[y], s.Cols)
+			if t == "" || sep[y] {
+				continue
+			}
+			if !r.HeaderRegex.MatchString(t) {
+				break
+			}
+			res.Of[y] = RegionHeader
+			res.Header = append(res.Header, t)
 		}
 	}
 

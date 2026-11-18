@@ -452,6 +452,7 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   working (or within 5 s after): `human` (attach keystrokes), `act`, `mail` (delivery), else `program`; message =
   the view preview. Op `turns {name}` (view visibility rules), event `turn.completed` (after `status.changed`),
   CLI `agentd turns NAME [--json]`.
+- **Chrome vs content** (`screen.Split`, same idea as Herdr, which keeps pinned chrome out of the text it reads back): a full-height vertical divider (one column holding `│ ┃ ║` on >= 60 % of the rows, interior of the screen) cuts a right-hand info panel off before anything else is detected: transcript, input and dialog come from the left columns only and the panel text is `Regions.Side` (rows without the divider, such as a full-width status bar, stay whole). Profile key `header_regex` marks the top rows that are chrome (tab bar, title strip: `RegionHeader`, `Regions.Header`), next to `footer_regex` for the status bar. Built-in `pando`: header `\bChat\b.*\bEditor\+Chat\b`, footer `ctrl\+h help`, busy `Thinking\.\.\.|press enter to`.
 - **Idle detection** (per harness profile, configurable): idle ⇔ no PTY output for `idle_ms`
   (default 1500) AND (no `prompt_regex` configured OR it matches the current screen text) AND no
   human keystroke from any attached client (or key written by an `act`: `Session.LastInput`) for

@@ -371,7 +371,16 @@ var builtinProfiles = map[string]ProfileConfig{
 		// Codex draws its input row on a #1e1e1e background (docs/ghost-text.md).
 		RegionConfig: RegionConfig{InputBgColors: strsp([]string{"#1e1e1e"})},
 	},
-	"pando": {},
+	// Pando's TUI draws a tab bar on the first row ("Pando  Chat  Editor
+	// Editor+Chat  v1.5.5"), an info panel on the right and a status bar
+	// ("ctrl+h help ... No diagnostics") on the last row; all are chrome.
+	"pando": {RegionConfig: RegionConfig{
+		HeaderRegex: strp(`\bChat\b.*\bEditor\+Chat\b`),
+		FooterRegex: strp(`ctrl\+h help`),
+		// The spinner row ("▓ Thinking...") and the hint above the input
+		// ("press enter to send the message...") are status, not transcript.
+		BusyRegex: strp(`Thinking\.\.\.|press enter to`),
+	}},
 }
 
 // BuiltinProfileNames returns the names of the built-in profiles, sorted.

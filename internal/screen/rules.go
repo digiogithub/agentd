@@ -61,6 +61,9 @@ type Rules struct {
 	RuleChars string
 	// FooterRegex (profile footer_regex): footer rows when there is no input box.
 	FooterRegex *regexp.Regexp
+	// HeaderRegex (profile header_regex): top rows that are chrome (tab bar,
+	// title strip), not transcript.
+	HeaderRegex *regexp.Regexp
 	// BusyRegex (profile busy_regex): status-line rows.
 	BusyRegex *regexp.Regexp
 	// SpinnerChars (profile spinner_chars): glyphs that start a status line.
