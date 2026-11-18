@@ -52,3 +52,17 @@ func TestMutesAndKey(t *testing.T) {
 		t.Errorf("clipboard %q", e.UI.Clipboard())
 	}
 }
+
+func TestChatFontSettings(t *testing.T) {
+	e := apptest.New(t, "/settings", 1400, 1400)
+	e.Has("VISTA CHAT", "Tamaño del texto", "14.5 pt", "Tipo de letra", "Sans", "Serif", "Monoespaciada")
+	e.Click("Texto más grande")
+	if got := e.A.Prefs.Get().ChatSize(); got != 15.5 {
+		t.Errorf("size %v", got)
+	}
+	e.Click("Serif")
+	if got := e.A.Prefs.Get().ChatFont; got != app.ChatFontSerif {
+		t.Errorf("font %q", got)
+	}
+	e.Has("15.5 pt")
+}

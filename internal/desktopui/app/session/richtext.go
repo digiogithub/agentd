@@ -1,34 +1,57 @@
 package session
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
+	"github.com/digiogithub/agentd/internal/desktopui/app"
 	"github.com/digiogithub/agentd/internal/desktopui/chatfmt"
 	"github.com/digiogithub/agentd/internal/desktopui/kit"
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/markdown"
 )
 
-// agentBody shows an agent entry: prose with clickable links, and the tables
-// found in it as grids.
+// agentBody shows an agent entry: its chat markup (CommonMark from the
+// terminal's styles: headings, bold, inline code, lists) in the chat font,
+// and the tables found in it as grids.
 func (v *View) agentBody(c *ui.Context, t *kit.Tokens, i int, text string) {
+	md := v.markdownOpts(t)
 	blocks := chatfmt.Split(text)
-	if len(blocks) == 1 && blocks[0].Table == nil {
-		ui.Column(c).MaxWidthPercent(92).AlignItems(ui.Stretch).Children(func() {
-			v.prose(c, t, text, 14.5, 1.5, false)
-		})
-		return
-	}
 	ui.Column(c).Gap(10).MaxWidthPercent(92).AlignItems(ui.Stretch).Children(func() {
 		for bi, b := range blocks {
 			bc := c.Key("blk" + strconv.Itoa(bi))
 			if b.Table != nil {
-				v.tableGrid(bc, t, i*1000+bi, b.Table)
+				v.tableGrid(bc, t, i*1000+bi, chatfmt.TableText(b.Table))
 				continue
 			}
-			v.prose(bc, t, b.Text, 14.5, 1.5, false)
+			ui.Column(bc).AlignItems(ui.Stretch).Children(func() {
+				markdown.View(bc, b.Text, md)
+			})
 		}
 	})
+}
+
+// markdownOpts are the options of the chat's Markdown: the chat font and
+// size from the settings, links opened with openLink. They are kept on the
+// view (MyGo keeps parse state per Options) and rebuilt when the settings
+// or the palette change.
+func (v *View) markdownOpts(t *kit.Tokens) *markdown.Options {
+	s := v.a.Prefs.Get()
+	key := fmt.Sprintf("%v|%s|%p", s.ChatSize(), s.ChatFontOrDefault(), t)
+	if v.md == nil || v.mdKey != key {
+		v.mdKey = key
+		v.md = &markdown.Options{
+			Theme: &markdown.Theme{
+				FontSize: s.ChatSize(),
+				Font:     app.ChatFamily(s.ChatFontOrDefault()),
+				CodeFont: kit.MonoFamily(),
+				Link:     t.Accent,
+			},
+			OnLink: v.openLink,
+		}
+	}
+	return v.md
 }
 
 // prose is text in which http(s) URLs are links.
@@ -38,6 +61,8 @@ func (v *View) prose(c *ui.Context, t *kit.Tokens, text string, size, lh float32
 		e = e.FontSize(size).LineHeight(lh)
 		if mono {
 			e = e.Font(kit.MonoFamily()).TextColor(t.Muted)
+		} else {
+			e = e.Font(app.ChatFamily(v.a.Prefs.Get().ChatFontOrDefault()))
 		}
 		return e
 	}

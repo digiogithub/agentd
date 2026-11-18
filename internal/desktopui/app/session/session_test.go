@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/digiogithub/agentd/internal/desktopui/app"
 	"github.com/digiogithub/agentd/internal/desktopui/app/agents"
 	"github.com/digiogithub/agentd/internal/desktopui/app/apptest"
 	"github.com/digiogithub/agentd/internal/desktopui/app/session"
@@ -145,6 +146,44 @@ func TestItemsParsing(t *testing.T) {
 	}
 	if items[3].Meta != "2,5 s" || items[3].OK == nil || !*items[3].OK {
 		t.Errorf("tool meta %+v", items[3])
+	}
+}
+
+// Agent prose comes from the lines' chat markup, with blank lines kept as
+// paragraph breaks; tool output stays plain text.
+func TestItemsUseMarkup(t *testing.T) {
+	items := session.Items([]proto.ViewLine{
+		{Text: "● No por ahora. Chunking", Md: "● **No por ahora.** Chunking", Role: "transcript"},
+		{Text: "", Role: "transcript"},
+		{Text: "  Antes de RAG", Md: "  ### Antes de RAG", Role: "transcript"},
+		{Text: "  - usa grant_call_id", Md: "  - usa `grant_call_id`", Role: "transcript"},
+		{Text: "● Bash(ls *.go)", Role: "transcript"},
+		{Text: "  ⎿ a.go", Role: "transcript"},
+	}, true)
+	if len(items) != 2 || items[0].Kind != session.ItemAgent {
+		t.Fatalf("items %+v", items)
+	}
+	if want := "**No por ahora.** Chunking\n\n### Antes de RAG\n- usa `grant_call_id`"; items[0].Text != want {
+		t.Errorf("agent markup %q, want %q", items[0].Text, want)
+	}
+	if items[1].Title != "Bash(ls *.go)" || items[1].Text != "a.go" {
+		t.Errorf("tool %+v", items[1])
+	}
+}
+
+// The chat's text menu changes the saved chat font settings.
+func TestChatFontMenu(t *testing.T) {
+	e := apptest.New(t, "/agents/s/estudio/agentd/claude@docs", 1400, 900)
+	e.Click("Texto del chat")
+	if err := e.UI.ChooseMenuItem("Texto más grande"); err != nil {
+		t.Fatalf("%v (menu %q)", err, e.UI.Menu())
+	}
+	e.Click("Texto del chat")
+	if err := e.UI.ChooseMenuItem("Monoespaciada"); err != nil {
+		t.Fatal(err)
+	}
+	if s := e.A.Prefs.Get(); s.ChatSize() != 15.5 || s.ChatFont != app.ChatFontMono {
+		t.Errorf("settings %+v", s)
 	}
 }
 

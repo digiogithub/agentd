@@ -7,6 +7,7 @@ package settings
 import (
 	"context"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/digiogithub/agentd/internal/desktopui/app"
@@ -98,6 +99,8 @@ func (v *View) Build(c *ui.Context, r *ui.Route) {
 						v.a.Toasts.Info("Gestión de dispositivos: pendiente")
 					}
 				})
+				kit.SectionLabel(c, "Vista chat", t.Muted).Margin(12, 0, 0, 0)
+				v.chatFont(c, t, s)
 				kit.SectionLabel(c, "Apariencia", t.Muted).Margin(12, 0, 0, 0)
 				sel := slices.Index(Themes, s.Theme)
 				if sel < 0 {
@@ -111,6 +114,38 @@ func (v *View) Build(c *ui.Context, r *ui.Route) {
 		})
 	})
 	v.keyDialog(c, t)
+}
+
+// chatFont sets the chat view's default text size and font (the chat's
+// "Texto del chat" menu changes the same settings).
+func (v *View) chatFont(c *ui.Context, t *kit.Tokens, s app.Settings) {
+	group(c, t, func() {
+		ui.Row(c).MinHeight(60).Padding(8, 14).Gap(12).AlignItems(ui.Center).Children(func() {
+			ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
+				ui.Text(c, "Tamaño del texto").FontSize(14.5)
+				ui.Text(c, "Mensajes del agente y tuyos").FontSize(12).TextColor(t.Muted)
+			})
+			size := s.ChatSize()
+			if kit.Button(c.Key("smaller"), kit.ButtonOpts{Variant: kit.Outline, Icon: kit.IconMinus, Height: 34, Round: true,
+				Tooltip: "Más pequeño", Aria: "Texto más pequeño", Disabled: size <= app.MinChatFontSize}).Clicked() {
+				v.save(func(s *app.Settings) { s.ChatFontSize = max(s.ChatSize()-1, app.MinChatFontSize) })
+			}
+			ui.Text(c, strconv.FormatFloat(float64(size), 'f', -1, 32)+" pt").FontSize(13.5).Width(52).TextAlign(ui.Center)
+			if kit.Button(c.Key("bigger"), kit.ButtonOpts{Variant: kit.Outline, Icon: kit.IconPlus, Height: 34, Round: true,
+				Tooltip: "Más grande", Aria: "Texto más grande", Disabled: size >= app.MaxChatFontSize}).Clicked() {
+				v.save(func(s *app.Settings) { s.ChatFontSize = min(s.ChatSize()+1, app.MaxChatFontSize) })
+			}
+		})
+		ui.Column(c).Padding(10, 14).Gap(8).Children(func() {
+			ui.Text(c, "Tipo de letra").FontSize(14.5)
+			sel := slices.Index(app.ChatFonts, s.ChatFontOrDefault())
+			if kit.Segmented(c.Key("chatfont"), &sel, []string{"Sans", "Serif", "Monoespaciada"}, nil) {
+				font := app.ChatFonts[sel]
+				v.save(func(s *app.Settings) { s.ChatFont = font })
+			}
+			ui.Text(c, "Así se verá el texto del agente.").FontSize(s.ChatSize()).Font(app.ChatFamily(s.ChatFontOrDefault())).TextColor(t.Secondary)
+		})
+	})
 }
 
 func until(u, now time.Time) string {

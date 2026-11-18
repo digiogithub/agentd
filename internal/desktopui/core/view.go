@@ -27,7 +27,7 @@ func (b *Backend) WatchView(ctx context.Context, s backend.Session) (<-chan *pro
 	if err := needAgentd(s); err != nil {
 		return nil, err
 	}
-	v, err := b.view(ctx, s.HostID, proto.ViewArgs{Name: s.Name})
+	v, err := b.view(ctx, s.HostID, proto.ViewArgs{Name: s.Name, Markup: true})
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +51,7 @@ func (b *Backend) WatchView(ctx context.Context, s backend.Session) (<-chan *pro
 			case <-trig:
 			case <-poll.C:
 			}
-			nv, err := b.view(ctx, s.HostID, proto.ViewArgs{Name: s.Name, SinceRevision: rev, Epoch: epoch})
+			nv, err := b.view(ctx, s.HostID, proto.ViewArgs{Name: s.Name, SinceRevision: rev, Epoch: epoch, Markup: true})
 			if err != nil || nv.NotModified {
 				continue
 			}

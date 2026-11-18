@@ -18,6 +18,7 @@ import (
 	"github.com/digiogithub/agentd/internal/desktopui/kit"
 	"github.com/digiogithub/agentd/internal/proto"
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/markdown"
 )
 
 // Tabs.
@@ -42,6 +43,8 @@ type View struct {
 	focusDraft  bool
 	expanded    map[int]bool
 	scroll      ui.ScrollState
+	md          *markdown.Options // chat markup options (markdownOpts)
+	mdKey       string
 	following   bool // the chat is pinned to its newest line
 	jump        bool // scroll to the bottom on the next frame
 	queued      int
@@ -201,6 +204,7 @@ func (v *View) header(c *ui.Context, t *kit.Tokens, s backend.Session, view *pro
 					v.setObserve(!observe)
 				}
 			} else if s.Source == backend.SourceAgentd {
+				v.fontMenu(c)
 				kit.IconButton(c.Key("more"), kit.IconMore, "Más acciones").Menu(func(m *ui.Menu) {
 					if m.Item("Interrumpir").Chosen() {
 						v.interrupt(s)
@@ -218,6 +222,40 @@ func (v *View) header(c *ui.Context, t *kit.Tokens, s backend.Session, view *pro
 			}
 		}
 	})
+}
+
+// ChatFontLabels name the chat fonts (app.ChatFonts order) in the UI.
+var ChatFontLabels = []string{"Sans", "Serif", "Monoespaciada"}
+
+// fontMenu is the chat's text menu: size up/down/default and the font.
+// Changes are the saved default (Ajustes > Vista chat shows the same).
+func (v *View) fontMenu(c *ui.Context) {
+	set := v.a.Prefs.Get()
+	kit.IconButton(c.Key("font"), kit.IconType, "Texto del chat").Menu(func(m *ui.Menu) {
+		size := set.ChatSize()
+		if m.Item("Texto más grande").Disabled(size >= app.MaxChatFontSize).Chosen() {
+			v.saveChat(func(s *app.Settings) { s.ChatFontSize = min(s.ChatSize()+1, app.MaxChatFontSize) })
+		}
+		if m.Item("Texto más pequeño").Disabled(size <= app.MinChatFontSize).Chosen() {
+			v.saveChat(func(s *app.Settings) { s.ChatFontSize = max(s.ChatSize()-1, app.MinChatFontSize) })
+		}
+		if m.Item("Tamaño por defecto").Disabled(size == app.DefaultChatFontSize).Chosen() {
+			v.saveChat(func(s *app.Settings) { s.ChatFontSize = 0 })
+		}
+		m.Separator()
+		for i, f := range app.ChatFonts {
+			if m.Item(ChatFontLabels[i]).Checked(set.ChatFontOrDefault() == f).Chosen() {
+				font := f
+				v.saveChat(func(s *app.Settings) { s.ChatFont = font })
+			}
+		}
+	})
+}
+
+func (v *View) saveChat(fn func(s *app.Settings)) {
+	if err := v.a.Prefs.Update(fn); err != nil {
+		v.a.Toasts.Error("No se pudieron guardar los ajustes", err.Error())
+	}
 }
 
 func (v *View) interrupt(s backend.Session) {

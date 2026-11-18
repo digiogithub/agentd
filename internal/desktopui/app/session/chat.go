@@ -33,7 +33,7 @@ type Item struct {
 	Kind  ItemKind
 	Title string // tool: the call ("go test ./...")
 	Meta  string // tool: "4,1 s", "+42 −7"
-	Text  string // prose, prompt, or the tool's output
+	Text  string // prose (agent: chat markup, CommonMark), prompt, or the tool's output
 	OK    *bool  // tool outcome when the marker tells it (✓ / ✗)
 }
 
@@ -46,7 +46,9 @@ var (
 )
 
 // Items turns view lines into chat entries. Dialog lines are left out when
-// the dialog shows as the question card.
+// the dialog shows as the question card. Agent prose is built from the lines'
+// chat markup (ViewLine.Md, else the text), with a blank line kept as a
+// paragraph break.
 func Items(lines []proto.ViewLine, hideDialog bool) []Item {
 	var out []Item
 	last := func() *Item {
@@ -55,8 +57,25 @@ func Items(lines []proto.ViewLine, hideDialog bool) []Item {
 		}
 		return &out[len(out)-1]
 	}
+	blank := false // a blank line since the last agent text
+	addAgent := func(it *Item, md string) {
+		switch {
+		case it.Text == "":
+		case blank:
+			it.Text += "\n\n"
+		default:
+			it.Text += "\n"
+		}
+		it.Text += md
+		blank = false
+	}
 	for _, l := range lines {
 		text := strings.TrimRight(l.Text, " ")
+		md := l.Md
+		if md == "" {
+			md = l.Text
+		}
+		md = strings.TrimRight(md, " ")
 		switch l.Role {
 		case "dialog":
 			if hideDialog {
@@ -72,26 +91,31 @@ func Items(lines []proto.ViewLine, hideDialog bool) []Item {
 			continue
 		}
 		if strings.TrimSpace(text) == "" {
+			blank = true
 			continue
 		}
 		if p, ok := cutAny(text, userPrefix); ok {
 			out = append(out, Item{Kind: ItemUser, Text: p})
+			blank = false
 			continue
 		}
 		indented := strings.HasPrefix(text, " ") || strings.HasPrefix(text, "⎿")
 		if indented {
 			body := strings.TrimLeft(strings.TrimSpace(text), "⎿ ")
-			if it := last(); it != nil && (it.Kind == ItemTool || it.Kind == ItemAgent) {
-				if it.Kind == ItemAgent && it.Text != "" {
-					it.Text += "\n"
-				}
-				if it.Kind == ItemTool && it.Text != "" {
+			mdBody := strings.TrimLeft(strings.TrimSpace(md), "⎿ ")
+			if it := last(); it != nil && it.Kind == ItemAgent {
+				addAgent(it, mdBody)
+				continue
+			}
+			if it := last(); it != nil && it.Kind == ItemTool {
+				if it.Text != "" {
 					it.Text += "\n"
 				}
 				it.Text += body
 				continue
 			}
-			out = append(out, Item{Kind: ItemAgent, Text: body})
+			out = append(out, Item{Kind: ItemAgent, Text: mdBody})
+			blank = false
 			continue
 		}
 		mark := ""
@@ -119,13 +143,16 @@ func Items(lines []proto.ViewLine, hideDialog bool) []Item {
 				it.OK = &ok
 			}
 			out = append(out, it)
+			blank = false
 			continue
 		}
+		mdRest := strings.TrimPrefix(md, mark)
 		if it := last(); it != nil && it.Kind == ItemAgent && mark == "" {
-			it.Text += "\n" + rest
+			addAgent(it, mdRest)
 			continue
 		}
-		out = append(out, Item{Kind: ItemAgent, Text: rest})
+		out = append(out, Item{Kind: ItemAgent, Text: mdRest})
+		blank = false
 	}
 	return out
 }
@@ -192,7 +219,7 @@ func (v *View) item(c *ui.Context, t *kit.Tokens, i int, it Item) {
 	case ItemUser:
 		ui.Row(c).Justify(ui.End).Children(func() {
 			ui.Column(c).MaxWidthPercent(82).Padding(10, 14).Radius(18, 18, 6, 18).Background(t.AccentBg).Children(func() {
-				v.prose(c, t, it.Text, 14.5, 1.45, false)
+				v.prose(c, t, it.Text, v.a.Prefs.Get().ChatSize(), 1.45, false)
 			})
 		})
 	case ItemAgent:
@@ -234,7 +261,7 @@ func (v *View) item(c *ui.Context, t *kit.Tokens, i int, it Item) {
 			})
 			if open && hasBody {
 				ui.Column(c).Margin(0, 0, 10, 0).AlignItems(ui.Stretch).Children(func() {
-					v.prose(c, t, it.Text, 12, 1.45, true)
+					v.prose(c, t, it.Text, v.a.Prefs.Get().ChatSize()*0.83, 1.45, true)
 				})
 			}
 		})

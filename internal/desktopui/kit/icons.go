@@ -68,6 +68,7 @@ const (
 
 	// Custom window controls (minimise, maximise, restore).
 	IconMinus    = "minus"
+	IconType     = "type"
 	IconMaximize = "square"
 	IconRestore  = "copy"
 )

@@ -23,6 +23,46 @@ type Settings struct {
 	// AgentsGroup is how the agents list groups sessions: GroupProject
 	// (default) or GroupState.
 	AgentsGroup string `json:"agents_group,omitempty"`
+	// ChatFontSize is the size of the chat view's prose in points (0 = the
+	// default, DefaultChatFontSize; kept within MinChatFontSize..MaxChatFontSize).
+	ChatFontSize float32 `json:"chat_font_size,omitempty"`
+	// ChatFont is the chat prose font: ChatFontSans ("" = default), ChatFontSerif
+	// or ChatFontMono.
+	ChatFont string `json:"chat_font,omitempty"`
+}
+
+// Chat font defaults and limits.
+const (
+	DefaultChatFontSize float32 = 14.5
+	MinChatFontSize     float32 = 11
+	MaxChatFontSize     float32 = 24
+)
+
+// Values of Settings.ChatFont.
+const (
+	ChatFontSans  = "sans"
+	ChatFontSerif = "serif"
+	ChatFontMono  = "mono"
+)
+
+// ChatFonts lists the chat fonts in the order the UI offers them.
+var ChatFonts = []string{ChatFontSans, ChatFontSerif, ChatFontMono}
+
+// ChatSize is ChatFontSize with the default applied and clamped.
+func (s Settings) ChatSize() float32 {
+	if s.ChatFontSize == 0 {
+		return DefaultChatFontSize
+	}
+	return min(max(s.ChatFontSize, MinChatFontSize), MaxChatFontSize)
+}
+
+// ChatFontOrDefault is ChatFont with the default applied ("" or unknown = sans).
+func (s Settings) ChatFontOrDefault() string {
+	switch s.ChatFont {
+	case ChatFontSerif, ChatFontMono:
+		return s.ChatFont
+	}
+	return ChatFontSans
 }
 
 // Values of Settings.AgentsGroup.
@@ -117,4 +157,15 @@ func (s Settings) IsMuted(key string, now time.Time) bool {
 		}
 	}
 	return false
+}
+
+// ChatFamily is the font family of a Settings.ChatFont value.
+func ChatFamily(font string) string {
+	switch font {
+	case ChatFontSerif:
+		return "serif"
+	case ChatFontMono:
+		return kit.MonoFamily()
+	}
+	return kit.FontUI + ", sans-serif"
 }

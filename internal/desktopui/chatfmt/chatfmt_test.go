@@ -143,3 +143,15 @@ func TestLinkify(t *testing.T) {
 		t.Error("bare scheme is not a link")
 	}
 }
+
+func TestUnmarkup(t *testing.T) {
+	for in, want := range map[string]string{
+		"**Total** `a_b` 2\\*3 \\[x\\]": "Total a_b 2*3 [x]",
+		"### Título":                    "Título",
+		"plain":                         "plain",
+	} {
+		if got := Unmarkup(in); got != want {
+			t.Errorf("Unmarkup(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
