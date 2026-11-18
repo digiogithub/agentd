@@ -35,6 +35,9 @@ type Line struct {
 	// Row is the index of the line's first row in the reflowed row stream
 	// (Scrollback ⧺ Screen for Reflow, the slice index for ReflowRows).
 	Row int
+	// Spans are the styled runs of Text (bold, italic, a foreground colour…),
+	// in order, not overlapping; unstyled text has none.
+	Spans []Span
 }
 
 // ReflowOpts tunes Reflow.
@@ -122,9 +125,13 @@ func ReflowRows(rows []Row, cols int, opts ReflowOpts) []Line {
 		if cur != nil && !fenced[i] && !fenced[i-1] {
 			if sep, why, ok := canJoin(curView, v, curIndent, curHang, rows[i-1].Wrapped, opts.Rules, ww); ok {
 				if why == JoinedAutowrap && v.indent != curIndent {
+					cur.Spans = appendSpans(cur.Spans, v.spans, len(cur.Text), 0)
 					cur.Text += v.text // the cut fell on a blank: keep it
 				} else {
-					cur.Text += sep + strings.TrimLeft(v.text, " \u00a0")
+					rest := strings.TrimLeft(v.text, " \u00a0")
+					cur.Text += sep
+					cur.Spans = appendSpans(cur.Spans, v.spans, len(cur.Text), len(v.text)-len(rest))
+					cur.Text += rest
 				}
 				cur.Rows++
 				if cur.Joined == "" {
@@ -135,7 +142,7 @@ func ReflowRows(rows []Row, cols int, opts ReflowOpts) []Line {
 			}
 		}
 		flush()
-		cur = &Line{Text: v.text, Role: RoleTranscript, Rows: 1, Row: i}
+		cur = &Line{Text: v.text, Spans: v.spans, Role: RoleTranscript, Rows: 1, Row: i}
 		curView = v
 		curIndent = v.contentIndent()
 		curHang = v.hasMarker
@@ -283,6 +290,7 @@ func (v *rowView) multiWord() bool {
 // columns rebased to the frame's inner area.
 type rowView struct {
 	cells []placed // inner cells, trailing blanks trimmed
+	spans []Span   // styled runs of text
 	text  string   // display text (NBSP kept), indent kept, trailing blanks trimmed
 	match string   // text with NBSP mapped to space, for matching only
 	// indent: leading blank columns; end: column after the last non-blank
@@ -372,10 +380,12 @@ func newRowViewOpt(r Row, cols int, strip bool) rowView {
 	var b strings.Builder
 	first := -1
 	for i, p := range cs {
+		start := b.Len()
 		b.WriteString(cellText(p.c))
 		if first < 0 && !blankText(p.c.Text) {
 			first = i
 		}
+		v.spans = addSpan(v.spans, start, b.Len(), p.c)
 	}
 	v.text = b.String()
 	v.match = strings.ReplaceAll(v.text, " ", " ")

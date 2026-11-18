@@ -817,6 +817,9 @@ type ViewArgs struct {
 	// Scrollback returns the main-screen scrollback and screen as one
 	// transcript (FirstLine 0, not pageable) instead of the stored history.
 	Scrollback bool `json:"scrollback,omitempty"`
+	// Markup adds ViewLine.Md (screen.Markup: headings, bold, inline code
+	// from the terminal's styles) to transcript lines.
+	Markup bool `json:"markup,omitempty"`
 }
 
 // ViewNotModified answers op view when since_revision is still current.
@@ -842,6 +845,11 @@ type ViewAttention struct {
 type ViewLine struct {
 	Text string `json:"text"`
 	Role string `json:"role"` // transcript | status | dialog | gap
+	// Md is the line in chat markup (view markup:true): a small markdown
+	// subset ("### " heading, **bold**, `code`, \-escapes). Omitted when the
+	// line has no styles worth marking and no character to escape: then it
+	// is Text.
+	Md string `json:"md,omitempty"`
 }
 
 // ViewInput is the harness input line.

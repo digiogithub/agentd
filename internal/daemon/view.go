@@ -538,6 +538,11 @@ func (s *Server) viewOp(who caller, a proto.ViewArgs) (any, error) {
 	out.Lines = make([]proto.ViewLine, len(lines))
 	for i, l := range lines {
 		out.Lines[i] = proto.ViewLine{Text: l.Text, Role: string(l.Role)}
+		if a.Markup && (l.Role == screen.RoleTranscript || l.Role == "") {
+			if md := screen.Markup(l); md != l.Text {
+				out.Lines[i].Md = md
+			}
+		}
 	}
 	return out, nil
 }

@@ -548,3 +548,25 @@ func TestViewRedrawCleanHistory(t *testing.T) {
 		})
 	}
 }
+
+// markup:true adds the chat markup of styled lines (Md); plain lines have none.
+func TestViewMarkup(t *testing.T) {
+	e := startViewServer(t, "")
+	c := e.dial(t)
+	runView(t, c, "mk", "", "sh", "-c", `printf '  \033[1mTitulo de seccion\033[m\r\n  - usa \033[38;5;153mgrant_call_id\033[m ya\r\n  plano\r\n'; sleep 30`)
+	var v proto.View
+	testutil.WaitFor(t, 10*time.Second, func() bool {
+		v = viewOf(t, c, proto.ViewArgs{Name: "mk", Markup: true})
+		return slices.ContainsFunc(v.Lines, func(l proto.ViewLine) bool { return strings.Contains(l.Text, "plano") })
+	}, "lines", func() string { return fmt.Sprintf("%+v", v.Lines) })
+	md := map[string]string{}
+	for _, l := range v.Lines {
+		md[strings.TrimSpace(l.Text)] = l.Md
+	}
+	if md["Titulo de seccion"] != "  ### Titulo de seccion" || md["- usa grant_call_id ya"] != "  - usa `grant_call_id` ya" || md["plano"] != "" {
+		t.Fatalf("md = %q", md)
+	}
+	if plain := viewOf(t, c, proto.ViewArgs{Name: "mk"}); slices.ContainsFunc(plain.Lines, func(l proto.ViewLine) bool { return l.Md != "" }) {
+		t.Errorf("md without markup: %+v", plain.Lines)
+	}
+}

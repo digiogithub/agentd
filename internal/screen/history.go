@@ -2,6 +2,7 @@ package screen
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -206,7 +207,7 @@ func (h *History) observe(reg Regions, gen uint64, now time.Time, forced bool) (
 		}
 		n := len(h.lines)
 		for i := 0; i < o; i++ {
-			if ti := s + i; ti >= n-slack && h.lines[ti].Text != cur[i].Text {
+			if ti := s + i; ti >= n-slack && (h.lines[ti].Text != cur[i].Text || !slices.Equal(h.lines[ti].Spans, cur[i].Spans)) {
 				h.setLine(ti, cur[i], ck[i])
 			}
 		}
