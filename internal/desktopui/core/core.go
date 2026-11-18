@@ -101,7 +101,9 @@ type Backend struct {
 	keys  *remote.HostKeys
 	pool  *remote.Pool
 	local *remote.LocalShell
-	log   *slog.Logger
+	// noMarkup: hosts whose daemon rejects view markup (before 0.6.3).
+	noMarkup sync.Map
+	log      *slog.Logger
 
 	ctx    context.Context
 	cancel context.CancelFunc

@@ -20,12 +20,13 @@ import (
 type fakeDaemon struct {
 	sock string
 
-	mu       sync.Mutex
-	sessions []proto.SessionInfo
-	subs     []chan proto.Event
-	subArgs  []proto.SubscribeArgs
-	lsCalls  int
-	conns    []net.Conn
+	mu        sync.Mutex
+	sessions  []proto.SessionInfo
+	subs      []chan proto.Event
+	subArgs   []proto.SubscribeArgs
+	lsCalls   int
+	viewCalls int
+	conns     []net.Conn
 }
 
 func newFakeDaemon(t *testing.T) *fakeDaemon {
@@ -122,6 +123,22 @@ func (f *fakeDaemon) serve(c net.Conn) {
 				}
 			}
 			return
+		case proto.OpView:
+			// A daemon before 0.6.3: its ViewArgs has no "markup".
+			var a struct {
+				Name          string `json:"name"`
+				SinceRevision uint64 `json:"since_revision,omitempty"`
+				Epoch         string `json:"epoch,omitempty"`
+			}
+			f.mu.Lock()
+			f.viewCalls++
+			f.mu.Unlock()
+			if err := req.DecodeArgs(&a); err != nil {
+				resp = proto.ErrorResponse(err)
+				break
+			}
+			resp, _ = proto.OKResponse(proto.View{Name: a.Name, Epoch: "E1", Revision: 1, Status: "idle",
+				Lines: []proto.ViewLine{{Text: "hola *mundo*", Role: "transcript"}}})
 		default:
 			resp = proto.ErrorResponse(proto.Errorf(proto.CodeInvalid, "fake: %s", req.Op))
 		}
@@ -238,4 +255,29 @@ func TestLaunchFirstPrompt(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatalf("first prompt never ran; screen:\n%s", screen)
+}
+
+// A daemon that predates view markup still serves the chat view: the
+// rejected "markup" argument is dropped for that host.
+func TestViewFallsBackWithoutMarkup(t *testing.T) {
+	dir := isolate(t)
+	fd := newFakeDaemon(t)
+	fd.setSessions(proto.SessionInfo{Name: "a@p", State: "running", Status: "idle", StartedAt: time.Now()})
+	b := newBackend(t, sshOpts(dir, fd.sock))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	views, err := b.WatchView(ctx, backend.Session{HostID: "local", Source: backend.SourceAgentd, Name: "a@p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := <-views
+	if len(v.Lines) != 1 || v.Lines[0].Text != "hola *mundo*" || v.Lines[0].Md != `hola \*mundo\*` {
+		t.Fatalf("view %+v", v)
+	}
+	fd.mu.Lock()
+	n := fd.viewCalls
+	fd.mu.Unlock()
+	if n != 2 {
+		t.Fatalf("view calls %d, want 2 (refused with markup, then without)", n)
+	}
 }
