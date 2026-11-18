@@ -30,6 +30,7 @@ func TestInboxGroupsAndCopy(t *testing.T) {
 
 func TestApprovalSendsChooseWithRevision(t *testing.T) {
 	e := apptest.New(t, "/agents", 1400, 900)
+	e.Click("Esperan · 2") // the list is alphabetical: filter to the waiting ones
 	e.Click("Permitir")
 	acts := e.F.Acts()
 	if len(acts) != 1 {
@@ -47,6 +48,7 @@ func TestApprovalSendsChooseWithRevision(t *testing.T) {
 
 func TestDenyPicksTheNoOption(t *testing.T) {
 	e := apptest.New(t, "/agents", 1400, 900)
+	e.Click("Esperan · 2")
 	e.Click("Denegar")
 	acts := e.F.Acts()
 	if len(acts) != 1 || acts[0].Args.OptionID != "w3" {
@@ -121,13 +123,16 @@ func TestProjectGroupsAreTheDefault(t *testing.T) {
 	if e.UI.HasText("NECESITAN RESPUESTA · 2") {
 		t.Errorf("state sections shown in project mode")
 	}
-	// Groups with something waiting come first; inside a group the waiting
-	// session comes before the idle one.
-	if !(y(t, e, "Nueva sesión en webapp") < y(t, e, "Nueva sesión en docs")) {
-		t.Errorf("waiting group not first")
+	// The order is alphabetical and never follows live status, so the list
+	// does not jump on updates: groups by name, sessions by title.
+	names := []string{"Nueva sesión en agentd", "Nueva sesión en api", "Nueva sesión en docs", "Nueva sesión en infra"}
+	for i := 1; i < len(names); i++ {
+		if !(y(t, e, names[i-1]) < y(t, e, names[i])) {
+			t.Errorf("%q should be above %q", names[i-1], names[i])
+		}
 	}
 	if !(y(t, e, "claude@webapp") < y(t, e, "codex@webapp: Listo")) {
-		t.Errorf("waiting session not first in its group")
+		t.Errorf("sessions of a group not alphabetical")
 	}
 	// The same project on two hosts is two groups, named by host.
 	if y(t, e, "estudio · 2 sesiones") == y(t, e, "portatil · 1 sesión") {

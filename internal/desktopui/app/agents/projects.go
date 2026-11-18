@@ -93,9 +93,10 @@ func groupFor(e entry, hi hostInfo) (key, label, dir, arg string) {
 	return "none", NoProject, "", ""
 }
 
-// buildGroups groups entries per host + project. Inside a group: needs
-// answer first, then working, then the rest by last update; groups by
-// attention, then most recent activity.
+// buildGroups groups entries per host + project. The order never depends on
+// live data (status, attention, last update), so the list does not jump on
+// every refresh: groups alphabetically by label (then host), sessions inside a
+// group alphabetically by title (then key). The status shows in each card.
 func buildGroups(entries []entry, hosts map[string]hostInfo) []*projGroup {
 	byKey := map[string]*projGroup{}
 	var order []*projGroup
@@ -117,21 +118,12 @@ func buildGroups(entries []entry, hosts map[string]hostInfo) []*projGroup {
 		}
 	}
 	for _, g := range order {
-		sort.SliceStable(g.entries, func(i, j int) bool {
-			a, b := g.entries[i], g.entries[j]
-			if a.g != b.g {
-				return a.g < b.g
-			}
-			return a.s.Updated.After(b.s.Updated)
-		})
+		sortEntries(g.entries)
 	}
 	sort.SliceStable(order, func(i, j int) bool {
 		a, b := order[i], order[j]
-		if (a.waiting > 0) != (b.waiting > 0) {
-			return a.waiting > 0
-		}
-		if !a.updated.Equal(b.updated) {
-			return a.updated.After(b.updated)
+		if la, lb := strings.ToLower(a.label), strings.ToLower(b.label); la != lb {
+			return la < lb
 		}
 		if a.label != b.label {
 			return a.label < b.label
@@ -139,4 +131,19 @@ func buildGroups(entries []entry, hosts map[string]hostInfo) []*projGroup {
 		return a.host < b.host
 	})
 	return order
+}
+
+// sortEntries orders sessions alphabetically by title, then by key: a stable
+// order that live updates (status, activity) never change.
+func sortEntries(es []entry) {
+	sort.SliceStable(es, func(i, j int) bool {
+		a, b := app.SessionTitle(es[i].s), app.SessionTitle(es[j].s)
+		if la, lb := strings.ToLower(a), strings.ToLower(b); la != lb {
+			return la < lb
+		}
+		if a != b {
+			return a < b
+		}
+		return es[i].s.Key() < es[j].s.Key()
+	})
 }

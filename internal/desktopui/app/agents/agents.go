@@ -202,6 +202,7 @@ func (v *View) inbox(c *ui.Context, t *kit.Tokens, open string) {
 		}
 		visible = append(visible, entry{s: s, view: view, g: app.GroupOf(s, view)})
 	}
+	sortEntries(visible) // alphabetical: a refresh never reorders the list
 	count := func(g app.Group) int {
 		n := 0
 		for _, e := range visible {
