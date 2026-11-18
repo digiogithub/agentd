@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/digiogithub/agentd/internal/config"
 	"github.com/digiogithub/agentd/internal/desktopui/backend"
 )
 
@@ -26,6 +27,7 @@ var detectTools = []struct{ name, args string }{
 	{"pando", "--version"},
 	{"opencode", "--version"},
 	{"gemini", "--version"},
+	{"grok", "--version"},
 }
 
 // ToolNames returns the names of the tools Detect probes, in order.
@@ -39,9 +41,29 @@ func ToolNames() []string {
 
 const marker = "@@agentd-app "
 
-const detectHead = `PATH0=$PATH
-PATH="$HOME/.local/bin:$HOME/bin:$PATH"; export PATH
-m() { printf '@@agentd-app %s\n' "$*"; }
+// extraPathSh is the sh snippet that widens PATH with the user-level binary
+// directories (config.UserBinSubdirs, SystemBinDirs, per-version Node dirs):
+// non-interactive SSH shells and services rarely have them, and that is where
+// bun/npm/cargo/volta installs of codex, grok, opencode... end up.
+var extraPathSh = func() string {
+	var user, sys []string
+	for _, d := range config.UserBinSubdirs {
+		user = append(user, "$HOME/"+d)
+	}
+	sys = append(sys, config.SystemBinDirs...)
+	var b strings.Builder
+	b.WriteString("PATH=\"" + strings.Join(user, ":") + ":$PATH:" + strings.Join(sys, ":") + "\"\n")
+	for _, g := range config.NodeVersionGlobs {
+		b.WriteString("for d in \"$HOME\"/" + g + "; do [ -d \"$d\" ] && PATH=\"$PATH:$d\"; done\n")
+	}
+	b.WriteString("export PATH\n")
+	return b.String()
+}()
+
+const detectHead1 = `PATH0=$PATH
+`
+
+const detectHead2 = `m() { printf '@@agentd-app %s\n' "$*"; }
 if command -v timeout >/dev/null 2>&1; then TO=timeout
 elif command -v gtimeout >/dev/null 2>&1; then TO=gtimeout
 else TO=; fi
@@ -93,7 +115,9 @@ m end
 
 var detectScript = func() string {
 	var b strings.Builder
-	b.WriteString(detectHead)
+	b.WriteString(detectHead1)
+	b.WriteString(extraPathSh)
+	b.WriteString(detectHead2)
 	for _, t := range detectTools {
 		b.WriteString("tool " + t.name + " " + t.args + "\n")
 	}
@@ -110,7 +134,7 @@ var detectScript = func() string {
 // grandchild the watchdog does not kill, e.g. the `sleep` of a shell wrapper,
 // kept the pipe open and stalled detection until it ended) and the watchdog's
 // `wait` has its stderr discarded (the shell reports the killed job there as
-// "Terminated", which became the tool's version). `~/.local/bin` and `~/bin` are searched as
+// "Terminated", which became the tool's version). the user-level binary directories (`~/.local/bin`, `~/bin`, `~/.bun/bin`, `~/.cargo/bin`, nvm, ...) are searched as
 // well: non-interactive login shells often do not have them on PATH, and that
 // is where the installers put binaries. Tool paths are absolute (`command -v`
 // results that are not absolute, such as aliases or functions, are ignored).

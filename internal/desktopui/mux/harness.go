@@ -11,7 +11,7 @@ import (
 
 // KnownHarnesses are the harness names recognised, in matching order.
 var KnownHarnesses = []string{
-	"claude", "codex", "pando", "opencode", "gemini", "aider", "crush",
+	"claude", "codex", "pando", "opencode", "gemini", "grok", "aider", "crush",
 	"goose", "amp", "qwen", "cursor-agent",
 }
 

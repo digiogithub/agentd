@@ -403,7 +403,7 @@ func (s *Server) run(ctx context.Context, a proto.RunArgs) (proto.SessionInfo, e
 	s.mu.Unlock()
 
 	sess, err := session.Start(session.Spec{
-		Name: a.Name, Cwd: a.Cwd, Cmd: a.Cmd, BaseEnv: s.childBaseEnv(a.EnvBase), Env: env,
+		Name: a.Name, Cwd: a.Cwd, Cmd: resolveCmd(a.Cmd, a.EnvBase, env), BaseEnv: s.childBaseEnv(a.EnvBase), Env: env,
 		Cols: a.Cols, Rows: a.Rows, LogPath: logPath,
 		LogMaxBytes: s.Cfg.Run.LogMaxBytes(), WriteTimeout: s.WriteTimeout,
 	})

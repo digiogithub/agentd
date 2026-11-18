@@ -25,7 +25,7 @@ func init() {
 }
 
 // CLIs are the agent CLIs a host card lists.
-var CLIs = []string{"claude", "codex", "pando", "opencode", "gemini"}
+var CLIs = []string{"claude", "codex", "pando", "opencode", "gemini", "grok"}
 
 // View is the area state (UI thread only).
 type View struct {

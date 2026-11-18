@@ -87,7 +87,7 @@ func New() *Fake {
 
 func tools(pairs ...string) map[string]backend.Tool {
 	m := map[string]backend.Tool{}
-	for _, n := range []string{"agentd", "zellij", "tmux", "node", "npm", "claude", "codex", "pando", "opencode", "gemini"} {
+	for _, n := range []string{"agentd", "zellij", "tmux", "node", "npm", "claude", "codex", "pando", "opencode", "gemini", "grok"} {
 		m[n] = backend.Tool{Name: n}
 	}
 	for i := 0; i+1 < len(pairs); i += 2 {

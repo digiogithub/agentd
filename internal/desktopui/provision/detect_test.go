@@ -46,6 +46,7 @@ var linuxFull = strings.Join([]string{
 	section("tool pando", "path=/home/u/.local/bin/pando\nversion=pando version v1.4.2"),
 	section("tool opencode", "path=/home/u/.local/bin/opencode\nversion=1.0.12"),
 	section("tool gemini", "path=/home/u/.local/bin/gemini\nversion=0.15.0"),
+	section("tool grok", "path=/home/u/.bun/bin/grok\nversion=0.1.0"),
 	section("socket", "live=/run/user/1000/agentd/agentd.sock\nlive=/run/user/1000/agentd/agentd.sock\ndefault=/run/user/1000/agentd/agentd.sock"),
 	section("end"),
 }, "")
@@ -70,6 +71,7 @@ var macArm = strings.Join([]string{
 	section("tool pando"),
 	section("tool opencode"),
 	section("tool gemini"),
+	section("tool grok"),
 	section("socket", "default=/tmp/agentd-501/agentd.sock"),
 	section("end"),
 }, "")

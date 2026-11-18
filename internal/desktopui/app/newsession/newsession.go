@@ -52,7 +52,7 @@ type Agent struct{ ID, Label string }
 // Agents of the grid.
 var Agents = []Agent{
 	{"claude", "Claude Code"}, {"codex", "Codex"}, {"pando", "Pando"},
-	{"opencode", "opencode"}, {"gemini", "Gemini CLI"},
+	{"opencode", "opencode"}, {"gemini", "Gemini CLI"}, {"grok", "Grok"},
 }
 
 // What to open (first choice of the form).

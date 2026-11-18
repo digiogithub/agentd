@@ -416,6 +416,7 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
     caller); the daemon uses it as the child's base (falling back to its own environment when absent),
     always stripping `AGENTD_*`, `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT` and any name/glob in config
     `[run] strip_env = [...]`. Precedence: base < `--env` < daemon-set `AGENTD_*` < `TERM`.
+- **Harness binary lookup**: `run` resolves a bare command name with the daemon's PATH like `exec`; only when that fails (a service or SSH shell without the user's bun/npm/cargo/volta/nvm dirs) `daemon.resolveCmd` searches `config.FindBinary` (`config.ExtraBinDirs`: `~/.local/bin`, `~/bin`, `~/.bun/bin`, `~/.cargo/bin`, `~/.npm-global/bin`, `~/.volta/bin`, pnpm, `~/go/bin`, mise/asdf shims, per-version nvm/fnm Node dirs, Homebrew, snap), uses the absolute path and prepends its directory to the child's PATH when the caller set none. The desktop host detection script (`provision.DetectScript`) widens its PATH with the same lists and also probes `grok`.
 - **Session lifecycle**: (starting →) running → exited (exit code kept). `run` reserves the name and
   starts the process without holding the registry lock; while starting, `ls` shows the session with
   state `starting` and other ops answer "is starting". Exited sessions stay listed until
