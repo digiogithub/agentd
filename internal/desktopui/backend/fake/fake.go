@@ -579,7 +579,7 @@ func (f *Fake) Act(ctx context.Context, s backend.Session, args proto.ActArgs) (
 		if strings.TrimSpace(args.Text) == "" {
 			return nil, proto.Errorf(proto.CodeInvalid, "empty prompt")
 		}
-		if v.Status == "working" {
+		if v.Status == "working" && !args.Force {
 			return nil, proto.Errorf(proto.CodeNotReady, "the agent is working")
 		}
 		v.Lines = append(v.Lines, proto.ViewLine{Text: "❯ " + args.Text, Role: "transcript"})

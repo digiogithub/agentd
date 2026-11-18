@@ -139,6 +139,9 @@ func cutAny(s string, prefixes []string) (string, bool) {
 	return "", false
 }
 
+// followSlack is how far (DIPs) from the end still counts as the bottom.
+const followSlack = 24
+
 func (v *View) chatTab(c *ui.Context, t *kit.Tokens, s backend.Session, view *proto.View, viewErr error) {
 	if view == nil {
 		ui.Column(c).Grow(1).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
@@ -155,8 +158,12 @@ func (v *View) chatTab(c *ui.Context, t *kit.Tokens, s backend.Session, view *pr
 	}
 	pending := app.Pending(view)
 	items := Items(view.Lines, pending)
-	if n := len(items) + map[bool]int{true: 1}[pending]; n != v.lastLines {
-		v.lastLines = n
+	// Follow the newest line while the user is at the bottom; once they
+	// scroll up the view stays where it is, until they come back down (or use
+	// the button). The state of the last frame tells where they are.
+	v.following = v.scroll.MaxY-v.scroll.Y <= followSlack || v.jump
+	v.jump = false
+	if v.following {
 		v.scroll.Y = math.MaxFloat32
 	}
 	ui.Scroll(c.Key("chat")).TrackScroll(&v.scroll).Grow(1).MinHeight(0).Padding(16, 20, 8, 20).Gap(14).Children(func() {
@@ -169,6 +176,14 @@ func (v *View) chatTab(c *ui.Context, t *kit.Tokens, s backend.Session, view *pr
 			}
 		})
 	})
+	if !v.following {
+		ui.Row(c).Shrink(0).Justify(ui.Center).Padding(0, 0, 6, 0).Children(func() {
+			if kit.Button(c.Key("to-bottom"), kit.ButtonOpts{Variant: kit.Outline, Icon: kit.IconChevronDown, Tooltip: "Ir al final",
+				Label: "Ir al final", Height: 34}).Clicked() {
+				v.jump = true
+			}
+		})
+	}
 	v.composer(c, t, s, view)
 }
 
@@ -398,7 +413,10 @@ func (v *View) send(s backend.Session, view *proto.View, text string) {
 	args := proto.ActArgs{Name: s.Name, Action: "prompt", Text: text, Client: "agentd-desktop"}
 	if view != nil {
 		args.Revision, args.Epoch = view.Revision, view.Epoch
+		// Most agents take a message in the middle of a turn: do not wait for idle.
+		args.Force = view.Status == "working"
 	}
+	v.jump = true
 	a := v.a
 	a.Go(func(ctx context.Context) {
 		_, err := a.Backend.Act(ctx, s, args)

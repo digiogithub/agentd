@@ -42,7 +42,8 @@ type View struct {
 	focusDraft  bool
 	expanded    map[int]bool
 	scroll      ui.ScrollState
-	lastLines   int
+	following   bool // the chat is pinned to its newest line
+	jump        bool // scroll to the bottom on the next frame
 	queued      int
 	inboxCancel context.CancelFunc
 

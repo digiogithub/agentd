@@ -66,6 +66,43 @@ func TestComposerSendsPrompt(t *testing.T) {
 	}
 }
 
+// A message goes in while the agent works (act prompt with force).
+func TestComposerSendsWhileWorking(t *testing.T) {
+	e := apptest.New(t, "/agents/s/estudio/agentd/pando@agentd", 1400, 900)
+	e.Click("Mensaje para el agente")
+	e.UI.Type("Y añade tests")
+	e.UI.Key(0, ui.KeyEnter)
+	e.Settle()
+	var got *proto.ActArgs
+	for _, a := range e.F.Acts() {
+		if a.Args.Action == "prompt" {
+			got = &a.Args
+		}
+	}
+	if got == nil || !got.Force || got.Text != "Y añade tests" {
+		t.Fatalf("prompt act %+v (all %+v)", got, e.F.Acts())
+	}
+}
+
+// Scrolling up stops the follow and offers a way back to the bottom.
+func TestChatScrollUpStopsFollowing(t *testing.T) {
+	e := apptest.New(t, "/agents/s/vps-hetzner/agentd/codex@api", 1000, 260)
+	e.Settle()
+	if e.UI.HasText("Ir al final") {
+		t.Fatalf("button shown while pinned: %q", e.UI.Texts())
+	}
+	e.UI.Scroll(600, 150, 0, -400)
+	e.Settle()
+	if !e.UI.HasText("Ir al final") {
+		t.Fatalf("no button after scrolling up: %q", e.UI.Texts())
+	}
+	e.Click("Ir al final")
+	e.Settle()
+	if e.UI.HasText("Ir al final") {
+		t.Errorf("button still shown at the bottom")
+	}
+}
+
 func TestQueuedMailHint(t *testing.T) {
 	// claude@agentd has no session in the fake; queue one for claude@docs.
 	e := apptest.New(t, "/agents", 1400, 900)

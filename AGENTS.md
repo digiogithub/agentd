@@ -877,6 +877,7 @@ settings. It is a client only: it never changes daemon behaviour, and the daemon
     session is only `rm`'ed, a removed one is not an error); zellij `delete-session --force` (kills a running session
     and drops the resurrectable one); tmux `kill-session`; an app-owned SSH shell is closed.
 - **Window frame** (same as Pando's desktop): Linux = `Frameless` (GTK client-side decorations on Wayland, edge resize on X11), Windows = `TitleBarHidden` + `HideWindowButtons` (keeps DWM shadow, snap and resize edges), macOS = native title bar. Where there is no native bar (`shell.CustomFrame`, `app.CustomFrame`) the UI draws a 36 px title bar (`app/layout.go` `titleBar`: drag area + `kit.WindowControls`) and forwards minimise/maximise/close to the shell through `app.WindowHost` (`shell.Controller`). `app` never imports `shell`.
+- **Chat scroll and prompts**: the chat follows the newest line only while pinned to the bottom (24 DIP slack); scrolling up releases it, and reaching the bottom or the `Ir al final` button pins it again (the mobile app does the same). A message typed while the status is `working` is sent as act `prompt` with `force` (most agents queue it mid-turn); `waiting` with a menu still refuses.
 - **UI rules**: one session view per window content area (no pane/split UI, see Rules); UI state is
   touched only on the UI thread (`app.Context.Update`); acts carry the view's `revision` + `epoch`.
 - **Tests**: headless (`ui.NewTester`, `app/apptest` on `backend/fake`), SSH against `remote/sshtest`, a
