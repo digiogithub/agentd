@@ -739,7 +739,10 @@ type WhoamiResult struct {
 	Session  bool   `json:"session"`
 	// Via says how it was resolved: "process" (peer process ancestry),
 	// "token" (AGENTD_TOKEN) or "uid" (not inside a session).
+	// "relay": a paired device reaching the daemon through agentd-relay.
 	Via string `json:"via"`
+	// Device is set for relay callers: the paired device and its rights.
+	Device *RelayDeviceInfo `json:"device,omitempty"`
 }
 
 // Message is a mailbox message on the wire (same JSON as mailbox.Message).

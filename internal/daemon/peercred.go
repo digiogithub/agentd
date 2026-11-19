@@ -11,6 +11,8 @@ import (
 type peerInfo struct {
 	pid int // 0 when unknown
 	uid int
+	// device is set for relay streams (relay.go): no process, a paired device.
+	device *relayDevice
 }
 
 // peerOf returns the peer credentials of a unix connection.

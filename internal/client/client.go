@@ -474,3 +474,10 @@ func (c *Client) Turns(name string) ([]proto.TurnRecord, error) {
 	err := c.Call(proto.OpTurns, proto.NameArgs{Name: name}, &r)
 	return r.Turns, err
 }
+
+// Relay calls op relay (humans on this host only; see proto.RelayArgs).
+func (c *Client) Relay(a proto.RelayArgs) (proto.RelayResult, error) {
+	var r proto.RelayResult
+	err := c.Call(proto.OpRelay, a, &r)
+	return r, err
+}

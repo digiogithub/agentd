@@ -83,6 +83,9 @@ type eventFilter struct {
 	// canClaim, for a session subscriber, reports whether it may claim from
 	// a queue: it then also sees that queue's posts (mail.queued, no body).
 	canClaim func(queue string) bool
+	// dev, for a relay device, keeps only events about sessions it may see;
+	// guests and session-limited devices get no host-wide events (mail, docs).
+	dev *relayDevice
 }
 
 func newBus(epoch string) *bus {
@@ -106,6 +109,15 @@ func (f eventFilter) match(be busEvent) bool {
 	ev := be.ev
 	if !kindMatches(f.kinds, ev.Kind) {
 		return false
+	}
+	if f.dev != nil {
+		if ev.Session != "" && !f.dev.allows(ev.Session) {
+			return false
+		}
+		limited := f.dev.Kind != relayDeviceKindOwner || len(f.dev.Sessions) > 0
+		if limited && (ev.Session == "" || strings.HasPrefix(ev.Kind, "mail.")) {
+			return false
+		}
 	}
 	if len(f.sessions) > 0 && !slices.Contains(f.sessions, ev.Session) {
 		return false
@@ -328,7 +340,7 @@ func (s *Server) handleSubscribe(conn net.Conn, codec *proto.Codec, req proto.Re
 	if a.HeartbeatMS > 0 {
 		hb = max(time.Duration(a.HeartbeatMS)*time.Millisecond, MinHeartbeat)
 	}
-	f := eventFilter{sessions: a.Sessions, kinds: a.Kinds}
+	f := eventFilter{sessions: a.Sessions, kinds: a.Kinds, dev: who.dev}
 	if who.session {
 		f.self, f.allowSessions = who.id, s.Cfg.Security.AgentView
 		self := who.id
@@ -353,7 +365,7 @@ func (s *Server) handleSubscribe(conn net.Conn, codec *proto.Codec, req proto.Re
 	res := proto.SubscribeResult{Epoch: s.epoch, Seq: seq, Sessions: []proto.SessionInfo{}}
 	for _, e := range s.sortedEntries() {
 		if n := e.sess.Name(); (len(f.sessions) == 0 || slices.Contains(f.sessions, n)) &&
-			(f.self == "" || f.allowSessions || n == f.self) {
+			(f.self == "" || f.allowSessions || n == f.self) && (f.dev == nil || f.dev.allows(n)) {
 			res.Sessions = append(res.Sessions, s.info(context.Background(), e))
 		}
 	}

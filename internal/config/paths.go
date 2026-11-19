@@ -164,3 +164,6 @@ func ValidName(s string) error {
 	}
 	return nil
 }
+
+// RelayDir is $STATE/relay: the relay host key, paired devices and audit log.
+func RelayDir() (string, error) { return inStateDir("relay") }

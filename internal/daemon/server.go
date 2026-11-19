@@ -72,9 +72,10 @@ type Server struct {
 	closing  bool
 	epoch    string
 	bus      *bus
-	docs     *docStore // ops doc_get/doc_set (meta.go)
-	started  time.Time // daemon start (hc server.status uptime)
-	hc       hcListen  // [herdr] listen: the hc socket listener (hclisten.go)
+	docs     *docStore  // ops doc_get/doc_set (meta.go)
+	started  time.Time  // daemon start (hc server.status uptime)
+	hc       hcListen   // [herdr] listen: the hc socket listener (hclisten.go)
+	relay    relayState // [relay]: link to agentd-relay, devices, invites (relay.go)
 
 	lockFile *os.File    // exclusive flock on <socketdir>/agentd.lock, held for the daemon's lifetime
 	sockInfo os.FileInfo // the socket file as bound, to unlink only our own on shutdown
@@ -274,6 +275,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 	s.startRetention()
 	s.startHC()
+	s.startRelay()
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -414,6 +416,7 @@ func (s *Server) Shutdown() {
 			_ = ln.Close()
 		}
 		s.bus.close() // subscribers say bye before their connections are closed
+		s.stopRelay() // relay tunnels (their subscribers got bye above)
 		for _, c := range conns {
 			_ = c.Close()
 		}

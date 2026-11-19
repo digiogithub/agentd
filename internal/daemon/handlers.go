@@ -39,12 +39,18 @@ const requestTimeout = 30 * time.Second
 
 func (s *Server) handleConn(conn net.Conn) {
 	defer s.untrack(conn)
-	defer func() { _ = conn.Close() }()
-	codec := proto.NewCodec(conn)
 	peer, err := peerOf(conn) // for identity resolution (identity.go)
 	if err != nil {
 		peer = peerInfo{uid: os.Getuid()}
 	}
+	s.serveConn(conn, peer)
+}
+
+// serveConn runs the request loop of one connection: a socket client, or a
+// relay stream (peer.device set, every request through relayGate).
+func (s *Server) serveConn(conn net.Conn, peer peerInfo) {
+	defer func() { _ = conn.Close() }()
+	codec := proto.NewCodec(conn)
 	for {
 		req, err := codec.ReadRequest()
 		if err != nil {
@@ -52,6 +58,19 @@ func (s *Server) handleConn(conn net.Conn) {
 				s.Log.Debug("read request", "err", err)
 			}
 			return
+		}
+		var relaySession string
+		if peer.device != nil {
+			if relaySession, err = relayGate(peer.device, &req); err != nil {
+				s.relayAuditOp(peer.device, req.Op, relaySession, err)
+				if werr := codec.WriteResponse(proto.ErrorResponse(classifyError(err))); werr != nil {
+					return
+				}
+				continue
+			}
+			if req.Op == proto.OpAttach {
+				s.relayAuditOp(peer.device, req.Op, relaySession, nil)
+			}
 		}
 		if req.Op == proto.OpAttach {
 			if s.handleAttach(conn, codec, req) {
@@ -76,6 +95,14 @@ func (s *Server) handleConn(conn net.Conn) {
 		stop()
 		cancel()
 		err = classifyError(err)
+		if peer.device != nil {
+			if err == nil {
+				data = relayFilterResult(peer.device, req.Op, data)
+			}
+			if req.Op != proto.OpAttach {
+				s.relayAuditOp(peer.device, req.Op, relaySession, err)
+			}
+		}
 		var resp proto.Response
 		if err != nil {
 			s.Log.Debug("op failed", "op", req.Op, "err", err)
@@ -311,6 +338,16 @@ func (s *Server) dispatch(ctx context.Context, req proto.Request, peer peerInfo)
 			return nil, err
 		}
 		return s.hcListenerOp(who, a)
+	case proto.OpRelay:
+		var a proto.RelayArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.relayOp(ctx, who, a)
 	case proto.OpPeers:
 		return s.peers(), nil
 	case proto.OpWhoami:

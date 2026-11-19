@@ -52,6 +52,7 @@ const (
 	viaProcess = "process"
 	viaToken   = "token"
 	viaUID     = "uid"
+	viaRelay   = "relay"
 )
 
 // caller is a resolved identity.
@@ -59,6 +60,7 @@ type caller struct {
 	id      string // session name or human:<user>
 	session bool
 	via     string
+	dev     *relayDevice // a paired device through the relay (id = human:<user>)
 }
 
 func (c caller) human() bool { return !c.session }
@@ -214,6 +216,11 @@ func (s *Server) resolveCaller(p peerInfo, auth *proto.Auth) (caller, error) {
 }
 
 func (s *Server) resolveOnce(p peerInfo, a proto.Auth) (caller, error) {
+	if p.device != nil {
+		// A relay device acts for the host's user; what it may do is decided
+		// by relayGate before any op runs. Session tokens are meaningless here.
+		return caller{id: humanAddr(p.uid), via: viaRelay, dev: p.device}, nil
+	}
 	var byProc string
 	var procOK bool
 	// The daemon's own pid is never a session; it calls itself only from
