@@ -4,7 +4,9 @@
 // sends act prompt) and the Terminal tab (MyGo's terminal plugin fed by
 // backend.Terminal, with the key bar, Interrumpir and Control/Observar).
 // The agents area shows it beside the list on wide windows and alone on
-// narrow ones.
+// narrow ones. A relay host's device scope hides what the daemon would
+// refuse: view = read only (no composer, no answers, the terminal only
+// observes), operate = no Terminar.
 package session
 
 import (
@@ -89,7 +91,7 @@ func (v *View) SetTab(t int) { v.tab = t }
 // pollInbox counts the mailbox messages queued for the session (the chat's
 // "1 mensaje en cola" hint), now and every 10 s.
 func (v *View) pollInbox(s backend.Session) {
-	if s.Source != backend.SourceAgentd || v.a.Backend == nil {
+	if s.Source != backend.SourceAgentd || v.a.Backend == nil || !v.a.Live.Allows(s.HostID, backend.CapMailbox) {
 		return
 	}
 	a := v.a
@@ -138,7 +140,7 @@ func (v *View) Build(c *ui.Context, s backend.Session, back func()) {
 		}
 	})
 	v.kill.Build(c)
-	if view != nil && view.Attention.Set && status != "waiting" && v.tab == TabChat {
+	if view != nil && view.Attention.Set && status != "waiting" && v.tab == TabChat && v.a.Live.Allows(s.HostID, backend.CapOperate) {
 		// Looking at a finished turn clears its attention, as the mobile app.
 		v.ack(s)
 	}
@@ -189,11 +191,14 @@ func (v *View) header(c *ui.Context, t *kit.Tokens, s backend.Session, view *pro
 				ui.Text(c, strings.Join(parts, " · ")).FontSize(12).TextColor(t.Muted).SingleLine().Ellipsis("…")
 			})
 			kit.StatusPill(c, status)
-			if kit.Button(c.Key("terminate"), kit.ButtonOpts{Variant: kit.Danger, Label: "Terminar", Height: 34, Round: true, FontSize: 12,
+			operate := v.a.Live.Allows(s.HostID, backend.CapOperate)
+			if v.a.Live.Allows(s.HostID, backend.CapLaunch) && kit.Button(c.Key("terminate"), kit.ButtonOpts{Variant: kit.Danger, Label: "Terminar", Height: 34, Round: true, FontSize: 12,
 				Tooltip: "Forzar cierre y borrar la sesión", Aria: "Terminar sesión"}).Clicked() {
 				v.kill.Ask(s)
 			}
-			if v.tab == TabTerminal {
+			if v.tab == TabTerminal && !operate {
+				ui.Text(c, "Solo ver").FontSize(12).TextColor(t.Muted)
+			} else if v.tab == TabTerminal {
 				observe := v.term != nil && v.term.observe
 				label := "Control"
 				if observe {
@@ -205,14 +210,17 @@ func (v *View) header(c *ui.Context, t *kit.Tokens, s backend.Session, view *pro
 				}
 			} else if s.Source == backend.SourceAgentd {
 				v.fontMenu(c)
-				kit.IconButton(c.Key("more"), kit.IconMore, "Más acciones").Menu(func(m *ui.Menu) {
-					if m.Item("Interrumpir").Chosen() {
-						v.interrupt(s)
-					}
-					if m.Item("Ver buzón del host").Chosen() {
-						v.a.Navigate("/mailbox/" + s.HostID)
-					}
-				})
+				mail := v.a.Live.Allows(s.HostID, backend.CapMailbox)
+				if operate || mail {
+					kit.IconButton(c.Key("more"), kit.IconMore, "Más acciones").Menu(func(m *ui.Menu) {
+						if operate && m.Item("Interrumpir").Chosen() {
+							v.interrupt(s)
+						}
+						if mail && m.Item("Ver buzón del host").Chosen() {
+							v.a.Navigate("/mailbox/" + s.HostID)
+						}
+					})
+				}
 			}
 		})
 		if s.Source == backend.SourceAgentd {

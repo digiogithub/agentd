@@ -18,7 +18,7 @@ func TestMockupData(t *testing.T) {
 	defer cancel()
 	hs := <-f.WatchHosts(ctx)
 	ss := <-f.WatchSessions(ctx)
-	if len(hs) != 4 || len(ss) != 7 {
+	if len(hs) != 5 || len(ss) != 8 {
 		t.Fatalf("hosts %d sessions %d", len(hs), len(ss))
 	}
 	v := f.View("codex@api")
@@ -212,7 +212,7 @@ func TestTerminateRemovesTheSession(t *testing.T) {
 	if got := f.Terminated(); len(got) != 1 || got[0] != s.Key() {
 		t.Errorf("terminated %v", got)
 	}
-	if ss := <-f.WatchSessions(ctx); len(ss) != 6 {
+	if ss := <-f.WatchSessions(ctx); len(ss) != 7 {
 		t.Errorf("%d sessions after terminate", len(ss))
 	}
 	if err := f.Terminate(ctx, s); proto.CodeOf(err) != proto.CodeNotFound {

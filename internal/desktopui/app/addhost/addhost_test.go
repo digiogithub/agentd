@@ -13,7 +13,7 @@ import (
 
 func TestFormCopy(t *testing.T) {
 	e := apptest.New(t, "/hosts/add", 1400, 1000)
-	e.Has("Añadir host", "Pegar enlace", "agentd serve pair", "Importar", "~/.ssh/config o Tailscale", "O A MANO",
+	e.Has("Añadir host", "Relay (invitación)", "Pega el enlace de agentd relay invite", "Importar", "~/.ssh/config o Tailscale", "O A MANO",
 		"Nombre", "Host", "Puerto", "Usuario", "Autenticación", "Clave generada en este equipo", "Agente SSH",
 		"Clave existente", "Contraseña", "Copiar clave pública", fake.PublicKeyLine,
 		"Al conectar verás la huella del host para confirmarla. Luego la app detecta agentd, zellij, tmux y los CLIs de agentes.",

@@ -62,6 +62,9 @@ func New(a *app.Context) *View { return &View{a: a, Now: time.Now} }
 func (v *View) hosts() []backend.HostStatus {
 	var out []backend.HostStatus
 	for _, h := range v.a.Live.Online() {
+		if !h.Host.Allows(backend.CapMailbox) {
+			continue // a view-only or guest relay device has no mailbox
+		}
 		if h.Capabilities != nil && h.Capabilities.Has("agentd") || h.AgentdVer != "" {
 			out = append(out, h)
 		}

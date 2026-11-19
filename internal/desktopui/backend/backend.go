@@ -29,11 +29,13 @@ const (
 	AuthPassword  AuthKind = "password"  // asked each time, never stored in hosts.json
 )
 
-// Host is a saved machine. ID "local" is this computer (no SSH).
+// Host is a saved machine. ID "local" is this computer (no SSH). A host is
+// reached over SSH (Addr, Port, User, Auth...) or, when Relay is set,
+// through an agentd-relay tunnel (no SSH: agentd ops only).
 type Host struct {
 	ID      string   `json:"id"`
 	Name    string   `json:"name"`
-	Addr    string   `json:"addr"` // hostname or IP; "" for local
+	Addr    string   `json:"addr"` // hostname or IP; "" for local and relay hosts
 	Port    int      `json:"port,omitempty"`
 	User    string   `json:"user,omitempty"`
 	Auth    AuthKind `json:"auth,omitempty"`
@@ -42,12 +44,93 @@ type Host struct {
 	HostKey string `json:"host_key,omitempty"`
 	// SSHAlias is the ~/.ssh/config Host entry it was imported from.
 	SSHAlias string `json:"ssh_alias,omitempty"`
+	// Relay is set for a host paired through an invite link (PairRelay).
+	Relay *RelayTarget `json:"relay,omitempty"`
 }
 
 // Local reports whether h is this computer.
 func (h Host) Local() bool { return h.ID == LocalHostID }
 
+// IsRelay reports whether h is reached through agentd-relay.
+func (h Host) IsRelay() bool { return h.Relay != nil }
+
+// Transport names how h is reached: "local", "ssh" or "relay".
+func (h Host) Transport() Transport {
+	switch {
+	case h.Local():
+		return TransportLocal
+	case h.IsRelay():
+		return TransportRelay
+	}
+	return TransportSSH
+}
+
 const LocalHostID = "local"
+
+// Transport is how the app reaches a host.
+type Transport string
+
+const (
+	TransportLocal Transport = "local"
+	TransportSSH   Transport = "ssh"
+	TransportRelay Transport = "relay"
+)
+
+// Relay device scopes (the host's [relay] permission table): view < operate
+// < admin.
+const (
+	ScopeView    = "view"
+	ScopeOperate = "operate"
+	ScopeAdmin   = "admin"
+)
+
+// RelayTarget is a paired relay host. The device private key is not here:
+// it lives in its own file of the desktop dir (one key per install).
+type RelayTarget struct {
+	URL   string `json:"relay_url"` // relay base URL (https/wss; http/ws on loopback)
+	Route string `json:"route"`
+	// HostKey is the host's pinned X25519 public key (base64url, no padding).
+	HostKey  string   `json:"host_key"`
+	DeviceID string   `json:"device_id"`
+	Scope    string   `json:"scope"`              // view, operate or admin
+	Sessions []string `json:"sessions,omitempty"` // session globs the device may see (empty = all)
+	Kind     string   `json:"kind,omitempty"`     // owner or guest
+}
+
+// Capability is something the UI may offer for a host.
+type Capability int
+
+const (
+	// CapOperate: act (prompt, choose, keys, interrupt), view_ack and
+	// typing into the terminal.
+	CapOperate Capability = iota
+	// CapLaunch: start agentd sessions, kill and Terminar.
+	CapLaunch
+	// CapMailbox: inbox and send as the host's human user.
+	CapMailbox
+	// CapShell: what needs a shell on the host (zellij, tmux, plain
+	// shells, Solo terminal, folder browser, provisioning): SSH and local
+	// hosts only.
+	CapShell
+)
+
+// Allows reports whether the app may offer c on h. SSH and local hosts
+// allow everything; a relay host follows its device scope (the daemon
+// enforces it too: this only hides what it would refuse).
+func (h Host) Allows(c Capability) bool {
+	if h.Relay == nil {
+		return true
+	}
+	switch c {
+	case CapOperate:
+		return h.Relay.Scope == ScopeOperate || h.Relay.Scope == ScopeAdmin
+	case CapLaunch:
+		return h.Relay.Scope == ScopeAdmin
+	case CapMailbox:
+		return h.Relay.Kind != "guest" && (h.Relay.Scope == ScopeOperate || h.Relay.Scope == ScopeAdmin)
+	}
+	return false
+}
 
 // ExecResult is a finished non-interactive command.
 type ExecResult struct {
@@ -138,6 +221,27 @@ const (
 	HostErrKeyUnknown = "host_key_unknown" // HostKeyError
 	HostErrKeyChanged = "host_key_changed" // ErrHostKeyChanged
 	HostErrPassword   = "password_required"
+	// HostErrRelayOffline: the relay has no link from the host (daemon down
+	// or [relay] off). ErrRelayHostOffline.
+	HostErrRelayOffline = "relay_host_offline"
+	// HostErrDeviceRevoked: the host refused this device (revoked, unknown
+	// or expired). ErrDeviceRevoked.
+	HostErrDeviceRevoked = "device_revoked"
+)
+
+// Relay errors (errors.Is).
+var (
+	// ErrRelayHostOffline: the host is not connected to its relay.
+	ErrRelayHostOffline = errors.New("the host is not connected to the relay")
+	// ErrDeviceRevoked: the host refused this device's key.
+	ErrDeviceRevoked = errors.New("the host refused this device (revoked or unknown)")
+	// ErrPairDenied: the host owner refused the pairing.
+	ErrPairDenied = errors.New("the host refused the pairing")
+	// ErrBadInvite: the text is not a valid agentd relay invite link.
+	ErrBadInvite = errors.New("not a valid agentd relay invite link")
+	// ErrNeedsSSH: the operation needs a shell on the host (relay hosts
+	// have none).
+	ErrNeedsSSH = errors.New("this needs SSH access to the host")
 )
 
 // HostStatus is a host plus its live state.
@@ -267,6 +371,13 @@ type Backend interface {
 	ImportSSHConfig(ctx context.Context) ([]Host, error)
 	// Projects lists the agentd aliases of a host (op info), for New session.
 	Projects(ctx context.Context, hostID string) ([]proto.AliasInfo, error)
+	// PairRelay redeems an agentd relay invite link (`agentd relay invite`)
+	// with this install's device key and saves the host. It blocks until
+	// the host owner approves (or denies: ErrPairDenied) or ctx ends. name
+	// is the device name the owner sees ("" = this computer's hostname).
+	// A malformed link is ErrBadInvite. Never log the link: it carries the
+	// one-time code.
+	PairRelay(ctx context.Context, link, name string) (Host, error)
 
 	// Sessions
 	WatchSessions(ctx context.Context) <-chan []Session

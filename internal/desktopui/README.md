@@ -1,7 +1,8 @@
 # agentd-desktop (MyGo)
 
 `cmd/agentd-desktop` is the native desktop client of agentd: the agents of every host (agentd
-sessions, zellij/tmux sessions, plain SSH shells), their Chat (semantic view + act) and Terminal
+sessions, zellij/tmux sessions, plain SSH shells; hosts reached over SSH or, paired with an invite
+link, through agentd-relay), their Chat (semantic view + act) and Terminal
 (attach), hosts and provisioning, the mailbox and work queues, settings. Plan:
 `docs/plans/agentd/desktop_plan.md`; normative rules: "Desktop client" in `AGENTS.md`. Design: the
 validated mockups linked from the plan (phone layout adapted to a window). Reference implementation:
@@ -19,10 +20,10 @@ The daemon and the `agentd` CLI never import anything here:
 
 | Package | Role | Imports MyGo |
 |---|---|---|
-| `backend/` | Contract between the UI and the code that reaches hosts (`Backend`, `Shell`, `PTY`, `Session`, `Host`, provisioning types). Change it only together with every implementation | **no** |
-| `backend/fake/` | In-memory `Backend` with the mockup data (hosts estudio, vps-hetzner, portatil, raspberry; a permission dialog, a question with options, a working session...). Act bumps revisions, the PTY echoes, provisioning streams events; never runs a program | no |
-| `remote/` | `backend.Shell` over SSH (`golang.org/x/crypto/ssh`) and on this computer, `DialUnix` (direct-streamlocal), app key, TOFU host keys, `hosts.json`, `~/.ssh/config` import, connection pool. `remote/sshtest/`: in-process SSH server for tests | no |
-| `core/` | The real `Backend`: hosts + shells, daemon socket probe, session aggregation (agentd `ls` + `subscribe`, zellij/tmux polling, plain shells), views, mailbox, act, attach, run, kill. Every daemon op on a fresh `client.Client` (`client.Dial` locally, `client.NewConn` over a direct-streamlocal channel remotely) | no |
+| `backend/` | Contract between the UI and the code that reaches hosts (`Backend`, `Shell`, `PTY`, `Session`, `Host` with its transport: SSH or `Relay *RelayTarget`, `Host.Allows(Capability)` from the relay device scope, `PairRelay`, provisioning types). Change it only together with every implementation | **no** |
+| `backend/fake/` | In-memory `Backend` with the mockup data (hosts estudio, vps-hetzner, portatil, raspberry, and nube over the relay with an `operate` device; a permission dialog, a question with options, a working session...). Act bumps revisions, the PTY echoes, provisioning streams events, `PairRelay` accepts `fake.InviteLink`; never runs a program | no |
+| `remote/` | `backend.Shell` over SSH (`golang.org/x/crypto/ssh`) and on this computer, `DialUnix` (direct-streamlocal), app key, relay device key (`RelayKey`), TOFU host keys, `hosts.json` (SSH and relay hosts), `~/.ssh/config` import, connection pool. `remote/sshtest/`: in-process SSH server for tests | no |
+| `core/` | The real `Backend`: hosts + shells, daemon socket probe, session aggregation (agentd `ls` + `subscribe`, zellij/tmux polling, plain shells), views, mailbox, act, attach, run, kill. Every daemon op on a fresh `client.Client` (`client.Dial` locally, `client.NewConn` over a direct-streamlocal channel for SSH hosts, over a stream of the host's relay tunnel for relay hosts: `relay.go`, `internal/relayclient`) | no |
 | `dirlist/` | Folder browser, host side: the sh script that lists the directories under a path (run through `Shell.Exec`) and the parser of its NUL-separated output; tested under a real `sh` | **no** |
 | `mux/` | zellij and tmux adapters over a `Shell` (port of agentd-app `lib/src/mux`). `mux/muxtest/`: fake Shell | no |
 | `provision/` | Detect script, install plan and steps (agentd `install.sh` + `SHA256SUMS`, systemd user unit, `[herdr] listen`, MCP snippets, agent CLIs); port of agentd-app `lib/src/provision` | no |
@@ -33,6 +34,24 @@ The daemon and the `agentd` CLI never import anything here:
 | `app/` | `Context`, area registry, router, layout (sidebar + content), `Live` hosts/sessions, `Views` cache, notifier, prefs (`settings.json`). `app/apptest/`: headless harness on the fake backend | yes |
 | `app/<area>/` | `agents`, `session` (Chat + Terminal), `newsession`, `hosts`, `addhost`, `provision`, `mailbox`, `settings` | yes |
 | `desktopui.go` | `Run(Options)`: context, natives, root view, shell; blank-imports the areas; dev aids | yes |
+
+## Relay hosts
+
+Añadir host > Relay (invitación): paste the link printed by `agentd relay invite` on the host
+(`agentd://relay?v=1&…`), optionally name this device (default: the hostname), and wait while the host
+owner approves it (`Backend.PairRelay` blocks; Cancelar abandons it). The host is then saved in
+`hosts.json` with its relay URL, route, pinned host key (X25519), device id, scope, session globs and
+kind; the device key is `relay_key` (one per install, shared by every relay host). `core` keeps one
+tunnel per relay host and opens a fresh stream per daemon op; the host's welcome refreshes the stored
+scope (a downgrade on the host shows at once). Errors: `ErrRelayHostOffline` (host not linked to its
+relay) and `ErrDeviceRevoked` (revoked, unknown or expired device) are host errors
+(`relay_host_offline`, `device_revoked`).
+
+No shell over the relay: no zellij/tmux/plain shells, no Solo terminal, no folder browser, no Preparar
+host (`ErrNeedsSSH`). Areas hide what the device scope would make the daemon refuse
+(`Live.Allows(host, cap)`): `view` = read only (no composer, no answers, no Interrumpir, the terminal
+only observes, no mailbox), `operate` = no Nueva sesión, Terminar or kill, `admin` = everything a relay
+allows; guests have no mailbox. The link carries a one-time code: never log it (nor the key).
 
 Only `kit`, `shell`, `app`, `app/<area>` and the root import MyGo. Areas talk to hosts only through
 `backend.Backend` (never `remote`, `core` or `mux` directly); `cmd/agentd-desktop` picks the backend.
@@ -92,6 +111,7 @@ provision `/hosts/provision/{host}`, newsession `/new` (+ `/new/{host}`), mailbo
 | `hosts.json` | Saved hosts (0600, atomic writes) |
 | `known_hosts` | Host keys accepted on first use (`~/.ssh/known_hosts` is read too, never written) |
 | `id_ed25519`, `id_ed25519.pub` | The app's own SSH key (0600), generated on first use |
+| `relay_key` | The relay device key (X25519 private half, base64url, 0600), generated on the first pairing; one per install |
 | `settings.json` | UI preferences: notifications, muted sessions, theme (0600; `app.DefaultPrefsPath`) |
 
 ## Tests

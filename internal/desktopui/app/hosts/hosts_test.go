@@ -18,7 +18,7 @@ import (
 
 func TestHostCards(t *testing.T) {
 	e := apptest.New(t, "/hosts", 1400, 900)
-	e.Has("Hosts", "3 en línea · 1 sin agentd", "estudio", "jose@estudio.local · SSH", "4 sesiones", "agentd 0.6.2",
+	e.Has("Hosts", "4 en línea · 1 sin agentd", "estudio", "jose@estudio.local · SSH", "4 sesiones", "agentd 0.6.2",
 		"zellij", "tmux", "claude · codex · pando", "vps-hetzner", "agentd 0.6.1", "Actualización 0.6.2",
 		"portatil", "jose@192.168.1.40 · SSH", "1 zellij", "zellij · main",
 		"Sin agentd solo hay terminal. Instálalo por SSH para tener chat, aprobaciones y buzón entre agentes.",

@@ -21,11 +21,11 @@ func stateMode(e *apptest.Env) {
 func TestInboxGroupsAndCopy(t *testing.T) {
 	e := apptest.New(t, "/agents", 1400, 900)
 	stateMode(e)
-	e.Has("Agentes", "3 hosts · 7 sesiones", "NECESITAN RESPUESTA · 2", "TRABAJANDO · 2", "LISTOS · 3",
+	e.Has("Agentes", "4 hosts · 8 sesiones", "NECESITAN RESPUESTA · 2", "TRABAJANDO · 2", "LISTOS · 4",
 		"claude@webapp", "Permiso", "Bash · go test ./internal/... -race", "Permitir", "Denegar",
 		"codex@api", "Pregunta", "3 opciones · haz clic para responder", "pando@agentd", "zellij · main",
 		"portatil · SSH · 3 panes · claude en pane 2", "activo", "claude@docs", "Elige una sesión",
-		"Todos · 7", "Esperan · 2", "Trabajando · 2", "Listos · 3")
+		"Todos · 8", "Esperan · 2", "Trabajando · 2", "Listos · 4")
 }
 
 func TestApprovalSendsChooseWithRevision(t *testing.T) {
@@ -64,7 +64,7 @@ func TestFilterChips(t *testing.T) {
 	if e.UI.HasText("claude@docs") || e.UI.HasText("claude@webapp") {
 		t.Errorf("filter Trabajando shows other groups: %q", e.UI.Texts())
 	}
-	e.Click("Listos · 3")
+	e.Click("Listos · 4")
 	e.Has("claude@docs", "codex@webapp", "claude@infra")
 	if e.UI.HasText("pando@agentd") {
 		t.Errorf("filter Listos shows working sessions")
@@ -146,7 +146,7 @@ func TestGroupToggleIsPersisted(t *testing.T) {
 		t.Fatalf("default group %q", g)
 	}
 	stateMode(e)
-	e.Has("NECESITAN RESPUESTA · 2", "TRABAJANDO · 2", "LISTOS · 3")
+	e.Has("NECESITAN RESPUESTA · 2", "TRABAJANDO · 2", "LISTOS · 4")
 	if g := e.A.Prefs.Get().AgentsGroup; g != app.GroupState {
 		t.Errorf("group %q after Estado", g)
 	}

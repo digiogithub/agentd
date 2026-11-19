@@ -60,6 +60,15 @@ func (l *Live) Host(id string) (backend.HostStatus, bool) {
 	return backend.HostStatus{}, false
 }
 
+// Allows reports whether the app may offer c on host id (backend.Host.Allows;
+// an unknown host allows everything: the backend still refuses).
+func (l *Live) Allows(id string, c backend.Capability) bool {
+	if h, ok := l.Host(id); ok {
+		return h.Host.Allows(c)
+	}
+	return true
+}
+
 // HostName returns the display name of a host ("" when unknown).
 func (l *Live) HostName(id string) string {
 	if h, ok := l.Host(id); ok {

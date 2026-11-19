@@ -199,7 +199,7 @@ func (v *View) chatTab(c *ui.Context, t *kit.Tokens, s backend.Session, view *pr
 				v.item(c.Key(i), t, i, it)
 			}
 			if pending {
-				v.pendingCard(c.Key("pending:"+v.pendingIdentity(view)), t, s, view)
+				v.pendingCard(c.Key("pending:"+v.pendingIdentity(view)), t, s, view, v.a.Live.Allows(s.HostID, backend.CapOperate))
 			}
 		})
 	})
@@ -210,6 +210,13 @@ func (v *View) chatTab(c *ui.Context, t *kit.Tokens, s backend.Session, view *pr
 				v.jump = true
 			}
 		})
+	}
+	if !v.a.Live.Allows(s.HostID, backend.CapOperate) {
+		ui.Row(c).Shrink(0).Padding(12, 20, 14, 20).Gap(8).BorderWidth(1, 0, 0, 0).BorderColor(t.Divider).Justify(ui.Center).Children(func() {
+			kit.Icon(c, kit.IconLock).FontSize(14).TextColor(t.Muted)
+			ui.Text(c, "Solo ver: este dispositivo no puede escribir ni responder en este host.").FontSize(12.5).TextColor(t.Muted)
+		})
+		return
 	}
 	v.composer(c, t, s, view)
 }
@@ -280,7 +287,9 @@ func (v *View) pendingIdentity(view *proto.View) string {
 	return b.String()
 }
 
-func (v *View) pendingCard(c *ui.Context, t *kit.Tokens, s backend.Session, view *proto.View) {
+// pendingCard shows the pending question; canAnswer false (a view-only
+// relay device) shows it read only.
+func (v *View) pendingCard(c *ui.Context, t *kit.Tokens, s backend.Session, view *proto.View, canAnswer bool) {
 	if id := v.pendingIdentity(view); id != v.pendingKey {
 		v.pendingKey, v.selected = id, ""
 		for _, o := range view.Options {
@@ -314,7 +323,7 @@ func (v *View) pendingCard(c *ui.Context, t *kit.Tokens, s backend.Session, view
 			}
 			on := o.ID == v.selected
 			b := ui.ButtonBase(cc).Label(o.Label).MinHeight(48).Padding(10, 12).Gap(10).Radius(12).AlignItems(ui.Center).
-				Cursor(ui.CursorPointer).Selected(on).Disabled(v.answering).TextColor(t.Text)
+				Cursor(ui.CursorPointer).Selected(on).Disabled(v.answering || !canAnswer).TextColor(t.Text)
 			if on {
 				b.Border(1, t.Waiting).Background(t.WaitingBg)
 			} else {
@@ -326,9 +335,12 @@ func (v *View) pendingCard(c *ui.Context, t *kit.Tokens, s backend.Session, view
 				})
 				ui.Text(cc, o.Label).FontSize(14).LineHeight(1.35).Grow(1).Shrink(1)
 			})
-			if b.Clicked() && !v.answering {
+			if b.Clicked() && !v.answering && canAnswer {
 				v.selected = o.ID
 			}
+		}
+		if !canAnswer {
+			return
 		}
 		ui.Row(c).Gap(8).Children(func() {
 			var sel *proto.ViewOption

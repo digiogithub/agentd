@@ -44,8 +44,12 @@ func clampU16(n int) uint16 {
 }
 
 func (b *Backend) attachAgentd(ctx context.Context, s backend.Session, cols, rows int, observe bool) (backend.PTY, error) {
-	if _, err := b.hosts.Get(s.HostID); err != nil {
+	h, err := b.hosts.Get(s.HostID)
+	if err != nil {
 		return nil, err
+	}
+	if !h.Allows(backend.CapOperate) {
+		observe = true // a view-only relay device watches (the daemon forces it too)
 	}
 	b.activate(s.HostID)
 	c, err := b.dialAgentd(ctx, s.HostID)

@@ -77,6 +77,13 @@ func (b *Backend) dialAgentd(ctx context.Context, id string) (*client.Client, er
 		c.Auth = nil
 		return c, nil
 	}
+	if h, relay := b.relayHost(id); relay {
+		conn, err := b.dialRelay(ctx, h)
+		if err != nil {
+			return nil, err
+		}
+		return client.NewConn(conn, nil), nil
+	}
 	sh, err := b.shell(ctx, id)
 	if err != nil {
 		return nil, err
@@ -168,8 +175,12 @@ func (b *Backend) Inbox(ctx context.Context, hostID string) ([]proto.Message, er
 	return msgs, err
 }
 
-// Queues lists the work queues with unclaimed items.
+// Queues lists the work queues with unclaimed items. Relay devices never
+// see queues (the daemon refuses op queue over the relay): empty.
 func (b *Backend) Queues(ctx context.Context, hostID string) ([]proto.QueueCount, error) {
+	if _, relay := b.relayHost(hostID); relay {
+		return []proto.QueueCount{}, nil
+	}
 	var qs []proto.QueueCount
 	err := b.withClient(ctx, hostID, func(c *client.Client) error {
 		r, err := c.Queue(proto.QueueArgs{})
@@ -252,6 +263,9 @@ func (b *Backend) Launch(ctx context.Context, spec backend.LaunchSpec) (backend.
 	if _, err := b.hosts.Get(spec.HostID); err != nil {
 		return backend.Session{}, err
 	}
+	if h, relay := b.relayHost(spec.HostID); relay {
+		return b.launchRelay(ctx, h, spec)
+	}
 	switch spec.Where {
 	case backend.SourceAgentd, "":
 	case backend.SourceShell:
@@ -294,6 +308,12 @@ func (b *Backend) Launch(ctx context.Context, spec backend.LaunchSpec) (backend.
 	if err != nil {
 		return backend.Session{}, err
 	}
+	return b.launched(spec, info), nil
+}
+
+// launched records a new agentd session and types its first prompt in the
+// background.
+func (b *Backend) launched(spec backend.LaunchSpec, info proto.SessionInfo) backend.Session {
 	b.activate(spec.HostID).upsert(info)
 	if p := strings.TrimSpace(spec.FirstPrompt); p != "" {
 		b.wg.Add(1)
@@ -304,7 +324,33 @@ func (b *Backend) Launch(ctx context.Context, spec backend.LaunchSpec) (backend.
 			}
 		}()
 	}
-	return agentdSession(spec.HostID, info), nil
+	return agentdSession(spec.HostID, info)
+}
+
+// launchRelay starts an agentd session on a relay host: only a harness from
+// a profile in an alias or absolute directory (the daemon refuses cmd, env
+// and env_base from devices, and there is no shell for anything else).
+func (b *Backend) launchRelay(ctx context.Context, h backend.Host, spec backend.LaunchSpec) (backend.Session, error) {
+	if spec.Where != backend.SourceAgentd && spec.Where != "" || spec.TerminalOnly {
+		return backend.Session{}, fmt.Errorf("%w: relay hosts only start agentd agent sessions", backend.ErrNeedsSSH)
+	}
+	if !h.Allows(backend.CapLaunch) {
+		return backend.Session{}, proto.Errorf(proto.CodeForbidden, "this device may not start sessions on %s (scope %s)", h.Name, h.Relay.Scope)
+	}
+	if strings.TrimSpace(spec.Project) == "" {
+		return backend.Session{}, errors.New("core: choose a project (alias or absolute directory)")
+	}
+	args := proto.RunArgs{Target: spec.Project, Harness: spec.Harness}
+	var info proto.SessionInfo
+	err := b.withClient(ctx, spec.HostID, func(c *client.Client) error {
+		var err error
+		info, err = c.Run(args)
+		return err
+	})
+	if err != nil {
+		return backend.Session{}, err
+	}
+	return b.launched(spec, info), nil
 }
 
 // firstPrompt waits for the session to accept a prompt and types it.

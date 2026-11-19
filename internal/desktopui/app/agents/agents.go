@@ -348,7 +348,7 @@ func (v *View) projects(c *ui.Context, t *kit.Tokens, visible []entry, show func
 					}
 					ui.Text(gc, sub).FontSize(12).TextColor(t.Muted).SingleLine().Ellipsis("…")
 				})
-				if kit.IconButton(gc.Key("add"), kit.IconPlus, "Nueva sesión en "+g.label).Clicked() {
+				if a.Live.Allows(g.host, backend.CapLaunch) && kit.IconButton(gc.Key("add"), kit.IconPlus, "Nueva sesión en "+g.label).Clicked() {
 					p := "/new/" + url.PathEscape(g.host)
 					if g.newArg != "" {
 						p += "?project=" + url.QueryEscape(g.newArg)
@@ -379,8 +379,12 @@ func (v *View) subtitle(s backend.Session) string {
 
 func (v *View) open(s backend.Session) { v.a.Navigate(app.SessionPath(s)) }
 
-// killButton is the row action Terminar.
+// killButton is the row action Terminar (hidden when the host's relay
+// device may not kill).
 func (v *View) killButton(c *ui.Context, s backend.Session) {
+	if !v.a.Live.Allows(s.HostID, backend.CapLaunch) {
+		return
+	}
 	if kit.Button(c.Key("kill"), kit.ButtonOpts{Variant: kit.Ghost, Icon: kit.IconTrash, Height: 32, Round: true,
 		Tooltip: "Terminar sesión", Aria: "Terminar " + s.Name}).Clicked() {
 		v.kill.Ask(s)
@@ -407,7 +411,7 @@ func (v *View) card(c *ui.Context, t *kit.Tokens, e entry, selected bool) {
 	if selected {
 		border = t.Accent
 	}
-	if e.g == app.GroupNeedsAnswer && app.IsPermission(view) {
+	if e.g == app.GroupNeedsAnswer && app.IsPermission(view) && v.a.Live.Allows(s.HostID, backend.CapOperate) {
 		if border == t.Border {
 			border = t.WaitingBorder
 		}
@@ -458,9 +462,13 @@ func (v *View) card(c *ui.Context, t *kit.Tokens, e entry, selected bool) {
 					q = "Esperando una respuesta"
 				}
 				ui.Text(c, q).FontSize(14).TextColor(t.Secondary).LineHeight(1.45)
-				hint := "Haz clic para responder"
+				action := "haz clic para responder"
+				if !v.a.Live.Allows(s.HostID, backend.CapOperate) {
+					action = "solo lectura en este dispositivo"
+				}
+				hint := strings.ToUpper(action[:1]) + action[1:]
 				if n > 0 {
-					hint = app.Plural(n, "opción", "opciones") + " · haz clic para responder"
+					hint = app.Plural(n, "opción", "opciones") + " · " + action
 				}
 				ui.Text(c, hint).FontSize(12).TextColor(t.Muted)
 			})

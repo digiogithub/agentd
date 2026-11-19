@@ -44,6 +44,12 @@ func isolate(t *testing.T) string {
 // dir (sessions run sh/cat only) and returns its socket.
 func startDaemon(t *testing.T) string {
 	t.Helper()
+	return startDaemonCfg(t, config.Default())
+}
+
+// startDaemonCfg is startDaemon with a config.
+func startDaemonCfg(t *testing.T, cfg *config.Config) string {
+	t.Helper()
 	dir, err := os.MkdirTemp("", "agentd-c")
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +68,7 @@ func startDaemon(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := daemon.New(config.Default(), nil, store, nil)
+	srv := daemon.New(cfg, nil, store, nil)
 	if err := srv.Listen(); err != nil {
 		t.Fatal(err)
 	}

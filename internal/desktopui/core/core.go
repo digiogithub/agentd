@@ -7,7 +7,9 @@
 //
 // Every daemon op uses a fresh connection: client.Dial for the local host,
 // a direct-streamlocal channel (Shell.DialUnix) wrapped with client.NewConn
-// for SSH hosts, where the daemon sees the SSH user's human identity.
+// for SSH hosts, where the daemon sees the SSH user's human identity, and a
+// stream of the host's agentd-relay tunnel for relay hosts (relay.go), where
+// it sees this install's paired device and enforces its scope.
 package core
 
 import (
@@ -19,6 +21,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/flynn/noise"
 
 	"github.com/digiogithub/agentd/internal/config"
 	"github.com/digiogithub/agentd/internal/desktopui/backend"
@@ -123,6 +127,10 @@ type Backend struct {
 	// passwords are one-time passwords of ConnectWithPassword, only
 	// while its dial runs (never stored or logged).
 	passwords map[string]string
+	// relays are the tunnels of relay hosts; devKey is the relay device
+	// key once loaded (never logged).
+	relays map[string]*relayLink
+	devKey *noise.DHKey
 
 	hostsB *bcast[[]backend.HostStatus]
 	sessB  *bcast[[]backend.Session]
@@ -184,6 +192,7 @@ func New(opts Options) *Backend {
 		adapters:  map[string]*adapterSet{},
 		shells:    map[string]map[string]*shellSession{},
 		passwords: map[string]string{},
+		relays:    map[string]*relayLink{},
 		hostsB:    newBcast[[]backend.HostStatus](),
 		sessB:     newBcast[[]backend.Session](),
 	}
@@ -215,6 +224,13 @@ func (b *Backend) Close() error {
 	b.mu.Unlock()
 	for _, s := range shells {
 		_ = s.pty.Close()
+	}
+	b.mu.Lock()
+	links := b.relays
+	b.relays = map[string]*relayLink{}
+	b.mu.Unlock()
+	for _, l := range links {
+		l.close()
 	}
 	b.wg.Wait()
 	b.pool.Close()
@@ -263,9 +279,13 @@ func (b *Backend) password(h backend.Host) (string, error) {
 }
 
 // shell returns the Shell of a host: the local shell, or the pooled SSH one.
+// Relay hosts have none (backend.ErrNeedsSSH).
 func (b *Backend) shell(ctx context.Context, id string) (backend.Shell, error) {
 	if id == backend.LocalHostID {
 		return b.local, nil
+	}
+	if _, relay := b.relayHost(id); relay {
+		return nil, backend.ErrNeedsSSH
 	}
 	if !b.pool.Connected(id) {
 		go b.publishHosts() // shows "connecting"
@@ -331,6 +351,13 @@ func (b *Backend) hostStatuses() []backend.HostStatus {
 	for _, h := range hosts {
 		st := backend.HostStatus{Host: h, State: backend.HostOffline}
 		switch {
+		case h.IsRelay():
+			state, err := b.relayState(h.ID)
+			st.State = state
+			if err != nil {
+				st.Err = err.Error()
+				st.ErrCode = hostErrCode(err)
+			}
 		case h.Local():
 			st.State = backend.HostOnline
 		case b.pool.Connected(h.ID):
@@ -378,6 +405,9 @@ func (b *Backend) SaveHost(ctx context.Context, h backend.Host) error {
 	}
 	b.pool.Forget(saved.ID)
 	b.forgetSocket(saved.ID)
+	if !saved.IsRelay() {
+		b.dropRelay(saved.ID)
+	}
 	b.mu.Lock()
 	_, active := b.mons[saved.ID]
 	b.mu.Unlock()
@@ -411,6 +441,7 @@ func (b *Backend) RemoveHost(ctx context.Context, id string) error {
 	for _, s := range shells {
 		_ = s.pty.Close()
 	}
+	b.dropRelay(id)
 	b.pool.Forget(id)
 	b.publishHosts()
 	b.publishSessions()
@@ -421,8 +452,12 @@ func (b *Backend) RemoveHost(ctx context.Context, id string) error {
 // watching it. The error is the connection's (an SSH host) or nil; a host
 // without agentd still connects.
 func (b *Backend) Connect(ctx context.Context, id string) error {
-	if _, err := b.hosts.Get(id); err != nil {
+	h, err := b.hosts.Get(id)
+	if err != nil {
 		return err
+	}
+	if h.IsRelay() {
+		return b.connectRelay(ctx, h)
 	}
 	b.pool.Reset(id)
 	b.activate(id)
@@ -445,6 +480,10 @@ func hostErrCode(err error) string {
 		return backend.HostErrKeyUnknown
 	case errors.Is(err, backend.ErrPasswordRequired):
 		return backend.HostErrPassword
+	case errors.Is(err, backend.ErrRelayHostOffline):
+		return backend.HostErrRelayOffline
+	case errors.Is(err, backend.ErrDeviceRevoked):
+		return backend.HostErrDeviceRevoked
 	}
 	return ""
 }
@@ -459,6 +498,9 @@ func (b *Backend) TrustHostKey(ctx context.Context, id, fingerprint string) erro
 	}
 	if h.Local() {
 		return errors.New("core: this computer has no host key")
+	}
+	if h.IsRelay() {
+		return backend.ErrNeedsSSH
 	}
 	if !strings.HasPrefix(fingerprint, "SHA256:") || len(fingerprint) <= len("SHA256:") || strings.ContainsAny(fingerprint, " \t\r\n") {
 		return fmt.Errorf("core: not a SHA256 host key fingerprint: %q", fingerprint)
@@ -491,6 +533,9 @@ func (b *Backend) ConnectWithPassword(ctx context.Context, id, password string, 
 	}
 	if h.Local() {
 		return errors.New("core: this computer needs no password")
+	}
+	if h.IsRelay() {
+		return backend.ErrNeedsSSH
 	}
 	if password == "" {
 		return backend.ErrPasswordRequired
@@ -547,6 +592,9 @@ func (b *Backend) ImportSSHConfig(ctx context.Context) ([]backend.Host, error) {
 
 // Detect runs the provisioner's detection and caches the result.
 func (b *Backend) Detect(ctx context.Context, hostID string) (*backend.Capabilities, error) {
+	if _, relay := b.relayHost(hostID); relay {
+		return nil, backend.ErrNeedsSSH
+	}
 	if b.opts.Provisioner == nil {
 		return nil, fmt.Errorf("%w: no provisioner", ErrUnsupported)
 	}
@@ -583,6 +631,9 @@ func (b *Backend) Plan(caps *backend.Capabilities, opts backend.ProvisionOptions
 // cached). When it ends, cached capabilities and the daemon socket are
 // dropped and the host's monitor reconnects.
 func (b *Backend) Install(ctx context.Context, hostID string, opts backend.ProvisionOptions) (<-chan backend.ProvisionEvent, error) {
+	if _, relay := b.relayHost(hostID); relay {
+		return nil, backend.ErrNeedsSSH
+	}
 	if b.opts.Provisioner == nil {
 		return nil, fmt.Errorf("%w: no provisioner", ErrUnsupported)
 	}

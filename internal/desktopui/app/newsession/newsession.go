@@ -5,6 +5,9 @@
 // "Explorar…", or prefilled by ?project=), agent grid (missing CLIs offer
 // "Instalar…", which opens Preparar host; hidden for Solo terminal) and an
 // optional first message; Lanzar calls backend.Launch and opens the session.
+// A relay host only starts agentd agent sessions, and only with an admin
+// device: no zellij/tmux/SSH, no Solo terminal, no folder browser (they need
+// a shell on the host); its agents are not detected, the daemon checks them.
 package newsession
 
 import (
@@ -137,7 +140,12 @@ func (v *View) host() (backend.HostStatus, bool) {
 			return h, true
 		}
 	}
-	online := v.a.Live.Online()
+	var online []backend.HostStatus
+	for _, h := range v.a.Live.Online() {
+		if h.Host.Allows(backend.CapLaunch) {
+			online = append(online, h)
+		}
+	}
 	for _, h := range online {
 		if h.Capabilities != nil && h.Capabilities.Has("agentd") {
 			return h, true
@@ -153,8 +161,11 @@ func (v *View) host() (backend.HostStatus, bool) {
 }
 
 func available(h backend.HostStatus, target int) bool {
-	if h.State != backend.HostOnline {
+	if h.State != backend.HostOnline || !h.Host.Allows(backend.CapLaunch) {
 		return false
+	}
+	if h.Host.IsRelay() {
+		return target == TargetAgentd
 	}
 	caps := h.Capabilities
 	if caps == nil {
@@ -262,7 +273,12 @@ func (v *View) Build(c *ui.Context, r *ui.Route) {
 	if hasHost {
 		caps = h.Capabilities
 	}
-	installed := v.terminal() || caps != nil && caps.Has(v.agent)
+	relay := hasHost && h.Host.IsRelay()
+	canLaunch := hasHost && h.Host.Allows(backend.CapLaunch)
+	if relay && v.terminal() {
+		v.openKind = OpenAgent // the daemon refuses a shell command from a relay device
+	}
+	installed := v.terminal() || relay || caps != nil && caps.Has(v.agent)
 
 	ui.Column(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 		if kit.RouteHeader(c, "Nueva sesión", "", nil) {
@@ -276,7 +292,9 @@ func (v *View) Build(c *ui.Context, r *ui.Route) {
 			ui.Column(c).Gap(10).MaxWidth(720).FillWidth().Children(func() {
 				kit.SectionLabel(c, "Abrir", t.Muted)
 				open := v.openKind
-				if kit.Segmented(c.Key("open"), &open, []string{"Agente", "Solo terminal"}, nil) {
+				if kit.Segmented(c.Key("open"), &open, []string{"Agente", "Solo terminal"}, func(i int) bool {
+					return i == OpenAgent || !relay
+				}) {
 					v.openKind = open
 				}
 				kit.SectionLabel(c, "Host", t.Muted).Margin(8, 0, 0, 0)
@@ -289,7 +307,12 @@ func (v *View) Build(c *ui.Context, r *ui.Route) {
 					v.target = sel
 				}
 				hint := targetHints[v.target]
-				if v.terminal() {
+				switch {
+				case hasHost && !canLaunch:
+					hint = "Este dispositivo no puede lanzar sesiones en " + h.Host.Name + " (permiso " + app.ScopeLabel(h.Host.Relay.Scope) + ")."
+				case relay:
+					hint = "Por relay: solo sesiones agentd con un agente de los perfiles del host (sin terminal ni carpetas)."
+				case v.terminal():
 					hint = terminalHints[v.target]
 				}
 				ui.Text(c, hint).FontSize(12).TextColor(t.Muted).LineHeight(1.4)
@@ -300,7 +323,7 @@ func (v *View) Build(c *ui.Context, r *ui.Route) {
 							v.project = p
 						}
 					}
-					if v.a.Backend != nil && hasHost {
+					if v.a.Backend != nil && hasHost && !relay {
 						eb := ui.ButtonBase(c.Key("explore")).Label("Explorar carpetas").Height(36).Padding(0, 12).Radius(10).Gap(6).
 							Border(1, t.Border).AlignItems(ui.Center).Cursor(ui.CursorPointer).TextColor(t.Muted)
 						eb.Children(func() {
@@ -347,8 +370,8 @@ func (v *View) Build(c *ui.Context, r *ui.Route) {
 					label = "Lanzando…"
 				}
 				if kit.Button(c.Key("launch"), kit.ButtonOpts{Variant: kit.Primary, Label: label, Height: 52, FontSize: 15,
-					Disabled: !hasHost || v.project == "" || !installed || v.launching}).Clicked() &&
-					hasHost && v.project != "" && installed && !v.launching {
+					Disabled: !canLaunch || v.project == "" || !installed || v.launching}).Clicked() &&
+					canLaunch && v.project != "" && installed && !v.launching {
 					v.launch(h)
 				}
 			})
@@ -412,7 +435,7 @@ func (v *View) hostPicker(c *ui.Context, t *kit.Tokens, h backend.HostStatus, ha
 	b.Menu(func(m *ui.Menu) {
 		for _, hs := range v.a.Live.Hosts {
 			label := hs.Host.Name + " — " + app.HostSubtitle(hs)
-			if m.Item(label).Disabled(hs.State != backend.HostOnline).Checked(has && hs.Host.ID == h.Host.ID).Chosen() {
+			if m.Item(label).Disabled(hs.State != backend.HostOnline || !hs.Host.Allows(backend.CapLaunch)).Checked(has && hs.Host.ID == h.Host.ID).Chosen() {
 				v.hostID = hs.Host.ID
 			}
 		}
@@ -422,7 +445,11 @@ func (v *View) hostPicker(c *ui.Context, t *kit.Tokens, h backend.HostStatus, ha
 func (v *View) agentTile(c *ui.Context, t *kit.Tokens, ag Agent, caps *backend.Capabilities, h backend.HostStatus, has bool) {
 	missing := caps == nil || !caps.Has(ag.ID)
 	sub := "Instalar…"
-	if !missing {
+	switch {
+	case h.Host.IsRelay():
+		// No detection over the relay: the host's daemon checks the profile.
+		missing, sub = false, "en el host"
+	case !missing:
 		sub = "instalado"
 		if ver := caps.Tools[ag.ID].Version; ver != "" {
 			sub += " · " + ver

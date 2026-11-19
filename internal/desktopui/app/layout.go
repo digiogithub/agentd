@@ -196,14 +196,18 @@ func (r *Root) navItem(c *ui.Context, t *kit.Tokens, ar Area, active bool, badge
 	}
 }
 
-// HostSubtitle is "agentd 0.6.2 · SSH", "SSH · sin agentd" or "Sin conexión".
+// HostSubtitle is "agentd 0.6.2 · SSH", "SSH · sin agentd", "agentd 0.7.0 ·
+// relay · operar" or "Sin conexión".
 func HostSubtitle(h backend.HostStatus) string {
 	if h.State != backend.HostOnline {
 		return "Sin conexión"
 	}
 	via := "SSH"
-	if h.Host.Local() {
+	switch {
+	case h.Host.Local():
 		via = "este equipo"
+	case h.Host.IsRelay():
+		return strings.TrimSpace("agentd "+h.AgentdVer) + " · relay · " + ScopeLabel(h.Host.Relay.Scope)
 	}
 	if h.Capabilities != nil && h.Capabilities.Has("agentd") {
 		return strings.TrimSpace("agentd "+h.Capabilities.Tools["agentd"].Version) + " · " + via

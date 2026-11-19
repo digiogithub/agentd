@@ -24,6 +24,9 @@ const (
 	HostsFile      = "hosts.json"
 	KnownHostsFile = "known_hosts"
 	KeyFile        = "id_ed25519"
+	// RelayKeyFile is the relay device key (X25519 private half, base64url):
+	// one per desktop install, shared by every relay host.
+	RelayKeyFile = "relay_key"
 )
 
 // Dir returns the desktop state directory (not created).

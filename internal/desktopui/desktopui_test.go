@@ -50,7 +50,7 @@ func TestSidebarNavigation(t *testing.T) {
 	if a.Router.Path() != "/new" {
 		t.Errorf("Ctrl+N went to %q", a.Router.Path())
 	}
-	if !tt.HasText("3 de 4 hosts en línea") {
+	if !tt.HasText("4 de 5 hosts en línea") {
 		t.Errorf("hosts summary missing")
 	}
 }

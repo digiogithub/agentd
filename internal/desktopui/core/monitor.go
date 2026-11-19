@@ -451,6 +451,9 @@ func (b *Backend) muxAdapters(ctx context.Context, id string) ([]MuxAdapter, err
 	if b.opts.Mux == nil {
 		return nil, nil
 	}
+	if _, relay := b.relayHost(id); relay {
+		return nil, nil // no shell: no zellij/tmux
+	}
 	sh, err := b.shell(ctx, id)
 	if err != nil {
 		return nil, err

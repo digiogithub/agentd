@@ -141,8 +141,12 @@ func (v *View) openTerminal(s backend.Session) {
 }
 
 func (v *View) terminalTab(c *ui.Context, t *kit.Tokens, s backend.Session, view *proto.View) {
+	operate := v.a.Live.Allows(s.HostID, backend.CapOperate)
 	if v.term == nil {
-		v.term = &termState{}
+		v.term = &termState{observe: !operate}
+	}
+	if !operate && !v.term.observe {
+		v.setObserve(true) // a view-only relay device never types
 	}
 	ts := v.term
 	v.openTerminal(s)
@@ -215,7 +219,10 @@ func (v *View) terminalTab(c *ui.Context, t *kit.Tokens, s backend.Session, view
 			}
 		})
 		hint := "Control: tus teclas llegan al agente y el PTY se ajusta a esta ventana."
-		if !control {
+		switch {
+		case !operate:
+			hint = "Solo ver: este dispositivo tiene permiso de lectura en el host."
+		case !control:
 			hint = "Observar: solo lectura, nadie ve tus pulsaciones."
 		}
 		ui.Text(c, hint).FontSize(11.5).TextColor(t.Muted)

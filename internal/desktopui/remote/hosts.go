@@ -129,7 +129,14 @@ func (s *HostStore) Save(h backend.Host) (backend.Host, error) {
 	if h.ID == backend.LocalHostID {
 		return h, ErrLocalHost
 	}
-	if h.Addr == "" {
+	if h.Relay != nil {
+		if h.Relay.URL == "" || h.Relay.Route == "" || h.Relay.HostKey == "" {
+			return h, errors.New("remote: relay host needs relay url, route and host key")
+		}
+		if h.Name == "" {
+			h.Name = h.Relay.Route
+		}
+	} else if h.Addr == "" {
 		return h, errors.New("remote: host address is required")
 	}
 	if h.Name == "" {

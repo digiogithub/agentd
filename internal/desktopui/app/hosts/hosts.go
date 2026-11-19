@@ -2,12 +2,15 @@
 // connection state, sessions and detected capabilities, Reintentar for
 // offline ones, "Instalar agentd en <host>" for those without agentd, an
 // update chip when another host runs a newer agentd, and Quitar (context
-// menu) with confirmation.
+// menu) with confirmation. Each card says how the host is reached (SSH, or
+// relay with the device's scope); relay hosts have no shell, so they never
+// offer Preparar host or installs.
 package hosts
 
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -124,6 +127,13 @@ func address(h backend.Host) string {
 	if h.Local() {
 		return "Este equipo"
 	}
+	if h.Relay != nil {
+		relay := h.Relay.URL
+		if u, err := url.Parse(relay); err == nil && u.Host != "" {
+			relay = u.Host
+		}
+		return relay + " · Relay"
+	}
 	addr := h.Addr
 	if h.User != "" {
 		addr = h.User + "@" + addr
@@ -188,7 +198,7 @@ func (v *View) card(c *ui.Context, t *kit.Tokens, h backend.HostStatus, latest s
 		caps := h.Capabilities
 		// Capabilities come from Detect (Preparar host); a live daemon
 		// (version from its ping, or agentd sessions) counts too.
-		hasAgentd := (caps != nil && caps.Has("agentd")) || h.AgentdVer != "" || agentdN > 0
+		hasAgentd := (caps != nil && caps.Has("agentd")) || h.AgentdVer != "" || agentdN > 0 || host.IsRelay()
 		count := "sin sesiones"
 		switch {
 		case hasAgentd:
@@ -215,7 +225,10 @@ func (v *View) card(c *ui.Context, t *kit.Tokens, h backend.HostStatus, latest s
 					ver = caps.Tools["agentd"].Version
 				}
 				kit.TagChip(c.Key("agentd"), strings.TrimSpace("agentd "+ver), t.AccentLight, t.AccentBg)
-				if newer(latest, ver) {
+				if host.IsRelay() {
+					kit.TagChip(c.Key("scope"), "Relay · "+app.ScopeLabel(host.Relay.Scope), t.Secondary, t.Raised)
+				}
+				if newer(latest, ver) && host.Allows(backend.CapShell) {
 					if ui.ButtonBase(c.Key("upd")).Label("Actualización " + latest).Cursor(ui.CursorPointer).
 						Children(func() { kit.TagChip(c, "Actualización "+latest, t.Waiting, t.WaitingBg) }).Clicked() {
 						a.Navigate("/hosts/provision/" + host.ID)
@@ -252,7 +265,7 @@ func (v *View) card(c *ui.Context, t *kit.Tokens, h backend.HostStatus, latest s
 		}
 	})
 	card.AlignSelf(ui.Start).ContextMenu(func(m *ui.Menu) {
-		if h.State == backend.HostOnline && m.Item("Preparar host").Chosen() {
+		if h.State == backend.HostOnline && host.Allows(backend.CapShell) && m.Item("Preparar host").Chosen() {
 			a.Navigate("/hosts/provision/" + host.ID)
 		}
 		if m.Item("Reconectar").Chosen() {

@@ -196,9 +196,23 @@ func ErrorText(err error) string {
 		return "La sesión ha terminado"
 	case proto.CodeTimeout:
 		return "La sesión no respondió a tiempo"
+	case proto.CodeForbidden:
+		return "Este dispositivo no tiene permiso para hacerlo en este host"
 	}
 	if err == nil {
 		return ""
+	}
+	switch {
+	case errors.Is(err, backend.ErrRelayHostOffline):
+		return RelayOfflineText
+	case errors.Is(err, backend.ErrDeviceRevoked):
+		return RevokedText
+	case errors.Is(err, backend.ErrPairDenied):
+		return "El dueño del host rechazó el emparejamiento"
+	case errors.Is(err, backend.ErrBadInvite):
+		return "No es un enlace de invitación de agentd relay válido (agentd://relay?…)"
+	case errors.Is(err, backend.ErrNeedsSSH):
+		return "Esto necesita acceso SSH al host; por relay solo hay sesiones agentd"
 	}
 	var hk *backend.HostKeyError
 	switch {
@@ -216,9 +230,32 @@ func ErrorText(err error) string {
 const HostKeyChangedText = "La clave del host ha cambiado desde que la aceptaste. Puede ser un ataque de intermediario: no se conecta. " +
 	"Si reinstalaste el host a propósito, quítalo de la app y añádelo de nuevo."
 
+// ScopeLabel names a relay device scope in the UI.
+func ScopeLabel(scope string) string {
+	switch scope {
+	case backend.ScopeView:
+		return "solo ver"
+	case backend.ScopeOperate:
+		return "operar"
+	case backend.ScopeAdmin:
+		return "admin"
+	}
+	return scope
+}
+
+// Relay error texts.
+const (
+	RelayOfflineText = "El host no está conectado al relay (¿agentd parado o [relay] desactivado?)"
+	RevokedText      = "El host ya no acepta este dispositivo (revocado o caducado): quítalo y empareja de nuevo con una invitación"
+)
+
 // HostErrText is the line a host card shows for its connection error.
 func HostErrText(h backend.HostStatus) string {
 	switch h.ErrCode {
+	case backend.HostErrRelayOffline:
+		return RelayOfflineText
+	case backend.HostErrDeviceRevoked:
+		return RevokedText
 	case backend.HostErrKeyChanged:
 		return "La clave del host ha cambiado: no se conecta (¿intermediario?)"
 	case backend.HostErrKeyUnknown:

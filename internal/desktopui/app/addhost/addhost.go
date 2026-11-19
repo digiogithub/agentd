@@ -1,5 +1,7 @@
-// Package addhost is the Añadir host page (mockup 6): pairing link (the
-// phone's QR scan; desktops have no camera), import from ~/.ssh/config, the
+// Package addhost is the Añadir host page (mockup 6): a relay invitation
+// (paste the `agentd relay invite` link, the host owner approves the device,
+// then the host is reached through agentd-relay with the device's scope),
+// import from ~/.ssh/config, the
 // manual form (name, host, port, user, authentication), the app's public
 // key with a copy button, and the host-key fingerprint confirmation (trust
 // on first use, app.ConnectFlow) before Preparar host opens. With password
@@ -52,6 +54,12 @@ type View struct {
 
 	// fingerprint and password dialogs
 	flow *app.ConnectFlow
+
+	// relay invitation
+	relayOpen   bool
+	relayLink   string
+	relayName   string
+	relayCancel context.CancelFunc // set while pairing
 
 	// import
 	importOpen bool
@@ -106,8 +114,8 @@ func (v *View) Build(c *ui.Context, r *ui.Route) {
 		ui.Scroll(c.Key("form")).Grow(1).MinHeight(0).Padding(16, 24, 24, 24).Children(func() {
 			ui.Column(c).Gap(12).MaxWidth(640).FillWidth().Children(func() {
 				ui.Row(c).Gap(10).Children(func() {
-					if v.quick(c.Key("pair"), t, kit.IconPaste, "Pegar enlace", "agentd serve pair") {
-						v.a.Toasts.Info("Emparejar con un enlace llegará pronto")
+					if v.quick(c.Key("pair"), t, kit.IconPaste, "Relay (invitación)", "Pega el enlace de agentd relay invite") {
+						v.relayOpen = true
 					}
 					if v.quick(c.Key("import"), t, kit.IconImport, "Importar", "~/.ssh/config o Tailscale") {
 						v.startImport()
@@ -160,6 +168,91 @@ func (v *View) Build(c *ui.Context, r *ui.Route) {
 	})
 	v.flow.Dialogs(c)
 	v.importDialog(c, t)
+	v.relayDialog(c, t)
+}
+
+// Pairing reports whether a relay pairing waits for the host (tests).
+func (v *View) Pairing() bool { return v.relayCancel != nil }
+
+// relayDialog pastes an invite link and pairs: the call blocks until the
+// host owner approves; Cancelar abandons it.
+func (v *View) relayDialog(c *ui.Context, t *kit.Tokens) {
+	if !v.relayOpen {
+		return
+	}
+	open := true
+	pairing := v.relayCancel != nil
+	kit.Dialog(c.Key("relay"), &open, kit.DialogOpts{Title: "Añadir host por relay", Width: 520,
+		Description: "En el host ejecuta agentd relay invite y pega aquí el enlace agentd://relay?… Sin SSH: solo sesiones agentd, con el permiso que conceda la invitación.",
+		Body: func() {
+			if pairing {
+				ui.Column(c).Gap(8).Padding(12).Radius(12).Background(t.Bg).Border(1, t.Divider).Children(func() {
+					ui.Text(c, "Aprueba el dispositivo en el host").FontSize(14).FontWeight(600)
+					ui.Text(c, "agentd relay invite pregunta allí si acepta «"+v.deviceName()+"». Esperando respuesta…").
+						FontSize(12.5).TextColor(t.Muted).LineHeight(1.4)
+				})
+				return
+			}
+			kit.Field(c, "Enlace de invitación", func() {
+				kit.Input(c.Key("relay-link"), &v.relayLink, "agentd://relay?v=1&…", true).Label("Enlace de invitación").AutoFocus()
+			})
+			kit.Field(c, "Nombre de este dispositivo", func() {
+				kit.Input(c.Key("relay-name"), &v.relayName, v.a.DeviceName(), false).Label("Nombre de este dispositivo")
+			})
+			ui.Text(c, "El enlace contiene un código de un solo uso: no lo compartas.").FontSize(12).TextColor(t.Muted)
+		},
+		Footer: func() {
+			if kit.Button(c.Key("relay-cancel"), kit.ButtonOpts{Variant: kit.Outline, Label: "Cancelar", Height: 36}).Clicked() {
+				open = false
+			}
+			if !pairing && kit.Button(c.Key("relay-pair"), kit.ButtonOpts{Variant: kit.Primary, Label: "Emparejar", Height: 36,
+				Disabled: strings.TrimSpace(v.relayLink) == ""}).Clicked() && strings.TrimSpace(v.relayLink) != "" {
+				v.pair()
+			}
+		}})
+	if !open {
+		if v.relayCancel != nil {
+			v.relayCancel()
+			v.relayCancel = nil
+		}
+		v.relayOpen = false
+	}
+}
+
+func (v *View) deviceName() string {
+	if n := strings.TrimSpace(v.relayName); n != "" {
+		return n
+	}
+	return v.a.DeviceName()
+}
+
+// pair runs Backend.PairRelay; the host appears in the list once approved.
+func (v *View) pair() {
+	a := v.a
+	link, name := strings.TrimSpace(v.relayLink), strings.TrimSpace(v.relayName)
+	ctx, cancel := context.WithCancel(a.Ctx)
+	v.relayCancel = cancel
+	a.Go(func(context.Context) {
+		h, err := a.Backend.PairRelay(ctx, link, name)
+		a.Update(func() {
+			if ctx.Err() != nil { // cancelled: the dialog is already closed
+				return
+			}
+			cancel()
+			v.relayCancel = nil
+			if err != nil {
+				a.Toasts.Error("No se pudo emparejar", app.ErrorText(err))
+				return
+			}
+			v.relayOpen, v.relayLink, v.relayName = false, "", ""
+			msg := "Host añadido por relay: " + h.Name
+			if h.Relay != nil {
+				msg += " (" + app.ScopeLabel(h.Relay.Scope) + ")"
+			}
+			a.Toasts.Success(msg)
+			a.Router.Replace("/hosts")
+		})
+	})
 }
 
 func (v *View) quick(c *ui.Context, t *kit.Tokens, icon, title, sub string) bool {

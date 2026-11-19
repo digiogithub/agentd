@@ -1,5 +1,6 @@
 // Package fake is an in-memory backend.Backend with the data of the validated
-// mockups (hosts estudio, vps-hetzner, portatil, raspberry; sessions
+// mockups (hosts estudio, vps-hetzner, portatil, raspberry, and nube reached
+// through agentd-relay with an operate device; sessions
 // claude@webapp waiting on a permission, codex@api asking a question with
 // three options, pando@agentd working, zellij main on portatil, claude@docs
 // done...). It simulates agentd behaviour closely enough for UI work and
@@ -57,6 +58,7 @@ type Fake struct {
 	typed         []string
 	resizes       [][2]int
 	keysInstalled []string
+	paired        []string
 
 	hostSubs []chan []backend.HostStatus
 	sessSubs []chan []backend.Session
@@ -129,6 +131,7 @@ func (f *Fake) seed(now time.Time) {
 		{st: backend.HostStatus{Host: backend.Host{ID: "raspberry", Name: "raspberry", Addr: "raspberrypi.local", Port: 22, User: "pi",
 			Auth: backend.AuthGenerated, HostKey: "SHA256:Rb8pL2wQ0nXc5tYm1kVd9sHe4uGa7jZo6iFr3NcT8Uw"},
 			State: backend.HostOffline, Err: "Sin conexión"}, seen: "visto hace 2 días"},
+		{st: backend.HostStatus{Host: RelayHost, State: backend.HostOnline, Sessions: 1, AgentdVer: "0.6.2"}},
 	}
 	ago := func(d time.Duration) time.Time { return now.Add(-d) }
 	info := func(name, cwd string, turn uint64, status string, cols, rows uint16, attached int) *proto.SessionInfo {
@@ -188,6 +191,11 @@ func (f *Fake) seed(now time.Time) {
 			{Text: "  └──────────┴───────────────────────┘", Role: "transcript"},
 			{Text: "● README actualizado con la sección de colas de trabajo y un ejemplo de agentd claim.", Role: "transcript"},
 		}, Input: proto.ViewInput{State: "suggestion", Ghost: "Try \"commit the changes\""}}
+	landingView := &proto.View{Name: "claude@landing", Epoch: Epoch, Revision: 6, Status: "idle", Cwd: "~/src/landing",
+		Lines: []proto.ViewLine{
+			{Text: "❯ Ajusta los márgenes de la cabecera.", Role: "transcript"},
+			{Text: "● Hecho: la cabecera usa 24 px a cada lado.", Role: "transcript"},
+		}, Input: proto.ViewInput{State: "empty"}}
 	codexWebView := &proto.View{Name: "codex@webapp", Epoch: Epoch, Revision: 4, Status: "idle", Cwd: "~/src/webapp",
 		Lines: []proto.ViewLine{{Text: "Listo: el formulario de login valida el correo.", Role: "transcript"}}, Input: proto.ViewInput{State: "empty"}}
 	exit := 0
@@ -213,6 +221,7 @@ func (f *Fake) seed(now time.Time) {
 		agentdSess("estudio", "claude@docs", "idle", "README actualizado con la sección…", true, ago(20*time.Minute), docsView, 3),
 		agentdSess("estudio", "codex@webapp", "idle", "Listo: el formulario de login valida el correo.", false, ago(time.Hour), codexWebView, 2),
 		agentdSess("vps-hetzner", "claude@infra", "exited", "Terraform plan sin cambios.", false, ago(3*time.Hour), infraView, 1),
+		agentdSess(RelayHost.ID, "claude@landing", "idle", "Hecho: la cabecera usa 24 px a cada lado.", false, ago(2*time.Hour), landingView, 4),
 	}
 	f.sessions[0].reply = "● Bash(go test ./internal/... -race)\n  ⎿ ok internal/session 3.912s\n  ok internal/daemon 8.104s"
 	f.sessions[1].reply = "De acuerdo. Dejo la migración para el despliegue y lo documento en MIGRATIONS.md."
@@ -533,6 +542,9 @@ func (f *Fake) Act(ctx context.Context, s backend.Session, args proto.ActArgs) (
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.acts = append(f.acts, ActCall{Key: s.Key(), Args: args})
+	if h := f.hostLocked(s.HostID); h != nil && !h.st.Host.Allows(backend.CapOperate) {
+		return nil, proto.Errorf(proto.CodeForbidden, "this device may only view")
+	}
 	r := f.findLocked(s)
 	if r == nil {
 		return nil, proto.Errorf(proto.CodeNotFound, "no such session %q", s.Name)
@@ -625,6 +637,14 @@ func (f *Fake) Launch(ctx context.Context, spec backend.LaunchSpec) (backend.Ses
 	h := f.hostLocked(spec.HostID)
 	if h == nil || h.st.State != backend.HostOnline {
 		return backend.Session{}, errors.New("host offline")
+	}
+	if host := h.st.Host; host.IsRelay() {
+		if spec.Where != backend.SourceAgentd || spec.TerminalOnly {
+			return backend.Session{}, backend.ErrNeedsSSH
+		}
+		if !host.Allows(backend.CapLaunch) {
+			return backend.Session{}, proto.Errorf(proto.CodeForbidden, "scope %s may not run", host.Relay.Scope)
+		}
 	}
 	project := spec.Project
 	if i := strings.LastIndex(project, "/"); i >= 0 {
@@ -782,6 +802,12 @@ func (f *Fake) Connect(ctx context.Context, id string) error {
 		f.mu.Unlock()
 		return proto.Errorf(proto.CodeNotFound, "no such host %q", id)
 	}
+	if h.st.Host.IsRelay() {
+		h.st.State, h.st.Err = backend.HostOnline, ""
+		f.publishLocked()
+		f.mu.Unlock()
+		return nil
+	}
 	if id == "raspberry" {
 		h.st.State = backend.HostConnecting
 		f.publishLocked()
@@ -819,6 +845,72 @@ func (f *Fake) Connect(ctx context.Context, id string) error {
 	}
 	f.mu.Unlock()
 	return nil
+}
+
+// RelayHost is the fake's relay host (an operate device, owner).
+var RelayHost = backend.Host{ID: "nube", Name: "nube", Relay: &backend.RelayTarget{
+	URL: "https://relay.example.com", Route: "q3x7k2mzv4c5n6b7p2l3w4e5r6", HostKey: "x8WqZ1n0aB3cD4eF5gH6iJ7kL8mN9oP0qR1sT2uV3wY",
+	DeviceID: "d4kq2m7xv3n5p", Scope: backend.ScopeOperate, Kind: "owner"}}
+
+// InviteLink is a well-formed relay invite the fake's PairRelay accepts;
+// DeniedInviteLink is one whose owner refuses the pairing.
+const (
+	InviteLink       = "agentd://relay?v=1&u=https%3A%2F%2Frelay.example.com&r=m2k7x4c5v6b7n2l3w4e5r6t7y2&k=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&i=0123456789abcdef&c=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&h=caja-relay"
+	DeniedInviteLink = "agentd://relay?v=1&u=https%3A%2F%2Frelay.example.com&r=m2k7x4c5v6b7n2l3w4e5r6t7y2&k=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&i=fedcba9876543210&c=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&h=caja-relay"
+)
+
+// PairRelay implements backend.Backend: InviteLink pairs host "caja-relay"
+// as an admin device after Delay (the owner "approves"),
+// DeniedInviteLink is refused, anything else is backend.ErrBadInvite. The
+// pairing waits like the real one and ends early when ctx does.
+func (f *Fake) PairRelay(ctx context.Context, link, name string) (backend.Host, error) {
+	link = strings.TrimSpace(link)
+	if link != InviteLink && link != DeniedInviteLink {
+		return backend.Host{}, backend.ErrBadInvite
+	}
+	f.mu.Lock()
+	f.paired = append(f.paired, name)
+	f.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return backend.Host{}, ctx.Err()
+	case <-time.After(f.Delay * 2):
+	}
+	if link == DeniedInviteLink {
+		return backend.Host{}, fmt.Errorf("%w: the owner said no", backend.ErrPairDenied)
+	}
+	h := backend.Host{ID: "caja-relay", Name: "caja-relay", Relay: &backend.RelayTarget{URL: "https://relay.example.com",
+		Route: "m2k7x4c5v6b7n2l3w4e5r6t7y2", HostKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", DeviceID: "d7c2x4v5b6n7m",
+		Scope: backend.ScopeAdmin, Kind: "owner"}}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if r := f.hostLocked(h.ID); r != nil {
+		r.st.Host = h
+	} else {
+		f.hosts = append(f.hosts, &hostRec{st: backend.HostStatus{Host: h, State: backend.HostOnline, AgentdVer: "0.7.0"},
+			projects: aliases("webapp")})
+	}
+	f.publishLocked()
+	return h, nil
+}
+
+// Paired lists the device names PairRelay was called with.
+func (f *Fake) Paired() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.paired)
+}
+
+// SetRelayScope changes the scope of a relay host's device (tests).
+func (f *Fake) SetRelayScope(id, scope string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if h := f.hostLocked(id); h != nil && h.st.Host.Relay != nil {
+		r := *h.st.Host.Relay
+		r.Scope = scope
+		h.st.Host.Relay = &r
+		f.publishLocked()
+	}
 }
 
 // FakePassword is the only password the fake accepts.
@@ -912,8 +1004,12 @@ func (f *Fake) Projects(ctx context.Context, hostID string) ([]proto.AliasInfo, 
 func (f *Fake) Inbox(ctx context.Context, hostID string) ([]proto.Message, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if h := f.hostLocked(hostID); h == nil || h.st.Capabilities == nil || !h.st.Capabilities.Has("agentd") {
+	h := f.hostLocked(hostID)
+	if h == nil || h.st.AgentdVer == "" && (h.st.Capabilities == nil || !h.st.Capabilities.Has("agentd")) {
 		return nil, errors.New("no agentd on host")
+	}
+	if !h.st.Host.Allows(backend.CapMailbox) {
+		return nil, proto.Errorf(proto.CodeForbidden, "no mailbox for this device")
 	}
 	return slices.Clone(f.messages), nil
 }
@@ -969,6 +1065,9 @@ func (f *Fake) Detect(ctx context.Context, hostID string) (*backend.Capabilities
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	h := f.hostLocked(hostID)
+	if h != nil && h.st.Host.IsRelay() {
+		return nil, backend.ErrNeedsSSH
+	}
 	if h == nil || h.st.State != backend.HostOnline || h.st.Capabilities == nil {
 		return nil, errors.New("host offline")
 	}
@@ -1095,6 +1194,9 @@ const Screen = "\x1b[2J\x1b[H" +
 func (f *Fake) Terminal(ctx context.Context, s backend.Session, cols, rows int, observe bool) (backend.PTY, error) {
 	f.mu.Lock()
 	r := f.findLocked(s)
+	if h := f.hostLocked(s.HostID); h != nil && !h.st.Host.Allows(backend.CapOperate) {
+		observe = true // view-only relay device
+	}
 	f.mu.Unlock()
 	if r == nil {
 		return nil, proto.Errorf(proto.CodeNotFound, "no such session %q", s.Name)
@@ -1200,6 +1302,9 @@ func (f *Fake) ListDir(ctx context.Context, hostID, path string, hidden bool) (b
 	h := f.hostLocked(hostID)
 	if h == nil || h.st.State != backend.HostOnline {
 		return backend.DirListing{}, errors.New("host offline")
+	}
+	if h.st.Host.IsRelay() {
+		return backend.DirListing{}, backend.ErrNeedsSSH
 	}
 	home := "/home/jose"
 	if h.st.Capabilities != nil && h.st.Capabilities.Home != "" {
