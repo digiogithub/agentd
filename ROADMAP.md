@@ -94,6 +94,16 @@ not used.
         real repositories (`lib/src/mux` and `lib/src/provision` are the source of the desktop ports)
   - [ ] P3: field test against a real host (agentd + zellij), Android and iOS builds
 
+## Phase 9 — Relay transport (reach hosts without SSH)
+Design `docs/design/relay-transport.md`, plan `docs/plans/agentd/relay_plan.md`.
+- [x] `internal/relaywire` (keys, invite link, Noise IK/IKpsk2, stream mux, host link) + Dart interop vectors
+- [x] `cmd/agentd-relay` + `internal/relayserver` (join tokens, route auth, per-tunnel host data connection)
+- [x] Daemon: `[relay]`, host key, devices, invites with approval, op `relay`, `agentd relay` CLI, device op gate
+      (view/operate/admin + session filter), audit log
+- [x] agentd-desktop: relay hosts (pair from an invite link, scope-aware UI)
+- [x] agentd-app: Dart Noise + mux + WebSocket transport, relay hosts (vectors match; live run vs Go relay + daemon)
+- [ ] Field test: relay on a VPS, host behind NAT, desktop + phone
+
 ## Later
 - [ ] Session persistence across daemon restarts (re-exec with fd passing, or at least log replay)
 - [ ] Broadcast / group addresses (`@all`, `@project:*`)

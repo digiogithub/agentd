@@ -159,8 +159,9 @@ not exist yet is **correct and useful**: it records a concept worth documenting 
   `GOTOOLCHAIN=go1.27.3` (the `Makefile` exports it).
 - Linux first (amd64/arm64). macOS is supported; Windows is out of scope for now (see `ROADMAP.md`).
 - Module: `github.com/digiogithub/agentd`. Binaries: `cmd/agentd` (CLI + daemon, `make` →
-  `build/agentd`) and `cmd/agentd-desktop` (native desktop client, `make desktop` →
-  `build/agentd-desktop`; see "Desktop client"). Both build with `CGO_ENABLED=0`.
+  `build/agentd`), `cmd/agentd-desktop` (native desktop client, `make desktop` →
+  `build/agentd-desktop`; see "Desktop client") and `cmd/agentd-relay` (self-hosted relay server,
+  `make relay` → `build/agentd-relay`; see "Relay transport"). All build with `CGO_ENABLED=0`.
 - Version: `internal/version.Version` (`0.0.0-dev`), set from the tag at release time with
   `-ldflags "-X github.com/digiogithub/agentd/internal/version.Version=<x.y.z>"`. Release pipeline:
   `docs/release.md`.
@@ -188,6 +189,12 @@ not exist yet is **correct and useful**: it records a concept worth documenting 
     (darwin: signed with the Developer ID first); fetched files are gitignored, only `.keep` is versioned.
     The `agentd` binary never links MyGo, x/crypto/ssh or libghostty-vt:
     `GOTOOLCHAIN=go1.27.3 go list -deps ./cmd/agentd | grep -c mygo` must print `0` (it does).
+  - Relay transport: `github.com/coder/websocket` (WebSocket for agentd-relay, the daemon's host link and
+    Go clients; small, no deps) and `github.com/flynn/noise` (Noise `IK` / `IKpsk2`, 25519 + ChaChaPoly +
+    SHA256: the end-to-end tunnel between a device and the daemon). Used by `internal/relaywire`,
+    `internal/relayserver`, `internal/relayclient` only. agentd-app (Dart) implements the same Noise patterns;
+    interop is pinned by `internal/relaywire/testdata/noise_vectors.json` (`AGENTD_WRITE_VECTORS=1` rewrites it;
+    a change there means re-checking the Dart client).
   - OpenAPI contract tests (test-only, never linked into the binary): `github.com/pb33f/libopenapi` + `github.com/pb33f/libopenapi-validator` (OpenAPI 3.1 parser and request/response/schema validator; used only by `internal/httpapi/contract_*_test.go` and `openapi_lint_test.go` to fail CI when handlers drift from `docs/api/openapi.yaml`; chosen over kin-openapi because the spec is 3.1 (`const`, `examples`, `if/then`, `type` arrays) which kin-openapi does not fully support; no Node/Java tooling needed)
 
 ## Rules
@@ -226,15 +233,18 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
 |---|---|---|
 | `internal/version` | Build version (`Version`, set by ldflags at release) | — |
 | `internal/termcolor` | Colour specs (`"8"`, `"244"`, `"#808080"`) for ghost-text rules | stdlib |
-| `internal/config` | Paths (XDG), `config.toml` loading, harness profiles | toml, termcolor |
+| `internal/config` | Paths (XDG), `config.toml` loading, harness profiles, `[relay]` (`relay.go`) | toml, termcolor |
 | `internal/screen` | `Snapshot` type: immutable copy of cells (index == column; wide-char continuation cells kept as `Width:0`)/cursor/scrollback tail/modes/activity/notification counters for interpretation; title/cwd/notify text sanitized (no C0/C1 controls, capped); `Reflow` (logical lines, with `Line.Spans`: styled runs from the cells), `Markup` (chat markup: CommonMark of a line from its spans), `Split` (transcript/input/footer/status/dialog regions) and the shared ghost-cell classification (`GhostColumns`, `GhostRules`, `Rules`) | stdlib, termcolor |
 | `internal/session` | One PTY child + VT emulator + fan-out + input + idle/human-activity tracking + ghost-text filter + atomic `Snapshot()`, `OutputGen()`/`Changed()`, `NewReplayer(cols, rows)` (standalone emulator fed raw PTY bytes, same filter and cell conversion as live sessions, for fixtures), BEL/OSC 7/9/777 recording (OSC 9 bodies starting with a numeric sub-command, e.g. `9;4`, `9;9;cwd`, `9;12`, are not notifications; `Changed()` never fires after exit, select on `Done()`), frame-aligned PTY chunking for DEC 2026 synchronized updates (`syncgate.go`) | pty, vt, termcolor, screen |
 | `internal/relay` | Cross-host messaging through a client (design `docs/design/cross-host-relay.md`, phase 1): `Address` (`remote:<host>/<session>`), `Envelope` + limits, untrusted `Notice`; pure, no I/O | stdlib |
+| `internal/relaywire` | Relay transport wire format (no file I/O, no daemon): host key (ed25519 route key + X25519 Noise key), route/device ids, invite link (`agentd://relay?...`), Noise `ServerHandshake`/`ClientHandshake` (IK, IKpsk2 for invites), `Secure`, stream `Mux` (streams are `net.Conn`), WebSocket adapter, `RunHostLink` (the host's reconnecting link) | coder/websocket, flynn/noise, x/crypto |
+| `internal/relayserver` | agentd-relay: host registration (challenge signed with the route key + join token), client tunnels spliced to a fresh host data connection, limits; forwards opaque frames only | relaywire, coder/websocket |
+| `internal/relayclient` | Go client side: `Pair` (redeem an invite), `Connect`, `Dialer` (one reconnecting tunnel per host, `Dial` = one daemon connection) | relaywire |
 | `internal/mailbox` | Message store: send, inbox, get, state transitions, replies, purge/vacuum, work queues (`Claim`, `QueueItems`, `Queues`), listing digests (`Digest`, `InboxDigest`, `QueueDigest`) | sqlite |
 | `internal/inject` | Safe input path: guard, bracketed paste, paste verification, submit delay, per-session input lock | session, config |
 | `internal/delivery` | Decide when a session is idle and inject queued messages (via `inject`) | session, mailbox, config, inject |
 | `internal/proto` | Wire protocol: JSON request/response + binary framed attach stream | stdlib |
-| `internal/daemon` | Socket server, registry, op handlers, lifecycle, autostart helpers; per-session view state + watcher (`view.go`, `view_rules.go`: profile → `screen.Rules`) behind ops `view`/`view_ack` and the `ls` summary; event bus + op `subscribe` (`events.go`); the opt-in hc socket listener + op `hc_listener` (`hclisten.go`, peer admission) | all above (incl. hcompat and, through it, client: the listener's translator dials this daemon) |
+| `internal/daemon` | Socket server, registry, op handlers, lifecycle, autostart helpers; per-session view state + watcher (`view.go`, `view_rules.go`: profile → `screen.Rules`) behind ops `view`/`view_ack` and the `ls` summary; event bus + op `subscribe` (`events.go`); the opt-in hc socket listener + op `hc_listener` (`hclisten.go`, peer admission); the relay host link, devices, invites, op `relay` (`relay.go`) and the device op gate (`relaygate.go`) | all above (incl. hcompat and, through it, client: the listener's translator dials this daemon; relaywire) |
 | `internal/client` | Go client for the socket API (used by CLI, MCP and agentd-desktop); `Subscribe` returns a `Subscription` (event channel + `Close`); `NewConn(conn, auth)` wraps an already open connection (agentd-desktop: a unix socket reached through an SSH `direct-streamlocal` channel; `auth` nil = none, the remote daemon resolves the SSH user's human identity) | proto |
 | `internal/attach` | Client-side terminal: raw mode, SIGWINCH, detach key, redraw | client, x/term |
 | `internal/mcpserver` | MCP stdio server exposing mailbox + peers tools | client (+ proto types), go-sdk |
@@ -242,11 +252,12 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
 | `internal/tlsutil` | Gateway TLS: persisted self-signed cert, files mode with reload, SPKI pin, pin-verifying client callback | stdlib only |
 | `internal/httpapi` | HTTP/JSON + SSE gateway (`agentd serve`): routing table, middleware (request id, recover, body cap, auth hook, JSON error envelope), daemon connection pool. Config is passed in by `cmd/agentd` | client, proto (stdlib otherwise; never daemon/session/config) |
 | `internal/hcompat` | herdr-core (`hc`) client protocol, generation 1, translated onto daemon ops (Herdr Desktop / Whip compatibility, proof of concept): JSON-RPC 2.0 lines then 9-byte LE frames, per-stream credit, first paint, events, in-memory labels/keep/turn/docs; `Listener` (unix socket with herdr-core's `core.lock` ownership, admission hook, cleanup) and `LoadCoreID` | client, proto (stdlib otherwise; never daemon/session/config) |
+| `cmd/agentd-relay` | Relay server binary (flags, TLS files / ACME / plain HTTP behind a proxy, join tokens) | relayserver, version, x/crypto/acme/autocert |
 | `cmd/agentd` | Cobra CLI wiring; invoked as `herdr-core`/`hc` (argv[0]) it is the hc CLI subset (`hc.go`) | client, attach, daemon, mcpserver, httpapi, hcompat, config, tlsutil (never desktopui, never MyGo) |
-| `internal/desktopui/backend` | Contract between the desktop UI and the code that reaches hosts: `Backend`, `Shell`, `PTY`, `Session`, `Host`, auth kinds, provisioning types; `LaunchSpec.TerminalOnly`, `ListDir` (`DirListing`, `ErrDirNotFound`/`ErrDirDenied`) and `Terminate`; typed connect errors (`HostKeyError` for a key not yet accepted, `ErrHostKeyChanged`, `ErrPasswordRequired`, `HostStatus.ErrCode`) and `TrustHostKey` / `ConnectWithPassword(…, installKey)` (password used once, never stored). Change it only together with every implementation | proto |
-| `internal/desktopui/backend/fake` | In-memory `Backend` with the mockup data (UI work, headless tests, `AGENTD_DESKTOP_FAKE=1`): act choose/prompt bump revisions (stale = conflict), canned PTY echo, provisioning events, an in-memory folder tree for `ListDir` (a non-enterable dir, a path above home), recorded `Terminate`/`Launch` calls; never runs a program | backend, proto |
-| `internal/desktopui/remote` | `backend.Shell` over SSH (`golang.org/x/crypto/ssh`: ssh-agent, the app key, key files, password callbacks never stored) and on this computer; `DialUnix` (`direct-streamlocal`); TOFU host keys (`known_hosts`), app key `id_ed25519`, `hosts.json`, `~/.ssh/config` import, per-host connection pool, `InstallAuthorizedKey` (app public key into `~/.ssh/authorized_keys`, idempotent, 0700/0600, refuses anything but one plain public key line); `remote/sshtest` = in-process SSH server for tests | backend, pty, x/crypto (no MyGo) |
-| `internal/desktopui/core` | The real `Backend`: saved hosts + one Shell per host, daemon socket discovery, session aggregation (agentd `ls` + `subscribe` per host, zellij/tmux polled, plain shells), view streams, mailbox/act/attach/run/kill/terminate on daemon ops, `ListDir` over the host's `Shell`; every op on a fresh connection (`client.Dial` locally, `remote` `DialUnix` + `client.NewConn` over SSH) | backend, remote, client, proto, config (mux and provision through its `MuxAdapter`/`Provisioner` interfaces, wired in `cmd/agentd-desktop`; no MyGo). The local daemon is dialed with no `auth` (inherited `AGENTD_ID`/`AGENTD_TOKEN` are ignored) |
+| `internal/desktopui/backend` | Contract between the desktop UI and the code that reaches hosts: `Backend`, `Shell`, `PTY`, `Session`, `Host`, auth kinds, provisioning types; `LaunchSpec.TerminalOnly`, `ListDir` (`DirListing`, `ErrDirNotFound`/`ErrDirDenied`) and `Terminate`; typed connect errors (`HostKeyError` for a key not yet accepted, `ErrHostKeyChanged`, `ErrPasswordRequired`, `HostStatus.ErrCode`) and `TrustHostKey` / `ConnectWithPassword(…, installKey)` (password used once, never stored); relay hosts: `Host.Relay *RelayTarget` (`relay_url`, route, pinned X25519 `host_key`, device id, scope `view|operate|admin`, session globs, kind), `Host.Allows(Capability)` (`CapOperate`/`CapLaunch`/`CapMailbox`/`CapShell`), `PairRelay(ctx, link, name)` (blocks until the owner approves), `ErrRelayHostOffline`/`ErrDeviceRevoked` (`HostErrRelayOffline`/`HostErrDeviceRevoked`), `ErrPairDenied`, `ErrBadInvite`, `ErrNeedsSSH`. Change it only together with every implementation | proto |
+| `internal/desktopui/backend/fake` | In-memory `Backend` with the mockup data (UI work, headless tests, `AGENTD_DESKTOP_FAKE=1`): act choose/prompt bump revisions (stale = conflict), canned PTY echo, provisioning events, an in-memory folder tree for `ListDir` (a non-enterable dir, a path above home), recorded `Terminate`/`Launch` calls, relay host `nube` (operate device) and `PairRelay` for `fake.InviteLink`; never runs a program | backend, proto |
+| `internal/desktopui/remote` | `backend.Shell` over SSH (`golang.org/x/crypto/ssh`: ssh-agent, the app key, key files, password callbacks never stored) and on this computer; `DialUnix` (`direct-streamlocal`); TOFU host keys (`known_hosts`), app key `id_ed25519`, relay device key `relay_key` (`RelayKey`), `hosts.json` (SSH and relay hosts), `~/.ssh/config` import, per-host connection pool, `InstallAuthorizedKey` (app public key into `~/.ssh/authorized_keys`, idempotent, 0700/0600, refuses anything but one plain public key line); `remote/sshtest` = in-process SSH server for tests | backend, pty, x/crypto (no MyGo) |
+| `internal/desktopui/core` | The real `Backend`: saved hosts + one Shell per host, daemon socket discovery, session aggregation (agentd `ls` + `subscribe` per host, zellij/tmux polled, plain shells), view streams, mailbox/act/attach/run/kill/terminate on daemon ops, `ListDir` over the host's `Shell`; every op on a fresh connection (`client.Dial` locally, `remote` `DialUnix` + `client.NewConn` over SSH, a stream of the host's relay tunnel + `client.NewConn` for relay hosts: `relay.go`, no shell ops there) | backend, remote, client, proto, config, relayclient, relaywire (mux and provision through its `MuxAdapter`/`Provisioner` interfaces, wired in `cmd/agentd-desktop`; no MyGo). The local daemon is dialed with no `auth` (inherited `AGENTD_ID`/`AGENTD_TOKEN` are ignored) |
 | `internal/desktopui/dirlist` | Folder browser, host side: the POSIX sh script listing the directories under a path (run through `Shell.Exec`, local or SSH) and the parser of its NUL-separated output (`@@agentd-ls` marker, status `ok`/`notfound`/`denied`, records `D name flag`, end `E`/`T`); no I/O of its own, no MyGo | backend |
 | `internal/desktopui/mux` | zellij and tmux adapters over a `backend.Shell` (list, attach, launch, kill; status `unknown`/`exited`, guessed harness); port of agentd-app `lib/src/mux`; `mux/muxtest` = fake Shell | backend (no MyGo) |
 | `internal/desktopui/provision` | Host detection (one POSIX sh script), install plan and steps (agentd `install.sh` checked against `SHA256SUMS`, systemd user unit, `[herdr] listen`, MCP snippets, agent CLIs); port of agentd-app `lib/src/provision` | backend, mux (no MyGo) |
@@ -262,7 +273,7 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
 
 - **Paths**: socket `$XDG_RUNTIME_DIR/agentd/agentd.sock` (fallback `/tmp/agentd-$UID/`), state
   `$XDG_STATE_HOME/agentd` (fallback `~/.local/state/agentd`): `mailbox.db`, `docs.json` (document store, 0600), `hc/core-id`, `api/devices.json` (device tokens, dir 0700, file 0600, `api/devices.lock`), `api/tls/{cert.pem,key.pem}` (self-signed gateway cert), `logs/<session>.log`,
-  `daemon.log`. Config `~/.config/agentd/config.toml`. `AGENTD_SOCKET` env overrides the socket path
+  `daemon.log`, `relay/{host_key.json,devices.json,audit.log}` (dir 0700, files 0600). Config `~/.config/agentd/config.toml`. `AGENTD_SOCKET` env overrides the socket path
   (tests must use a temp socket + temp state dir via `AGENTD_STATE_DIR`).
 - **Daemon lock**: the daemon holds an exclusive `flock` on `<socketdir>/agentd.lock` for its whole
   lifetime. Only the lock holder may remove a stale socket file and bind; a second daemon fails with
@@ -394,6 +405,32 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   `sha256:<hex>` of the leaf SPKI (`tlsutil.Pin`; `CurrentPin(mode, cfg)` is what `agentd serve pair` puts in
   the QR `fp`). `agentd serve tls [show|rotate]` prints pin/SANs/expiry or regenerates the self-signed pair
   (restart serve; devices re-pair). Tailscale identity headers are never trusted.
+- **Relay transport** (design `docs/design/relay-transport.md`, plan `docs/plans/agentd/relay_plan.md` = normative
+  protocol v1): with `[relay] enabled = true` and `url` (https/wss; http/ws only on loopback) the daemon keeps one
+  outbound WebSocket link to an `agentd-relay` (`relaywire.RunHostLink`, backoff 1 s → 60 s; started in `Serve`, stopped
+  in `Shutdown` after the event bus said bye). It registers its route (`base32(SHA-256(ed25519 pub))[:26]`) by signing
+  the relay's challenge; `join_token` / `join_token_env` admit it. Per client tunnel the relay asks for a fresh host data
+  connection; the tunnel is Noise end to end (prologue `agentd-relay/1\n<route>`; responder static = the host X25519 key
+  pinned from the invite), then a stream mux whose streams carry today's socket protocol unchanged. Host state
+  `$STATE/relay/`: `host_key.json` (generated on first use), `devices.json` (paired device public keys, scope, sessions,
+  kind, expiry, last_seen at most once a minute), `audit.log` (JSONL, 5 MiB + one rotation; pair, revoke, connect,
+  disconnect, side-effecting ops and refusals; never prompt text or bodies). **Invites**: op `relay invite` (CLI
+  `agentd relay invite [--scope view|operate|admin] [--sessions g1,g2] [--guest] [--ttl 10m] [--expires D] [--no-approve]
+  [--name N]`): 32-byte one-time code (Noise IKpsk2 psk), link `agentd://relay?v=1&u=&r=&k=&i=&c=&h=` + terminal QR, at most
+  3 live (oldest evicted), TTL default 10 min (max 1 h), 5 failed confirms burn it, 20 failures/10 min lock pairing.
+  The host is asked `Approve? [y/N]` (default no) unless `--no-approve`; then the device's X25519 key is stored and it
+  connects with Noise IK (no secret stored anywhere). Scope default `operate`, capped by `max_scope` (default `operate`);
+  guests (`--guest`) need `--sessions`, never `admin`, expire (default 24 h, max 30 d), no mailbox. `max_devices` (16).
+  `agentd relay status|devices|revoke ID|NAME` (revoke closes the device's tunnels at once). **Device identity**: a
+  relay stream is served by `serveConn` with `peerInfo.device` set; `resolveCaller` answers `human:<user>` with `via:
+  "relay"` and the device (owner devices act for the host's user); `whoami` adds `device`. Every request first goes
+  through `relayGate` (`internal/daemon/relaygate.go`, deny by default): any scope `ping whoami info ls subscribe view
+  turns dump attach` (view: attach forced `observe`); `operate` + `act view_ack`, and owners `send inbox read reply`;
+  `admin` + `run` (no `cmd`/`env`/`env_base`: a harness/target/profile only; a session-limited device must give a
+  matching `name`), `kill rm label`, `doc_get doc_set` (not for session-limited devices); never `type purge shutdown
+  hc_listener claim queue peers relay`. The device's `sessions` globs filter `ls`, the subscribe snapshot and events (a
+  name outside them is `not_found`); guests and session-limited devices get no host-wide events (mail, docs). `info`
+  hides aliases below `admin`. Op `relay` is for humans on the socket only (never a session, never a device).
 - **Project aliases**: short name → working directory, kept apart from `config.toml`.
   - File `~/.config/agentd/aliases.toml` (override path with `AGENTD_ALIASES_FILE`; respects
     `$XDG_CONFIG_HOME`), flat table: `webapp = "~/src/webapp"`. `~` is expanded;
@@ -631,7 +668,8 @@ optimistic: a `version` other than the current one is `conflict`; `null` deletes
 names `[A-Za-z0-9._-]{1,64}`, value <=1 MiB of JSON (`daemon.MaxDocBytes`); humans only, sessions may read; stored
 compacted in `docs.json`, atomic rename; a broken file is renamed `.bad` and the store starts empty; publishes
 `doc.changed {name, version}` with no session, so session subscribers never see it),
-`turns {name}` (→ `{turns[]}`, see "Turn records"), `hc_listener {action}` (humans only, see "Herdr compatibility"), `peers`, `whoami`, `attach {name, cols, rows, observe?, passive?, history?}`, `shutdown`. Every request may carry
+`turns {name}` (→ `{turns[]}`, see "Turn records"), `hc_listener {action}` (humans only, see "Herdr compatibility"),
+`relay {action: status|invite|pending|approve|cancel|devices|revoke, ...}` (humans on the socket only, see "Relay transport"), `peers`, `whoami`, `attach {name, cols, rows, observe?, passive?, history?}`, `shutdown`. Every request may carry
 `"auth": {"id", "token"}` (filled by `internal/client` from `AGENTD_ID` / `AGENTD_TOKEN`).
 
 MCP tools (`agentd mcp`, identity resolved by the daemon, see "Identity"): `agentd_peers`,
@@ -823,6 +861,8 @@ Permissions on the resolved identity:
   `[security] agent_type = true`.
 - `act`: same as `type` (humans any session; a session only itself unless `[security] agent_type = true`).
 - `hc_listener`: humans only. The hc socket itself refuses session peers (ancestry or `AGENTD_TOKEN`).
+- Relay devices: resolved as `human:<user>` with `via: "relay"`, but every op first passes `relayGate` (scope
+  allow-list + session filter, see "Relay transport"); `relay` itself is refused to devices and sessions.
 
 Limits: this protects against confused or prompt-injected agents claiming another identity, not
 against hostile code running as the same uid (which can read `/proc/<pid>/environ` or ptrace). Any
@@ -836,7 +876,12 @@ Chat tab (semantic view + act) and a Terminal tab (attach through libghostty-vt)
 settings. It is a client only: it never changes daemon behaviour, and the daemon/CLI never import it.
 
 - **Transport**: the local host uses the daemon socket (`client.Dial`, `config.SocketPath()`); every other
-  host is reached **only over SSH** (`golang.org/x/crypto/ssh`; no HTTP gateway, no extra port).
+  host is reached over SSH (`golang.org/x/crypto/ssh`; no HTTP gateway, no extra port) or, when paired with an
+  `agentd relay invite` link (Añadir host > Relay), through agentd-relay: one tunnel per host
+  (`internal/relayclient`), a fresh stream per op wrapped with `client.NewConn(conn, nil)`; the daemon sees the
+  device (`device:<id>`) and enforces its scope, and the UI hides what it would refuse (`Host.Allows`: view = read
+  only and the terminal observes, operate = no new session/Terminar/kill, admin = all). Relay hosts have no shell:
+  no zellij/tmux/plain shells, Solo terminal, folder browser or provisioning.
   agentd ops over SSH = a `direct-streamlocal@openssh.com` channel to the remote daemon socket (found
   with a probe: `$AGENTD_SOCKET`, `$XDG_RUNTIME_DIR/agentd/agentd.sock`, `/run/user/<uid>/agentd/agentd.sock`,
   `/tmp/agentd-<uid>/agentd.sock`) wrapped with `client.NewConn(conn, nil)`: no `auth` is sent, the channel's
@@ -853,8 +898,9 @@ settings. It is a client only: it never changes daemon behaviour, and the daemon
   `~/.config/agentd/desktop`): `hosts.json` (saved hosts, 0600, atomic writes), `known_hosts` (host keys
   accepted on first use; `~/.ssh/known_hosts` is also read, never written; a changed key is a hard error,
   `HostKeyMismatch`, never a silent re-trust), `id_ed25519` (app key, generated on first use, 0600) +
-  `id_ed25519.pub`, `settings.json` (UI preferences: notifications, mutes, theme, agents grouping; 0600). Never log
-  secrets: no passwords, passphrases, private keys, `AGENTD_TOKEN`s, prompt text or message bodies.
+  `id_ed25519.pub`, `relay_key` (relay device key, X25519, 0600, generated on the first pairing, one per install),
+  `settings.json` (UI preferences: notifications, mutes, theme, agents grouping; 0600). Never log
+  secrets: no passwords, passphrases, private keys, `AGENTD_TOKEN`s, relay invite links, prompt text or message bodies.
 - **Natives**: libghostty-vt is embedded per platform (`internal/desktopui/natives`, see Toolchain) and
   extracted to `<user cache>/agentd-desktop/natives/<sha256 prefix>/` at start; a user-set
   `$MYGO_GHOSTTY_VT` wins. A binary built without it falls back to MyGo's own lookup/download.

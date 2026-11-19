@@ -357,6 +357,49 @@ purge_interval = "1h"          # how often the retention purge runs (>= 1m)
 - **Files**: `tls = "files"` with `tls_cert`/`tls_key` (e.g. `tailscale cert` output); renewed files are
   picked up on SIGHUP or automatically.
 
+## Relay (reach a host without SSH)
+
+`agentd-relay` is a small self-hosted rendezvous server: the daemon and the apps (agentd-desktop,
+agentd-app) both dial out to it, so a host behind NAT is reachable without SSH, a VPN or an open port.
+Traffic is end-to-end encrypted (Noise) between the device and the daemon: the relay sees route ids,
+IPs and byte counts, never sessions, screens, prompts or keys.
+
+Relay server (a VPS with a domain):
+
+```sh
+make relay   # or the agentd-relay_<v>_linux_<arch>.tar.gz release asset
+export AGENTD_RELAY_JOIN_TOKEN="$(head -c 32 /dev/urandom | base64)"
+agentd-relay --listen :443 --acme-domain relay.example.com   # or --tls-cert/--tls-key, or --insecure-http behind a TLS proxy
+```
+
+`packaging/agentd-relay.service` is a hardened systemd unit for it.
+
+Host (`~/.config/agentd/config.toml`, then restart the daemon):
+
+```toml
+[relay]
+enabled = true
+url = "https://relay.example.com"
+join_token_env = "AGENTD_RELAY_JOIN_TOKEN"   # or join_token = "..."
+max_scope = "operate"                        # highest scope an invite may grant
+```
+
+Pair a device:
+
+```sh
+agentd relay invite                  # QR + agentd://relay link; asks Approve? [y/N] when the device redeems it
+agentd relay invite --scope view     # read-only device
+agentd relay invite --guest --sessions 'codex@webapp' --expires 48h   # share one agent with someone else
+agentd relay status | devices | revoke <id|name>
+```
+
+Scopes: `view` (list, read, watch terminals), `operate` (+ prompts, menus, interactive terminal, mailbox),
+`admin` (+ start sessions from a harness profile, kill, remove). `operate` can type into agents that run
+shell commands, so it is as powerful as a shell on the host: invite only your own devices with it. The
+daemon enforces every scope and session filter itself; `type`, `purge`, `shutdown` and arbitrary commands
+are never available through the relay. Invites are one-time (10 minutes by default); a revoked device is
+disconnected at once.
+
 ## Security
 
 The socket is user-only (`0700` dir, `0600` socket, peer uid checked). Senders are verified by the
