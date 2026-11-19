@@ -7,8 +7,10 @@ require (
 	github.com/charmbracelet/ultraviolet v0.0.0-20260303162955-0b88c25f3fff
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/charmbracelet/x/vt v0.1.0
+	github.com/coder/websocket v1.8.15
 	github.com/creack/pty v1.1.24
 	github.com/egoist/mygo v0.7.1
+	github.com/flynn/noise v1.1.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/pb33f/libopenapi v0.41.8
 	github.com/pb33f/libopenapi-validator v0.16.3
