@@ -74,6 +74,7 @@ Built by `release.yml` next to the CLI (same tag, same run):
 | Artifact | Built by | Contents |
 |---|---|---|
 | `agentd-full_<v>_amd64.deb`, `..._arm64.deb` | `linux` job (matrix) | package `agentd` from `packaging/nfpm-full.yaml`: CLI + daemon (systemd user unit) + `agentd-desktop`, its `.desktop` entry and icon; same package name as the CLI-only `.deb`, so installing it replaces that one |
+| `agentd-relay_<v>_linux_amd64.tar.gz`, `..._linux_arm64.tar.gz` | `linux` job (matrix) | `agentd-relay` (self-hosted relay server, `cmd/agentd-relay`), `agentd-relay.service` (systemd system unit), README, LICENSE |
 | `agentd-desktop_<v>_linux_amd64.tar.gz`, `..._linux_arm64.tar.gz` | `linux` job (matrix) | `agentd-desktop/` with the binary (libghostty-vt embedded for that arch), `.desktop` entry, icon, README, LICENSE |
 | `agentd-desktop_<v>_darwin_universal.zip` | `macos` job | universal `agentd-desktop` (lipo of amd64 + arm64, each embedding its own libghostty-vt dylib signed with the Developer ID before `go build`, `NATIVES_SIGN=required`), signed (hardened runtime, timestamp) and notarized submit-only; a bare binary, no `.app` bundle yet |
 

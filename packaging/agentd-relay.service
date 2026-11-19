@@ -1,0 +1,38 @@
+# agentd-relay as a systemd system service (self-hosted relay server).
+#
+#   sudo install -m 0755 agentd-relay /usr/local/bin/agentd-relay
+#   sudo install -d -m 0700 /etc/agentd-relay
+#   head -c 32 /dev/urandom | base64 | sudo tee /etc/agentd-relay/join-tokens >/dev/null
+#   sudo install -m 0644 agentd-relay.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now agentd-relay
+#
+# Hosts register with one of the join tokens ([relay] join_token_env on the
+# host). The relay never sees tunnel contents: they are end-to-end encrypted
+# between the devices and the daemons.
+
+[Unit]
+Description=agentd-relay - rendezvous for agentd daemons and clients
+Documentation=https://github.com/digiogithub/agentd
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Automatic Let's Encrypt certificate (ports 80 and 443 must reach this host).
+# Behind a TLS reverse proxy use instead:
+#   --listen 127.0.0.1:8080 --insecure-http --trust-forwarded
+ExecStart=/usr/local/bin/agentd-relay --listen :443 --acme-domain relay.example.com --acme-cache /var/lib/agentd-relay/acme --join-token-file %d/join-tokens
+DynamicUser=yes
+StateDirectory=agentd-relay
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+LoadCredential=join-tokens:/etc/agentd-relay/join-tokens
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

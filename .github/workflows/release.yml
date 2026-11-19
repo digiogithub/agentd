@@ -93,6 +93,10 @@ jobs:
             -ldflags "-s -w -X github.com/digiogithub/agentd/internal/version.Version=${VERSION}" \
             -o build/agentd ./cmd/agentd
           file build/agentd
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/digiogithub/agentd/internal/version.Version=${VERSION}" \
+            -o build/agentd-relay ./cmd/agentd-relay
+          file build/agentd-relay
 
       - name: Build the desktop app
         # agentd-desktop embeds libghostty-vt for the target (fetched and
@@ -127,6 +131,12 @@ jobs:
           cp packaging/agentd.service "$stage/agentd.service"
           tar -C "$stage" -czf "dist/agentd_${VERSION}_linux_${GOARCH}.tar.gz" .
           tar -tzvf "dist/agentd_${VERSION}_linux_${GOARCH}.tar.gz"
+          # agentd-relay_<v>_linux_<arch>.tar.gz: the self-hosted relay (servers only).
+          rstage="$(mktemp -d)"
+          cp build/agentd-relay README.md LICENSE "$rstage/"
+          cp packaging/agentd-relay.service "$rstage/agentd-relay.service"
+          tar -C "$rstage" -czf "dist/agentd-relay_${VERSION}_linux_${GOARCH}.tar.gz" .
+          tar -tzvf "dist/agentd-relay_${VERSION}_linux_${GOARCH}.tar.gz"
 
       - name: Install nfpm
         run: go install "github.com/goreleaser/nfpm/v2/cmd/nfpm@${NFPM_VERSION}"

@@ -2,6 +2,7 @@
 # (.github/workflows, docs/release.md); this file is for local work.
 #
 #   make                 build/agentd (the CLI + daemon; never links MyGo)
+#   make relay           build/agentd-relay (self-hosted relay server)
 #   make test            go test -race ./...
 #   make desktop         build/agentd-desktop (MyGo, embeds libghostty-vt)
 #   make desktop-run-fake  run agentd-desktop on the fake backend (no host contacted)
@@ -38,12 +39,17 @@ HOST_NATIVES           := $(shell $(GO) env GOOS 2>/dev/null)-$(shell $(GO) env 
 
 .DEFAULT_GOAL := build
 
-.PHONY: build test vet fmt desktop desktop-run-fake desktop-natives desktop-natives-host desktop-natives-clean deb $(addprefix desktop-natives-,$(NATIVES_TARGETS)) clean help
+.PHONY: build relay test vet fmt desktop desktop-run-fake desktop-natives desktop-natives-host desktop-natives-clean deb $(addprefix desktop-natives-,$(NATIVES_TARGETS)) clean help
 
 ## Build the agentd CLI + daemon into build/agentd (default target)
 build:
 	@mkdir -p $(BUILD_DIR)
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(BUILD_DIR)/agentd ./cmd/agentd
+
+## Build the self-hosted relay server into build/agentd-relay
+relay:
+	@mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=0 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(BUILD_DIR)/agentd-relay ./cmd/agentd-relay
 
 ## Run the tests (race detector on, as CI)
 test:
