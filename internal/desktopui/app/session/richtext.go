@@ -18,7 +18,7 @@ import (
 func (v *View) agentBody(c *ui.Context, t *kit.Tokens, i int, text string) {
 	md := v.markdownOpts(t)
 	blocks := chatfmt.Split(text)
-	ui.Column(c).Gap(10).MaxWidthPercent(92).AlignItems(ui.Stretch).Children(func() {
+	ui.Column(c).Gap(10 * v.a.Prefs.Get().ChatLineScale()).MaxWidthPercent(92).AlignItems(ui.Stretch).Children(func() {
 		for bi, b := range blocks {
 			bc := c.Key("blk" + strconv.Itoa(bi))
 			if b.Table != nil {
@@ -32,27 +32,33 @@ func (v *View) agentBody(c *ui.Context, t *kit.Tokens, i int, text string) {
 	})
 }
 
-// markdownOpts are the options of the chat's Markdown: the chat font and
-// size from the settings, links opened with openLink. They are kept on the
+// markdownOpts are the options of the chat's Markdown: the chat font, size
+// and line spacing (line height and paragraph gap) from the settings, links opened with openLink. They are kept on the
 // view (MyGo keeps parse state per Options) and rebuilt when the settings
 // or the palette change.
 func (v *View) markdownOpts(t *kit.Tokens) *markdown.Options {
 	s := v.a.Prefs.Get()
-	key := fmt.Sprintf("%v|%s|%p", s.ChatSize(), s.ChatFontOrDefault(), t)
+	key := fmt.Sprintf("%v|%s|%s|%p", s.ChatSize(), s.ChatFontOrDefault(), s.ChatLineHeightOrDefault(), t)
 	if v.md == nil || v.mdKey != key {
 		v.mdKey = key
 		v.md = &markdown.Options{
 			Theme: &markdown.Theme{
-				FontSize: s.ChatSize(),
-				Font:     app.ChatFamily(s.ChatFontOrDefault()),
-				CodeFont: kit.MonoFamily(),
-				Link:     t.Accent,
+				FontSize:     s.ChatSize(),
+				Font:         app.ChatFamily(s.ChatFontOrDefault()),
+				CodeFont:     kit.MonoFamily(),
+				Link:         t.Accent,
+				LineHeight:   app.ChatAgentLineHeight * s.ChatLineScale(),
+				BlockSpacing: chatBlockSpacing * s.ChatLineScale(),
 			},
 			OnLink: v.openLink,
 		}
 	}
 	return v.md
 }
+
+// chatBlockSpacing is the Markdown gap between paragraphs at normal line
+// spacing, in ems (MyGo's default).
+const chatBlockSpacing float32 = 0.75
 
 // prose is text in which http(s) URLs are links.
 func (v *View) prose(c *ui.Context, t *kit.Tokens, text string, size, lh float32, mono bool) {

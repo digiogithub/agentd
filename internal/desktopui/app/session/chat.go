@@ -226,7 +226,8 @@ func (v *View) item(c *ui.Context, t *kit.Tokens, i int, it Item) {
 	case ItemUser:
 		ui.Row(c).Justify(ui.End).Children(func() {
 			ui.Column(c).MaxWidthPercent(82).Padding(10, 14).Radius(18, 18, 6, 18).Background(t.AccentBg).Children(func() {
-				v.prose(c, t, it.Text, v.a.Prefs.Get().ChatSize(), 1.45, false)
+				set := v.a.Prefs.Get()
+				v.prose(c, t, it.Text, set.ChatSize(), app.ChatUserLineHeight*set.ChatLineScale(), false)
 			})
 		})
 	case ItemAgent:

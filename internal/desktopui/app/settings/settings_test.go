@@ -12,7 +12,7 @@ import (
 )
 
 func TestTogglesAndThemePersist(t *testing.T) {
-	e := apptest.New(t, "/settings", 1400, 900)
+	e := apptest.New(t, "/settings", 1400, 1400)
 	e.Has("Ajustes", "AVISARME CUANDO", "Un agente espera respuesta", "Permisos, preguntas y planes", "Termina un turno",
 		"Agrupado cada 30 s por sesión", "Una sesión se cierra", "Incluye el código de salida", "Responder desde el aviso",
 		"SILENCIADAS", "Ninguna sesión silenciada", "SEGURIDAD", "Claves SSH", "Dispositivos y tokens", "APARIENCIA",
@@ -65,4 +65,19 @@ func TestChatFontSettings(t *testing.T) {
 		t.Errorf("font %q", got)
 	}
 	e.Has("15.5 pt")
+
+	e.Has("Legible (Atkinson Hyperlegible)", "Lectura (Literata)", "Interlineado", "Compacto", "Normal", "Amplio")
+	if got := e.A.Prefs.Get().ChatLineHeightOrDefault(); got != app.ChatLineNormal {
+		t.Errorf("default line height %q", got)
+	}
+	e.Click("Lectura (Literata)")
+	e.Click("Amplio")
+	if s := e.A.Prefs.Get(); s.ChatFont != app.ChatFontReading || s.ChatLineHeight != app.ChatLineWide {
+		t.Errorf("settings %+v", s)
+	}
+	e.Click("Legible (Atkinson Hyperlegible)")
+	e.Click("Compacto")
+	if s := e.A.Prefs.Get(); s.ChatFont != app.ChatFontLegible || s.ChatLineHeight != app.ChatLineCompact {
+		t.Errorf("settings %+v", s)
+	}
 }

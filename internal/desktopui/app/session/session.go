@@ -232,10 +232,8 @@ func (v *View) header(c *ui.Context, t *kit.Tokens, s backend.Session, view *pro
 	})
 }
 
-// ChatFontLabels name the chat fonts (app.ChatFonts order) in the UI.
-var ChatFontLabels = []string{"Sans", "Serif", "Monoespaciada"}
-
-// fontMenu is the chat's text menu: size up/down/default and the font.
+// fontMenu is the chat's text menu: size up/down/default, the font and the
+// line spacing.
 // Changes are the saved default (Ajustes > Vista chat shows the same).
 func (v *View) fontMenu(c *ui.Context) {
 	set := v.a.Prefs.Get()
@@ -252,11 +250,19 @@ func (v *View) fontMenu(c *ui.Context) {
 		}
 		m.Separator()
 		for i, f := range app.ChatFonts {
-			if m.Item(ChatFontLabels[i]).Checked(set.ChatFontOrDefault() == f).Chosen() {
+			if m.Item(app.ChatFontLabels[i]).Checked(set.ChatFontOrDefault() == f).Chosen() {
 				font := f
 				v.saveChat(func(s *app.Settings) { s.ChatFont = font })
 			}
 		}
+		m.Separator()
+		m.Submenu("Interlineado", func(sm *ui.Menu) {
+			for i, lh := range app.ChatLineHeights {
+				if sm.Item(app.ChatLineLabels[i]).Checked(set.ChatLineHeightOrDefault() == lh).Chosen() {
+					v.saveChat(func(s *app.Settings) { s.ChatLineHeight = lh })
+				}
+			}
+		})
 	})
 }
 

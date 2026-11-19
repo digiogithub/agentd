@@ -118,6 +118,46 @@ func TestPrefsPersist(t *testing.T) {
 	}
 }
 
+// Chat fonts and line spacing: defaults, known values, unknown fallbacks,
+// persistence.
+func TestChatReadingPrefs(t *testing.T) {
+	var s Settings
+	if s.ChatFontOrDefault() != ChatFontSans || s.ChatLineHeightOrDefault() != ChatLineNormal || s.ChatLineScale() != 1 {
+		t.Errorf("defaults %q %q %v", s.ChatFontOrDefault(), s.ChatLineHeightOrDefault(), s.ChatLineScale())
+	}
+	s.ChatFont, s.ChatLineHeight = "comic", "huge"
+	if s.ChatFontOrDefault() != ChatFontSans || s.ChatLineHeightOrDefault() != ChatLineNormal || s.ChatLineScale() != 1 {
+		t.Errorf("unknown values %q %q", s.ChatFontOrDefault(), s.ChatLineHeightOrDefault())
+	}
+	for _, f := range ChatFonts {
+		s.ChatFont = f
+		if s.ChatFontOrDefault() != f {
+			t.Errorf("font %q -> %q", f, s.ChatFontOrDefault())
+		}
+	}
+	if got := ChatFamily(ChatFontLegible); got != kit.FontLegible+", sans-serif" {
+		t.Errorf("legible family %q", got)
+	}
+	if got := ChatFamily(ChatFontReading); got != kit.FontReading+", serif" {
+		t.Errorf("reading family %q", got)
+	}
+	s.ChatLineHeight = ChatLineCompact
+	compact := s.ChatLineScale()
+	s.ChatLineHeight = ChatLineWide
+	if wide := s.ChatLineScale(); !(compact < 1 && wide > 1) {
+		t.Errorf("scales compact %v wide %v", compact, wide)
+	}
+
+	p := filepath.Join(t.TempDir(), "settings.json")
+	a := NewPrefs(p)
+	if err := a.Update(func(s *Settings) { s.ChatFont, s.ChatLineHeight = ChatFontReading, ChatLineWide }); err != nil {
+		t.Fatal(err)
+	}
+	if got := NewPrefs(p).Get(); got.ChatFont != ChatFontReading || got.ChatLineHeight != ChatLineWide {
+		t.Errorf("reloaded %+v", got)
+	}
+}
+
 type fakeShell struct {
 	focused bool
 	sent    []string

@@ -1,9 +1,12 @@
 package kit
 
 import (
+	"io/fs"
 	"os"
+	"path"
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -26,6 +29,30 @@ func TestFontsRegister(t *testing.T) {
 	}
 	if MonoFamily() != FontMono+", monospace" {
 		t.Errorf("mono %q", MonoFamily())
+	}
+}
+
+// Every embedded font is registered and ships with its license text.
+func TestFontFilesAndLicenses(t *testing.T) {
+	listed := map[string]bool{}
+	for _, f := range fontFiles {
+		listed[f.name] = true
+		lic, err := fontFS.ReadFile("fonts/" + f.license)
+		if err != nil || !strings.Contains(string(lic), "SIL Open Font License, Version 1.1") {
+			t.Errorf("%s: license %s missing or not OFL 1.1 (%v)", f.name, f.license, err)
+		}
+	}
+	ttfs, err := fs.Glob(fontFS, "fonts/*.ttf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range ttfs {
+		if !listed[path.Base(p)] {
+			t.Errorf("%s embedded but not registered", p)
+		}
+	}
+	if len(ttfs) != len(fontFiles) {
+		t.Errorf("%d embedded fonts, %d registered", len(ttfs), len(fontFiles))
 	}
 }
 

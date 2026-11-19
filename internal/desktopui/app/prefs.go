@@ -26,9 +26,12 @@ type Settings struct {
 	// ChatFontSize is the size of the chat view's prose in points (0 = the
 	// default, DefaultChatFontSize; kept within MinChatFontSize..MaxChatFontSize).
 	ChatFontSize float32 `json:"chat_font_size,omitempty"`
-	// ChatFont is the chat prose font: ChatFontSans ("" = default), ChatFontSerif
-	// or ChatFontMono.
+	// ChatFont is the chat prose font: ChatFontSans ("" = default),
+	// ChatFontSerif, ChatFontMono, ChatFontLegible or ChatFontReading.
 	ChatFont string `json:"chat_font,omitempty"`
+	// ChatLineHeight is the line spacing of the chat prose: ChatLineCompact,
+	// ChatLineNormal ("" = default) or ChatLineWide.
+	ChatLineHeight string `json:"chat_line_height,omitempty"`
 }
 
 // Chat font defaults and limits.
@@ -43,10 +46,37 @@ const (
 	ChatFontSans  = "sans"
 	ChatFontSerif = "serif"
 	ChatFontMono  = "mono"
+	// ChatFontLegible is Atkinson Hyperlegible Next, ChatFontReading
+	// Literata (both embedded, kit.FontLegible / kit.FontReading).
+	ChatFontLegible = "legible"
+	ChatFontReading = "reading"
 )
 
 // ChatFonts lists the chat fonts in the order the UI offers them.
-var ChatFonts = []string{ChatFontSans, ChatFontSerif, ChatFontMono}
+var ChatFonts = []string{ChatFontSans, ChatFontSerif, ChatFontMono, ChatFontLegible, ChatFontReading}
+
+// ChatFontLabels name the chat fonts (ChatFonts order) in the UI.
+var ChatFontLabels = []string{"Sans", "Serif", "Monoespaciada", "Legible (Atkinson Hyperlegible)", "Lectura (Literata)"}
+
+// Values of Settings.ChatLineHeight.
+const (
+	ChatLineCompact = "compact"
+	ChatLineNormal  = "normal"
+	ChatLineWide    = "wide"
+)
+
+// ChatLineHeights lists the line spacings in the order the UI offers them.
+var ChatLineHeights = []string{ChatLineCompact, ChatLineNormal, ChatLineWide}
+
+// ChatLineLabels name the line spacings (ChatLineHeights order) in the UI.
+var ChatLineLabels = []string{"Compacto", "Normal", "Amplio"}
+
+// Line heights of the chat prose at ChatLineNormal: agent text (Markdown)
+// and the user's own messages.
+const (
+	ChatAgentLineHeight float32 = 1.5
+	ChatUserLineHeight  float32 = 1.45
+)
 
 // ChatSize is ChatFontSize with the default applied and clamped.
 func (s Settings) ChatSize() float32 {
@@ -58,11 +88,32 @@ func (s Settings) ChatSize() float32 {
 
 // ChatFontOrDefault is ChatFont with the default applied ("" or unknown = sans).
 func (s Settings) ChatFontOrDefault() string {
-	switch s.ChatFont {
-	case ChatFontSerif, ChatFontMono:
+	if slices.Contains(ChatFonts, s.ChatFont) {
 		return s.ChatFont
 	}
 	return ChatFontSans
+}
+
+// ChatLineHeightOrDefault is ChatLineHeight with the default applied ("" or
+// unknown = normal).
+func (s Settings) ChatLineHeightOrDefault() string {
+	if slices.Contains(ChatLineHeights, s.ChatLineHeight) {
+		return s.ChatLineHeight
+	}
+	return ChatLineNormal
+}
+
+// ChatLineScale is the factor ChatLineHeight applies to the chat prose's
+// line heights and paragraph gaps: 0.87 compact (agent lines 1.5 -> 1.3),
+// 1 normal, 1.2 wide (1.5 -> 1.8).
+func (s Settings) ChatLineScale() float32 {
+	switch s.ChatLineHeightOrDefault() {
+	case ChatLineCompact:
+		return 0.87
+	case ChatLineWide:
+		return 1.2
+	}
+	return 1
 }
 
 // Values of Settings.AgentsGroup.
@@ -166,6 +217,10 @@ func ChatFamily(font string) string {
 		return "serif"
 	case ChatFontMono:
 		return kit.MonoFamily()
+	case ChatFontLegible:
+		return kit.FontLegible + ", sans-serif"
+	case ChatFontReading:
+		return kit.FontReading + ", serif"
 	}
 	return kit.FontUI + ", sans-serif"
 }

@@ -116,8 +116,8 @@ func (v *View) Build(c *ui.Context, r *ui.Route) {
 	v.keyDialog(c, t)
 }
 
-// chatFont sets the chat view's default text size and font (the chat's
-// "Texto del chat" menu changes the same settings).
+// chatFont sets the chat view's default text size, font and line spacing
+// (the chat's "Texto del chat" menu changes the same settings).
 func (v *View) chatFont(c *ui.Context, t *kit.Tokens, s app.Settings) {
 	group(c, t, func() {
 		ui.Row(c).MinHeight(60).Padding(8, 14).Gap(12).AlignItems(ui.Center).Children(func() {
@@ -138,12 +138,26 @@ func (v *View) chatFont(c *ui.Context, t *kit.Tokens, s app.Settings) {
 		})
 		ui.Column(c).Padding(10, 14).Gap(8).Children(func() {
 			ui.Text(c, "Tipo de letra").FontSize(14.5)
-			sel := slices.Index(app.ChatFonts, s.ChatFontOrDefault())
-			if kit.Segmented(c.Key("chatfont"), &sel, []string{"Sans", "Serif", "Monoespaciada"}, nil) {
-				font := app.ChatFonts[sel]
-				v.save(func(s *app.Settings) { s.ChatFont = font })
+			// One radio tile per font, its name drawn in that font.
+			for i, font := range app.ChatFonts {
+				label := app.ChatFontLabels[i]
+				if kit.SelectTile(c.Key("chatfont:"+font), label, s.ChatFontOrDefault() == font, true, func() {
+					ui.Text(c, label).FontSize(14.5).Font(app.ChatFamily(font))
+				}).MinHeight(44).Clicked() {
+					v.save(func(s *app.Settings) { s.ChatFont = font })
+				}
 			}
-			ui.Text(c, "Así se verá el texto del agente.").FontSize(s.ChatSize()).Font(app.ChatFamily(s.ChatFontOrDefault())).TextColor(t.Secondary)
+		})
+		ui.Column(c).Padding(10, 14).Gap(8).Children(func() {
+			ui.Text(c, "Interlineado").FontSize(14.5)
+			sel := slices.Index(app.ChatLineHeights, s.ChatLineHeightOrDefault())
+			if kit.Segmented(c.Key("chatline"), &sel, app.ChatLineLabels, nil) {
+				lh := app.ChatLineHeights[sel]
+				v.save(func(s *app.Settings) { s.ChatLineHeight = lh })
+			}
+			ui.Text(c, "Así se verá el texto del agente.\nCon párrafos de varias líneas y el interlineado elegido.").
+				FontSize(s.ChatSize()).Font(app.ChatFamily(s.ChatFontOrDefault())).
+				LineHeight(app.ChatAgentLineHeight * s.ChatLineScale()).TextColor(t.Secondary)
 		})
 	})
 }

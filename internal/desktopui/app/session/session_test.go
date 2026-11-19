@@ -185,6 +185,29 @@ func TestChatFontMenu(t *testing.T) {
 	if s := e.A.Prefs.Get(); s.ChatSize() != 15.5 || s.ChatFont != app.ChatFontMono {
 		t.Errorf("settings %+v", s)
 	}
+	e.Click("Texto del chat")
+	if err := e.UI.ChooseMenuItem("Lectura (Literata)"); err != nil {
+		t.Fatal(err)
+	}
+	e.Click("Texto del chat")
+	if err := e.UI.ChooseMenuItem("Interlineado", "Amplio"); err != nil {
+		t.Fatalf("%v (menu %q)", err, e.UI.Menu())
+	}
+	if s := e.A.Prefs.Get(); s.ChatFont != app.ChatFontReading || s.ChatLineHeight != app.ChatLineWide {
+		t.Errorf("settings %+v", s)
+	}
+	e.Settle()
+	e.Click("Texto del chat")
+	if err := e.UI.ChooseMenuItem("Legible (Atkinson Hyperlegible)"); err != nil {
+		t.Fatal(err)
+	}
+	e.Click("Texto del chat")
+	if err := e.UI.ChooseMenuItem("Interlineado", "Compacto"); err != nil {
+		t.Fatal(err)
+	}
+	if s := e.A.Prefs.Get(); s.ChatFont != app.ChatFontLegible || s.ChatLineHeight != app.ChatLineCompact {
+		t.Errorf("settings %+v", s)
+	}
 }
 
 func TestTerminalTabShowsPTYAndSendsKeys(t *testing.T) {
