@@ -2,12 +2,14 @@
 id: AGED-US-0043
 type: story
 title: "Claude Code hook adapter: agentd task sync"
-status: backlog
+status: done
 priority: medium
 parent: AGED-EP-0007
 labels: [dashboard, cli]
 created: 2026-11-22T08:23:33Z
-updated: 2026-11-22T08:23:33Z
+updated: 2026-11-22T08:47:22Z
+started: 2026-11-22T08:42:54Z
+closed: 2026-11-22T08:47:22Z
 ---
 
 ## Goal

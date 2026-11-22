@@ -108,7 +108,7 @@ plain text with one task title per line (all pending). At most 50 tasks.`,
 			})
 		},
 	}
-	cmd.AddCommand(set, add, ls,
+	cmd.AddCommand(set, add, ls, taskSyncCmd(),
 		update("start", "Mark a task in_progress", proto.TaskInProgress),
 		update("block", "Mark a task blocked (optionally with --note)", proto.TaskBlocked),
 		update("done", "Mark a task done", proto.TaskDone))

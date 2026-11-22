@@ -275,6 +275,20 @@ agentd mcp install --print --harness claude    # claude | codex | pando | all
 - Pando: `.pando.toml` → `[MCPServers.agentd]` with `Type = 'stdio'`, `Command`, `Args = ['mcp']`
   (or `mcpServers` in `.pando.json`).
 
+### Task list sync hook (Claude Code)
+
+Agents that already keep a todo list in Claude Code can fill agentd's per-session task list with
+no prompt change. `agentd hooks install --print` prints a `PostToolUse` snippet for
+`~/.claude/settings.json` (matcher `TodoWrite|TaskCreate|TaskUpdate`, command
+`agentd task sync --from claude`) and an instruction block for your projects' `CLAUDE.md` /
+`AGENTS.md` that tells agents to use `agentd_tasks_set` / `agentd_task_update` and to ask the human
+with `agentd_ask` instead of stopping to wait.
+
+`agentd task sync` reads one hook payload from stdin. It is silent (no stdout; `--verbose` reports
+problems on stderr), never starts the daemon and always exits 0 on unknown tools, bad input, no
+daemon or when not running inside an agentd session. Ids: `TodoWrite` todos get `td-<hash of the
+text>` (stable when only the status changes), `TaskCreate`/`TaskUpdate` tasks get `c<harness id>`.
+
 ## systemd (optional)
 
 The daemon is auto-started by the CLI. To run it as a user service instead, see

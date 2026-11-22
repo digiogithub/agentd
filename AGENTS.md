@@ -523,6 +523,12 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   `{revision, counts, current?}` (nil until the first `tasks_set`). Memory only: kept after exit, dropped by `rm`.
   CLI `agentd task set` (stdin: JSON array of tasks or one title per line), `task add TITLE`, `task start|done ID`,
   `task block ID [--note N]`, `task ls [NAME] [--json]` (NAME defaults to the calling session).
+  **Hook sync** (`cmd/agentd/tasksync.go`, `hooks.go`; client only, no daemon op): `agentd task sync [--from claude]`
+  reads one Claude Code PostToolUse payload on stdin and mirrors `TodoWrite` (whole list; ids `td-<sha1(text)[:8]>`,
+  `-2`.. for duplicates; completed → done) and `TaskCreate`/`TaskUpdate` (ids `c<harness id>` from
+  `tool_response.task.id`; `deleted` removes) into `tasks_set`. Dials with `client.Dial` (never autostarts), needs
+  `whoami` = session, hard 3 s timeout, no stdout, exit 0 on anything unexpected (`--verbose` → stderr).
+  `agentd hooks install --print` prints the settings.json snippet and the agent instruction block (never writes files).
 - **Chrome vs content** (`screen.Split`, same idea as Herdr, which keeps pinned chrome out of the text it reads back): a full-height vertical divider (one column holding `│ ┃ ║` on >= 60 % of the rows, interior of the screen) cuts a right-hand info panel off before anything else is detected: transcript, input and dialog come from the left columns only and the panel text is `Regions.Side` (rows without the divider, such as a full-width status bar, stay whole). Profile key `header_regex` marks the top rows that are chrome (tab bar, title strip: `RegionHeader`, `Regions.Header`), next to `footer_regex` for the status bar. Built-in `pando`: header `\bChat\b.*\bEditor\+Chat\b`, footer `ctrl\+h help`, busy `Thinking\.\.\.|press enter to`.
 - **Idle detection** (per harness profile, configurable): idle ⇔ no PTY output for `idle_ms`
   (default 1500) AND (no `prompt_regex` configured OR it matches the current screen text) AND no

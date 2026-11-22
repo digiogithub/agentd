@@ -1,0 +1,1 @@
+{"hook_event_name":"PostToolUse","tool_name":"TodoWrite","tool_input":{"todos":[{"content":"Read the code","status":"completed","activeForm":"Reading the code"},{"content":"Write tests","status":"completed","activeForm":"Writing tests"},{"content":"Ship it","status":"in_progress","activeForm":"Shipping"}]},"tool_response":{}}
