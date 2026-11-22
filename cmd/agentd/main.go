@@ -753,6 +753,7 @@ func readCmd() *cobra.Command {
 }
 
 func replyCmd() *cobra.Command {
+	var noNotify bool
 	cmd := &cobra.Command{
 		Use:   "reply ID TEXT...",
 		Short: `Reply to a message ("-" reads the body from stdin)`,
@@ -775,7 +776,12 @@ func replyCmd() *cobra.Command {
 				return err
 			}
 			defer c.Close()
-			m, err := c.Reply(id, body)
+			var m proto.Message
+			if noNotify {
+				m, err = c.ReplyQuiet(id, body)
+			} else {
+				m, err = c.Reply(id, body)
+			}
 			if err != nil {
 				return err
 			}
@@ -786,6 +792,7 @@ func replyCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&noNotify, "no-notify", false, "record the reply as delivered without injecting it into the recipient session")
 	return cmd
 }
 

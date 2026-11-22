@@ -32,7 +32,7 @@ func TestBoardAndReply(t *testing.T) {
 	if pando == nil || len(pando.Tasks) != 7 || len(pando.Questions) != 1 || pando.Questions[0].ID != QuestionID {
 		t.Fatalf("pando board %+v", pando)
 	}
-	if _, err := f.Reply(ctx, "estudio", QuestionID, "Cambio aparte"); err != nil {
+	if _, err := f.Reply(ctx, "estudio", QuestionID, "Cambio aparte", true); err != nil {
 		t.Fatal(err)
 	}
 	bs = <-ch
@@ -47,7 +47,7 @@ func TestBoardAndReply(t *testing.T) {
 	// A view-only relay device has no mailbox.
 	f.SetRelayScope(RelayHost.ID, backend.ScopeView)
 	id := f.Ask("claude@landing", "¿Publico?")
-	if _, err := f.Reply(ctx, RelayHost.ID, id, "Sí"); proto.CodeOf(err) != proto.CodeForbidden {
+	if _, err := f.Reply(ctx, RelayHost.ID, id, "Sí", true); proto.CodeOf(err) != proto.CodeForbidden {
 		t.Errorf("reply from a view device: %v", err)
 	}
 }

@@ -360,11 +360,11 @@ func (v *View) questionCard(c *ui.Context, t *kit.Tokens, it Item, now time.Time
 		} else if !operate {
 			dest = 0
 		}
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			in := ui.TextInput(c.Key("draft"), d).Placeholder("O escribe una respuesta…").Label("Respuesta a "+s.Name).
-				Height(38).Padding(0, 10).Background(t.Bg).Border(1, t.WaitingBorder).Radius(10).FontSize(13).Grow(1).Shrink(1).MinWidth(0)
+		in := ui.TextInput(c.Key("draft"), d).Placeholder("O escribe una respuesta…").Label("Respuesta a "+s.Name).
+			Height(44).Padding(0, 12).Background(t.Bg).Border(1, t.WaitingBorder).Radius(10).FontSize(13).FillWidth().MinWidth(0)
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Justify(ui.End).Children(func() {
 			if mail && operate {
-				ui.Column(c).Width(176).Shrink(0).AlignItems(ui.Stretch).Children(func() {
+				ui.Column(c).Width(176).Height(44).Shrink(0).AlignItems(ui.Stretch).Children(func() {
 					if kit.Segmented(c.Key("dest"), &dest, []string{"Buzón", "Prompt"}, nil) {
 						v.dest[key] = dest
 					}
@@ -389,7 +389,7 @@ func (v *View) reply(key string, s backend.Session, id int64, body string) {
 	a := v.a
 	v.busy[key] = true
 	a.Go(func(ctx context.Context) {
-		_, err := a.Backend.Reply(ctx, s.HostID, id, body)
+		_, err := a.Backend.Reply(ctx, s.HostID, id, body, true)
 		a.Update(func() {
 			delete(v.busy, key)
 			if err != nil {
@@ -404,7 +404,7 @@ func (v *View) reply(key string, s backend.Session, id int64, body string) {
 
 // promptAnswer types the answer into the agent's prompt (act prompt with
 // the view's revision and epoch; forced while it works, as the chat does).
-// The mailbox question stays open until the agent answers it.
+// On success the question is closed with a quiet reply (notify=false).
 func (v *View) promptAnswer(key string, s backend.Session, view *proto.View, q proto.BoardQuestion, text string) {
 	a := v.a
 	args := proto.ActArgs{Name: s.Name, Action: proto.ActPrompt, Client: "agentd-desktop",
@@ -418,6 +418,12 @@ func (v *View) promptAnswer(key string, s backend.Session, view *proto.View, q p
 	v.busy[key] = true
 	a.Go(func(ctx context.Context) {
 		_, err := a.Backend.Act(ctx, s, args)
+		// The prompt reached the agent: close the question and keep the
+		// answer on record without injecting it a second time.
+		var rerr error
+		if err == nil && q.ID != 0 {
+			_, rerr = a.Backend.Reply(ctx, s.HostID, q.ID, text, false)
+		}
 		a.Update(func() {
 			delete(v.busy, key)
 			if err != nil {
@@ -429,6 +435,10 @@ func (v *View) promptAnswer(key string, s backend.Session, view *proto.View, q p
 				return
 			}
 			delete(v.drafts, key)
+			if rerr != nil {
+				a.Toasts.Error("Enviado al prompt, pero no se pudo cerrar la pregunta", app.ErrorText(rerr))
+				return
+			}
 			a.Toasts.Success("Enviado al prompt de " + s.Name)
 		})
 	})

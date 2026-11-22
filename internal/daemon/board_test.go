@@ -1,7 +1,9 @@
 package daemon_test
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/digiogithub/agentd/internal/client"
 	"github.com/digiogithub/agentd/internal/config"
@@ -117,5 +119,55 @@ func TestBoardOverRelay(t *testing.T) {
 		if _, err := rc.TasksSet([]proto.Task{{Title: "x"}}); client.ErrorCode(err) != proto.CodeForbidden {
 			t.Errorf("device tasks_set: %v", err)
 		}
+	}
+}
+
+// A reply with notify=false closes the question and is stored as delivered:
+// the delivery loop never types it into the asking session.
+func TestReplyNotifyFalse(t *testing.T) {
+	e := startServer(t, config.Default(), nil)
+	h := e.dial(t)
+	mustRun(t, h, "a", "cat")
+	ca := dialAs(t, e, "a")
+	me, err := h.Whoami()
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err := ca.Send(proto.SendArgs{To: me.Identity, Body: "deploy?", Kind: "question", Options: []string{"yes", "no"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := h.ReplyQuiet(q.ID, "quiet-answer-xyz")
+	if err != nil || r.Recipient != "a" || r.State != "delivered" || r.ReplyTo == nil || *r.ReplyTo != q.ID {
+		t.Fatalf("quiet reply = %+v %v", r, err)
+	}
+	time.Sleep(600 * time.Millisecond)
+	in, err := h.InboxWith(proto.InboxArgs{As: "a", All: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, m := range in.Messages {
+		if m.ID == r.ID {
+			found = true
+			if m.State != "delivered" {
+				t.Errorf("reply state %q", m.State)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("reply missing from inbox: %+v", in.Messages)
+	}
+	if out, err := h.Dump(proto.DumpArgs{Name: "a"}); err != nil || strings.Contains(out, "quiet-answer-xyz") || strings.Contains(out, "agentd msg") {
+		t.Errorf("reply injected into the session: %q %v", out, err)
+	}
+	b, err := h.Board("")
+	if err != nil || len(b.Sessions[0].Questions) != 0 {
+		t.Fatalf("board after quiet reply = %+v %v", b, err)
+	}
+	// The default still queues.
+	q2, _ := ca.Send(proto.SendArgs{To: me.Identity, Body: "again?", Kind: "question"})
+	if r2, err := h.Reply(q2.ID, "loud"); err != nil || r2.State != "queued" {
+		t.Fatalf("loud reply = %+v %v", r2, err)
 	}
 }

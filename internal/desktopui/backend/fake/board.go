@@ -16,6 +16,7 @@ type ReplyCall struct {
 	HostID string
 	ID     int64
 	Body   string
+	Notify bool
 }
 
 // QuestionID is the id of the seeded open question (pando@agentd asks
@@ -125,10 +126,10 @@ func (f *Fake) WatchBoard(ctx context.Context) <-chan []backend.HostBoard {
 
 // Reply implements backend.Backend: it answers an open question (or any
 // message) and closes the question.
-func (f *Fake) Reply(ctx context.Context, hostID string, id int64, body string) (*proto.Message, error) {
+func (f *Fake) Reply(ctx context.Context, hostID string, id int64, body string, notify bool) (*proto.Message, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.replies = append(f.replies, ReplyCall{HostID: hostID, ID: id, Body: body})
+	f.replies = append(f.replies, ReplyCall{HostID: hostID, ID: id, Body: body, Notify: notify})
 	h := f.hostLocked(hostID)
 	if h == nil {
 		return nil, proto.Errorf(proto.CodeNotFound, "no such host %q", hostID)
@@ -149,7 +150,7 @@ func (f *Fake) Reply(ctx context.Context, hostID string, id int64, body string) 
 			}
 			r.questions = slices.Delete(r.questions, i, i+1)
 			to := r.s.Name
-			m := proto.Message{ID: f.nextMsg, Sender: "human:jose", Recipient: to, Body: body, ReplyTo: &id, State: "queued", CreatedAt: time.Now()}
+			m := proto.Message{ID: f.nextMsg, Sender: "human:jose", Recipient: to, Body: body, ReplyTo: &id, State: replyState(notify), CreatedAt: time.Now()}
 			f.nextMsg++
 			f.messages = append(f.messages, m)
 			f.publishLocked()
@@ -214,4 +215,11 @@ func (f *Fake) Ask(name, body string, options ...string) int64 {
 	}
 	f.publishLocked()
 	return id
+}
+
+func replyState(notify bool) string {
+	if notify {
+		return "queued"
+	}
+	return "delivered"
 }

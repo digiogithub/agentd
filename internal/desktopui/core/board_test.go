@@ -97,7 +97,7 @@ func TestWatchBoardRefreshesOnEvents(t *testing.T) {
 
 	// Reply goes to op reply and refreshes the board.
 	before := len(fd.boardCalls())
-	m, err := b.Reply(ctx, backend.LocalHostID, 7, "Sí")
+	m, err := b.Reply(ctx, backend.LocalHostID, 7, "Sí", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestWatchBoardRefreshesOnEvents(t *testing.T) {
 	fd.mu.Lock()
 	reps := append([]proto.ReplyArgs(nil), fd.replies...)
 	fd.mu.Unlock()
-	if len(reps) != 1 || reps[0].ID != 7 || reps[0].Body != "Sí" {
+	if len(reps) != 1 || reps[0].ID != 7 || reps[0].Body != "Sí" || reps[0].Notify == nil || *reps[0].Notify {
 		t.Errorf("replies %+v", reps)
 	}
 	waitFor(t, "refresh after reply", func() bool { return len(fd.boardCalls()) > before })

@@ -364,6 +364,15 @@ func (c *Client) Reply(id int64, body string) (proto.Message, error) {
 	return r, err
 }
 
+// ReplyQuiet replies like Reply but with notify=false: the reply is stored as
+// delivered and never injected into the recipient session.
+func (c *Client) ReplyQuiet(id int64, body string) (proto.Message, error) {
+	var r proto.Message
+	f := false
+	err := c.Call(proto.OpReply, proto.ReplyArgs{ID: id, Body: body, Notify: &f}, &r)
+	return r, err
+}
+
 // Whoami returns the caller's identity as resolved by the daemon.
 func (c *Client) Whoami() (proto.WhoamiResult, error) {
 	var r proto.WhoamiResult

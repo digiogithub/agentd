@@ -581,3 +581,17 @@ func TestConcurrentSend(t *testing.T) {
 		t.Fatalf("replies = %d, want %d", replies, want)
 	}
 }
+
+func TestReplyNotifyFalseStoresDelivered(t *testing.T) {
+	s, _ := openTest(t)
+	ctx := context.Background()
+	m := mustSend(t, s, "a", "b", "", "q")
+	r, err := s.ReplyNotify(ctx, "b", m.ID, "ok", false)
+	if err != nil || r.State != StateDelivered || r.DeliveredAt == nil {
+		t.Fatalf("reply = %+v %v", r, err)
+	}
+	o, _ := s.Get(ctx, m.ID)
+	if o.State != StateReplied {
+		t.Errorf("original %q", o.State)
+	}
+}

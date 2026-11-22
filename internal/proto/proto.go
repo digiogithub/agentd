@@ -721,6 +721,9 @@ type ReadArgs struct {
 type ReplyArgs struct {
 	ID   int64  `json:"id"`
 	Body string `json:"body"`
+	// Notify false stores the reply as delivered: it is never injected into
+	// the recipient session. Nil = true (default).
+	Notify *bool `json:"notify,omitempty"`
 }
 
 // PurgeArgs deletes mailbox messages. Filters combine (AND): Before (RFC

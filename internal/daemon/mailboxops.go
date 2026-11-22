@@ -231,13 +231,19 @@ func (s *Server) reply(ctx context.Context, who caller, a proto.ReplyArgs) (prot
 	if orig.Recipient == who.id && !s.Cfg.Allowed(orig.Sender, who.id) {
 		return proto.Message{}, proto.Errorf(proto.CodeForbidden, "reply: %q is not allowed to message %q", who.id, orig.Sender)
 	}
-	m, err := s.Store.Reply(ctx, who.id, a.ID, a.Body)
+	notify := a.Notify == nil || *a.Notify
+	m, err := s.Store.ReplyNotify(ctx, who.id, a.ID, a.Body, notify)
 	if err != nil {
 		return proto.Message{}, mailboxErr(err, a.ID, who.id)
 	}
-	s.Log.Info("reply queued", "id", m.ID, "from", m.Sender, "to", m.Recipient, "reply_to", a.ID, "via", who.via)
-	s.publishMail(proto.EvMailQueued, m.ID, m.Sender, m.Recipient)
-	s.kick(m.Recipient)
+	if notify {
+		s.Log.Info("reply queued", "id", m.ID, "from", m.Sender, "to", m.Recipient, "reply_to", a.ID, "via", who.via)
+		s.publishMail(proto.EvMailQueued, m.ID, m.Sender, m.Recipient)
+		s.kick(m.Recipient)
+	} else {
+		s.Log.Info("reply recorded", "id", m.ID, "from", m.Sender, "to", m.Recipient, "reply_to", a.ID, "via", who.via)
+		s.publishMail(proto.EvMailDelivered, m.ID, m.Sender, m.Recipient)
+	}
 	w := toWire(m)
 	if !s.knownRecipient(m.Recipient) {
 		w.Warning = fmt.Sprintf("the original sender %q is not a known session or human address: the reply is stored but may never be delivered", m.Recipient)

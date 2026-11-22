@@ -418,8 +418,10 @@ type Backend interface {
 	Send(ctx context.Context, hostID string, args proto.SendArgs) (*proto.Message, error)
 	// Reply answers message id (an agent's question) as the host's human
 	// user (op reply): the reply goes to the asking session and closes the
-	// question. Relay devices need CapMailbox.
-	Reply(ctx context.Context, hostID string, id int64, body string) (*proto.Message, error)
+	// question. notify false stores the reply as delivered (never injected
+	// into the session: the answer is on record only). Relay devices need
+	// CapMailbox.
+	Reply(ctx context.Context, hostID string, id int64, body string, notify bool) (*proto.Message, error)
 
 	// Board (agentd hosts)
 	// WatchBoard streams the boards of every host whose daemon is up

@@ -171,14 +171,18 @@ func (m *hostMon) resetBoardLocked() {
 }
 
 // Reply answers message id as the host's human user (op reply).
-func (b *Backend) Reply(ctx context.Context, hostID string, id int64, body string) (*proto.Message, error) {
+func (b *Backend) Reply(ctx context.Context, hostID string, id int64, body string, notify bool) (*proto.Message, error) {
 	if h, relay := b.relayHost(hostID); relay && !h.Allows(backend.CapMailbox) {
 		return nil, proto.Errorf(proto.CodeForbidden, "this device has no mailbox on %s", h.Name)
 	}
 	var m proto.Message
 	err := b.withClient(ctx, hostID, func(c *client.Client) error {
 		var err error
-		m, err = c.Reply(id, body)
+		if notify {
+			m, err = c.Reply(id, body)
+		} else {
+			m, err = c.ReplyQuiet(id, body)
+		}
 		return err
 	})
 	if err != nil {

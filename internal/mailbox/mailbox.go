@@ -594,6 +594,13 @@ func ReplySubject(orig Message) string {
 // with reply_to set to id, and marks the original as replied, atomically.
 // Only the original recipient may reply (ErrForbidden).
 func (s *Store) Reply(ctx context.Context, from string, id int64, body string) (Message, error) {
+	return s.ReplyNotify(ctx, from, id, body, true)
+}
+
+// ReplyNotify is Reply with control over delivery: with notify false the new
+// message is stored as delivered, so the delivery loop never injects it into
+// the recipient session (the answer is on record only).
+func (s *Store) ReplyNotify(ctx context.Context, from string, id int64, body string, notify bool) (Message, error) {
 	from = strings.TrimSpace(from)
 	if from == "" {
 		return Message{}, fmt.Errorf("%w: empty sender", ErrInvalid)
@@ -628,6 +635,12 @@ func (s *Store) Reply(ctx context.Context, from string, id int64, body string) (
 		return Message{}, err
 	}
 	ms := now.UnixMilli()
+	if !notify {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE messages SET state = 'delivered', delivered_at = ? WHERE id = ?`, ms, newID); err != nil {
+			return Message{}, fmt.Errorf("mailbox: reply: mark #%d delivered: %w", newID, err)
+		}
+	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE messages SET
 			state = 'replied',

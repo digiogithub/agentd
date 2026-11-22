@@ -88,7 +88,7 @@ func TestAnswerQuestionWithOption(t *testing.T) {
 	e := newPanel(t)
 	e.Click("Responder «Cambio aparte» a pando@agentd")
 	reps := e.F.Replies()
-	if len(reps) != 1 || reps[0] != (fake.ReplyCall{HostID: "estudio", ID: fake.QuestionID, Body: "Cambio aparte"}) {
+	if len(reps) != 1 || reps[0] != (fake.ReplyCall{HostID: "estudio", ID: fake.QuestionID, Body: "Cambio aparte", Notify: true}) {
 		t.Fatalf("replies %+v", reps)
 	}
 	if !e.Eventually(time.Second, func() bool { return !e.UI.HasText("Cambio aparte") }) {
@@ -120,8 +120,13 @@ func TestFreeTextToPromptForcesWhileWorking(t *testing.T) {
 		!strings.HasSuffix(a.Text, ": Sepáralo") || !strings.Contains(a.Text, "#160") {
 		t.Errorf("act %+v on %s", a, acts[0].Key)
 	}
-	if len(e.F.Replies()) != 0 {
-		t.Errorf("prompt also replied: %+v", e.F.Replies())
+	// The question is closed by a quiet reply with the same answer.
+	reps := e.F.Replies()
+	if len(reps) != 1 || reps[0].ID != fake.QuestionID || reps[0].Body != "Sepáralo" || reps[0].Notify {
+		t.Errorf("replies after the prompt: %+v", reps)
+	}
+	if !e.Eventually(time.Second, func() bool { return panel.AttentionCount(e.A) == 3 }) {
+		t.Errorf("question still open after the prompt answer: %d", panel.AttentionCount(e.A))
 	}
 }
 
@@ -134,7 +139,7 @@ func TestFreeTextToMailboxReplies(t *testing.T) {
 	e.Settle()
 	e.Click("Enviar respuesta a pando@agentd")
 	reps := e.F.Replies()
-	if len(reps) != 1 || reps[0].Body != "Mejor aparte" || reps[0].ID != fake.QuestionID {
+	if len(reps) != 1 || reps[0].Body != "Mejor aparte" || reps[0].ID != fake.QuestionID || !reps[0].Notify {
 		t.Fatalf("replies %+v", reps)
 	}
 }
