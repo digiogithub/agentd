@@ -50,6 +50,8 @@ type View struct {
 	detail    *session.View
 	// kill is the Terminar confirmation of the list rows.
 	kill *app.Terminator
+	// sel is the selection mode (several sessions, one prompt).
+	sel broadcast
 	// aliases of each host (loaded once; grouping resolves labels with them).
 	aliases map[string][]proto.AliasInfo
 	loading map[string]bool
@@ -64,7 +66,7 @@ type View struct {
 // New returns the agents area.
 func New(a *app.Context) *View {
 	return &View{a: a, busy: map[string]bool{}, Now: time.Now, kill: app.NewTerminator(a),
-		aliases: map[string][]proto.AliasInfo{}, loading: map[string]bool{}}
+		aliases: map[string][]proto.AliasInfo{}, loading: map[string]bool{}, sel: broadcast{picked: map[string]bool{}}}
 }
 
 // byProject reports whether the list is grouped by project.
@@ -128,6 +130,7 @@ func (v *View) Build(c *ui.Context, r *ui.Route) {
 		}
 		list.Children(func() {
 			v.inbox(c, t, key)
+			v.broadcastBar(c, t)
 			v.kill.Build(c)
 		})
 		if wide {
@@ -218,6 +221,23 @@ func (v *View) inbox(c *ui.Context, t *kit.Tokens, open string) {
 		"Trabajando · " + itoa(count(app.GroupWorking)),
 		"Listos · " + itoa(count(app.GroupDone)),
 	}
+	show := func(g app.Group) bool {
+		switch v.filter {
+		case FilterWaiting:
+			return g == app.GroupNeedsAnswer
+		case FilterWorking:
+			return g == app.GroupWorking
+		case FilterDone:
+			return g == app.GroupDone
+		}
+		return true
+	}
+	var shown []entry
+	for _, e := range visible {
+		if show(e.g) {
+			shown = append(shown, e)
+		}
+	}
 	overline := app.Plural(len(a.Live.Online()), "host", "hosts") + " · " + app.Plural(len(a.Live.Sessions), "sesión", "sesiones")
 	kit.ScreenHeader(c, overline, "Agentes", func() {
 		icon, label := kit.IconSearch, "Buscar"
@@ -229,6 +249,13 @@ func (v *View) inbox(c *ui.Context, t *kit.Tokens, open string) {
 			if !v.searching {
 				v.query = ""
 			}
+		}
+		selIcon, selLabel := kit.IconPanel, "Seleccionar varios"
+		if v.sel.on {
+			selIcon, selLabel = kit.IconClose, "Salir de la selección"
+		}
+		if kit.IconButton(c.Key("select"), selIcon, selLabel).Clicked() {
+			v.toggleSelecting()
 		}
 		if kit.Button(c.Key("new"), kit.ButtonOpts{Variant: kit.Primary, Icon: kit.IconPlus, Label: "Nueva sesión", Height: 36,
 			Round: true, Tooltip: "Nueva sesión (Ctrl+N)"}).Clicked() {
@@ -256,25 +283,11 @@ func (v *View) inbox(c *ui.Context, t *kit.Tokens, open string) {
 				}
 			}
 		})
+		if v.sel.on {
+			v.pickBar(c, t, shown)
+		}
 	})
-	show := func(g app.Group) bool {
-		switch v.filter {
-		case FilterWaiting:
-			return g == app.GroupNeedsAnswer
-		case FilterWorking:
-			return g == app.GroupWorking
-		case FilterDone:
-			return g == app.GroupDone
-		}
-		return true
-	}
-	anyShown := false
-	for _, e := range visible {
-		if show(e.g) {
-			anyShown = true
-		}
-	}
-	if !anyShown {
+	if len(shown) == 0 {
 		msg := "No hay sesiones en este filtro. Lanza una con «Nueva sesión»."
 		switch {
 		case !a.Live.SessionsLoaded:
@@ -406,6 +419,10 @@ func (v *View) head(c *ui.Context, t *kit.Tokens, s backend.Session, sub, pill s
 }
 
 func (v *View) card(c *ui.Context, t *kit.Tokens, e entry, selected bool) {
+	if v.sel.on {
+		v.pickRow(c, t, e)
+		return
+	}
 	s, view := e.s, e.view
 	border := t.Border
 	if selected {
