@@ -2,12 +2,13 @@
 id: AGED-US-0050
 type: story
 title: "Desktop: select several agents and send one prompt to all"
-status: in_progress
+status: done
 priority: medium
 labels: [desktop]
 created: 2026-11-22T20:18:39Z
-updated: 2026-11-22T20:18:39Z
+updated: 2026-11-22T20:21:07Z
 started: 2026-11-22T20:18:39Z
+closed: 2026-11-22T20:21:07Z
 ---
 
 ## Goal
