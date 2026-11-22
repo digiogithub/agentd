@@ -50,6 +50,7 @@ const (
 	OpTasksSet   = "tasks_set"
 	OpTaskUpdate = "task_update"
 	OpTasks      = "tasks"
+	OpBoard      = "board"
 )
 
 // MaxLineSize bounds one JSON request or response line.

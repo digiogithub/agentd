@@ -2,13 +2,14 @@
 id: AGED-US-0042
 type: story
 title: Relay gate and hc compatibility review for tasks, questions and board
-status: in_progress
+status: done
 priority: medium
 parent: AGED-EP-0007
 labels: [dashboard, relay]
 created: 2026-11-22T08:23:31Z
-updated: 2026-11-22T08:42:52Z
+updated: 2026-11-22T08:53:42Z
 started: 2026-11-22T08:42:52Z
+closed: 2026-11-22T08:53:42Z
 ---
 
 ## Goal

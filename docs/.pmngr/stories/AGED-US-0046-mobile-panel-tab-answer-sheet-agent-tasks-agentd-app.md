@@ -2,12 +2,13 @@
 id: AGED-US-0046
 type: story
 title: "Mobile: Panel tab, answer sheet, agent tasks (agentd-app)"
-status: backlog
+status: in_progress
 priority: high
 parent: AGED-EP-0007
 labels: [dashboard, mobile]
 created: 2026-11-22T08:23:36Z
-updated: 2026-11-22T08:23:36Z
+updated: 2026-11-22T08:53:44Z
+started: 2026-11-22T08:53:44Z
 ---
 
 ## Goal

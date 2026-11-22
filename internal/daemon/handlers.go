@@ -348,6 +348,16 @@ func (s *Server) dispatch(ctx context.Context, req proto.Request, peer peerInfo)
 			return nil, err
 		}
 		return s.taskUpdate(who, a)
+	case proto.OpBoard:
+		var a proto.BoardArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.board(ctx, who, a)
 	case proto.OpTasks:
 		var a proto.NameArgs
 		if err := req.DecodeArgs(&a); err != nil {

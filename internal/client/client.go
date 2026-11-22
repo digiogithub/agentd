@@ -499,6 +499,13 @@ func (c *Client) Tasks(name string) (proto.TasksResult, error) {
 	return r, err
 }
 
+// Board returns the dashboard of the host (humans and relay devices only).
+func (c *Client) Board(sinceDigest string) (proto.BoardResult, error) {
+	var r proto.BoardResult
+	err := c.Call(proto.OpBoard, proto.BoardArgs{SinceDigest: sinceDigest}, &r)
+	return r, err
+}
+
 // Relay calls op relay (humans on this host only; see proto.RelayArgs).
 func (c *Client) Relay(a proto.RelayArgs) (proto.RelayResult, error) {
 	var r proto.RelayResult

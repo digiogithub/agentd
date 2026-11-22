@@ -46,7 +46,7 @@ func relayGate(d *relayDevice, req *proto.Request) (string, error) {
 	}
 
 	switch req.Op {
-	case proto.OpPing, proto.OpWhoami, proto.OpInfo, proto.OpLs, proto.OpSubscribe:
+	case proto.OpPing, proto.OpWhoami, proto.OpInfo, proto.OpLs, proto.OpSubscribe, proto.OpBoard:
 		return "", nil
 	case proto.OpView, proto.OpTurns, proto.OpTasks, proto.OpDump:
 		return session()

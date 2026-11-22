@@ -441,8 +441,10 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   `agentd relay status|devices|revoke ID|NAME` (revoke closes the device's tunnels at once). **Device identity**: a
   relay stream is served by `serveConn` with `peerInfo.device` set; `resolveCaller` answers `human:<user>` with `via:
   "relay"` and the device (owner devices act for the host's user); `whoami` adds `device`. Every request first goes
-  through `relayGate` (`internal/daemon/relaygate.go`, deny by default): any scope `ping whoami info ls subscribe view
-  turns tasks dump attach` (view: attach forced `observe`; `tasks_set`/`task_update` are denied: session-only writes); `operate` + `act view_ack`, and owners `send inbox read reply`;
+  through `relayGate` (`internal/daemon/relaygate.go`, deny by default): any scope `ping whoami info ls subscribe board view
+  turns tasks dump attach` (view: attach forced `observe`; `tasks_set`/`task_update` are denied: session-only writes; a device
+  never sends `kind: "question"`, it resolves as a human; `board` filters sessions by the device's globs and gives
+  `questions`/`unread_human` only to owner devices); `operate` + `act view_ack`, and owners `send inbox read reply`;
   `admin` + `run` (no `cmd`/`env`/`env_base`: a harness/target/profile only; a session-limited device must give a
   matching `name`), `kill rm label`, `doc_get doc_set` (not for session-limited devices); never `type purge shutdown
   hc_listener claim queue peers relay`. The device's `sessions` globs filter `ls`, the subscribe snapshot and events (a
@@ -721,7 +723,14 @@ names `[A-Za-z0-9._-]{1,64}`, value <=1 MiB of JSON (`daemon.MaxDocBytes`); huma
 compacted in `docs.json`, atomic rename; a broken file is renamed `.bad` and the store starts empty; publishes
 `doc.changed {name, version}` with no session, so session subscribers never see it),
 `turns {name}` (→ `{turns[]}`, see "Turn records"), `tasks_set {tasks[]}` / `task_update {id, status?, title?, note?}`
-(sessions only, → `{tasks, revision}`) and `tasks {name}` (→ `{name, tasks, revision}`), see "Task lists"; `hc_listener {action}` (humans only, see "Herdr compatibility"),
+(sessions only, → `{tasks, revision}`) and `tasks {name}` (→ `{name, tasks, revision}`), see "Task lists";
+`board {since_digest?}` (humans on the socket; a session is `forbidden`; → `{sessions[{name, status, attention, turn, preview,
+tasks[], questions[{id, body, options, task, created_at}]}], unread_human, digest, not_modified?}`: every registered session in
+`ls` order with its full task list and the open questions it asked the caller's human mailbox (oldest first);
+`unread_human` = unread mail of the caller; `digest` = `d` + 16 hex of SHA-256 over session name, view revision, status, task
+revision and open question ids, plus the unread count; a matching `since_digest` answers `{not_modified, digest}` with no
+sessions; relay devices: any scope, session globs filter, questions/unread only for owner devices; CLI `agentd board [--json]`,
+answer with `agentd reply ID TEXT`); `hc_listener {action}` (humans only, see "Herdr compatibility"),
 `relay {action: status|invite|pending|approve|cancel|devices|revoke, ...}` (humans on the socket only, see "Relay transport"), `peers`, `whoami`, `attach {name, cols, rows, observe?, passive?, history?}`, `shutdown`. Every request may carry
 `"auth": {"id", "token"}` (filled by `internal/client` from `AGENTD_ID` / `AGENTD_TOKEN`).
 

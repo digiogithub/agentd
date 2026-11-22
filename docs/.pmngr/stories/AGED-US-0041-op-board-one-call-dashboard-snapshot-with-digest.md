@@ -2,13 +2,14 @@
 id: AGED-US-0041
 type: story
 title: "Op board: one-call dashboard snapshot with digest"
-status: in_progress
+status: done
 priority: high
 parent: AGED-EP-0007
 labels: [dashboard, daemon]
 created: 2026-11-22T08:23:30Z
-updated: 2026-11-22T08:42:51Z
+updated: 2026-11-22T08:53:41Z
 started: 2026-11-22T08:42:51Z
+closed: 2026-11-22T08:53:41Z
 ---
 
 ## Goal
