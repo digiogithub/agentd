@@ -11,6 +11,7 @@ package mailbox
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -62,7 +63,17 @@ type Message struct {
 	// message). It is kept after the claim.
 	Queue     string     `json:"queue,omitempty"`
 	ClaimedAt *time.Time `json:"claimed_at,omitempty"`
+	// Kind is "" for an ordinary message or KindQuestion for a question an
+	// agent asks a human; the answer is an ordinary reply. Options are the
+	// suggested answers of a question; Task is the sender's task id it
+	// relates to (not checked against any list).
+	Kind    string   `json:"kind,omitempty"`
+	Options []string `json:"options,omitempty"`
+	Task    string   `json:"task,omitempty"`
 }
+
+// KindQuestion is the Message.Kind of a question to a human.
+const KindQuestion = "question"
 
 // Unread reports whether the message has not been read yet (queued or delivered).
 func (m Message) Unread() bool {
@@ -202,6 +213,13 @@ var migrations = []string{
 	ALTER TABLE messages_v3 RENAME TO messages;
 	CREATE INDEX messages_recipient_state ON messages(recipient, state);
 	CREATE INDEX messages_created_at ON messages(created_at);`,
+
+	// v4: questions to humans. Plain ADD COLUMN (no constraint changes), so
+	// ids, the AUTOINCREMENT counter and every reference stay as they are.
+	`ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT '';
+	ALTER TABLE messages ADD COLUMN options TEXT;
+	ALTER TABLE messages ADD COLUMN task TEXT;
+	CREATE INDEX messages_kind_state ON messages(kind, state) WHERE kind <> '';`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {
@@ -277,7 +295,7 @@ func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
 }
 
 const selectCols = `id, sender, recipient, subject, body, reply_to, state, attempts,
-	created_at, delivered_at, read_at, replied_at, queue, claimed_at`
+	created_at, delivered_at, read_at, replied_at, queue, claimed_at, kind, options, task`
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -292,9 +310,11 @@ func scanMessage(r rowScanner) (Message, error) {
 		delivered, read, repl sql.NullInt64
 		queue                 sql.NullString
 		claimed               sql.NullInt64
+		options, task         sql.NullString
 	)
 	if err := r.Scan(&m.ID, &m.Sender, &m.Recipient, &m.Subject, &m.Body, &replyTo,
-		&state, &m.Attempts, &created, &delivered, &read, &repl, &queue, &claimed); err != nil {
+		&state, &m.Attempts, &created, &delivered, &read, &repl, &queue, &claimed,
+		&m.Kind, &options, &task); err != nil {
 		return Message{}, err
 	}
 	if replyTo.Valid {
@@ -308,6 +328,10 @@ func scanMessage(r rowScanner) (Message, error) {
 	m.RepliedAt = msPtr(repl)
 	m.Queue = queue.String
 	m.ClaimedAt = msPtr(claimed)
+	if options.Valid && options.String != "" {
+		_ = json.Unmarshal([]byte(options.String), &m.Options)
+	}
+	m.Task = task.String
 	return m, nil
 }
 
@@ -372,6 +396,12 @@ func (s *Store) Send(ctx context.Context, m Message) (Message, error) {
 	if strings.TrimSpace(m.Body) == "" {
 		return Message{}, fmt.Errorf("%w: empty body", ErrInvalid)
 	}
+	if m.Kind != "" && m.Kind != KindQuestion {
+		return Message{}, fmt.Errorf("%w: unknown kind %q", ErrInvalid, m.Kind)
+	}
+	if m.Kind == "" && (len(m.Options) > 0 || m.Task != "") {
+		return Message{}, fmt.Errorf("%w: options and task need kind %q", ErrInvalid, KindQuestion)
+	}
 	m.Queue = ""
 	if rest, ok := strings.CutPrefix(m.Recipient, QueuePrefix); ok {
 		if !ValidQueueName(rest) {
@@ -417,10 +447,22 @@ func insert(ctx context.Context, tx *sql.Tx, m Message, now time.Time) (int64, e
 	if m.Queue != "" {
 		state, queue = StateUnclaimed, sql.NullString{String: m.Queue, Valid: true}
 	}
+	var options, task sql.NullString
+	if len(m.Options) > 0 {
+		b, err := json.Marshal(m.Options)
+		if err != nil {
+			return 0, fmt.Errorf("mailbox: insert: %w", err)
+		}
+		options = sql.NullString{String: string(b), Valid: true}
+	}
+	if m.Task != "" {
+		task = sql.NullString{String: m.Task, Valid: true}
+	}
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO messages(sender, recipient, subject, body, reply_to, state, attempts, created_at, queue)
-		 VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-		m.Sender, m.Recipient, m.Subject, m.Body, replyTo, string(state), now.UnixMilli(), queue)
+		`INSERT INTO messages(sender, recipient, subject, body, reply_to, state, attempts, created_at, queue, kind, options, task)
+		 VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
+		m.Sender, m.Recipient, m.Subject, m.Body, replyTo, string(state), now.UnixMilli(), queue,
+		m.Kind, options, task)
 	if err != nil {
 		return 0, fmt.Errorf("mailbox: insert: %w", err)
 	}

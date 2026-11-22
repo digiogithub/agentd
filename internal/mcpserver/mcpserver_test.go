@@ -164,7 +164,7 @@ func TestTools(t *testing.T) {
 		}
 	}
 	slices.Sort(names)
-	want := []string{"agentd_claim", "agentd_inbox", "agentd_peers", "agentd_queue", "agentd_read", "agentd_reply", "agentd_send"}
+	want := []string{"agentd_ask", "agentd_claim", "agentd_inbox", "agentd_peers", "agentd_queue", "agentd_read", "agentd_reply", "agentd_send"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("tools = %v, want %v", names, want)
 	}

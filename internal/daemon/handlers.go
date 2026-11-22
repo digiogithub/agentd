@@ -713,7 +713,7 @@ func toWire(m mailbox.Message) proto.Message {
 		ID: m.ID, Sender: m.Sender, Recipient: m.Recipient, Subject: m.Subject, Body: m.Body,
 		ReplyTo: m.ReplyTo, State: string(m.State), Attempts: m.Attempts, CreatedAt: m.CreatedAt,
 		DeliveredAt: m.DeliveredAt, ReadAt: m.ReadAt, RepliedAt: m.RepliedAt,
-		Queue: m.Queue, ClaimedAt: m.ClaimedAt,
+		Queue: m.Queue, ClaimedAt: m.ClaimedAt, Kind: m.Kind, Options: m.Options, Task: m.Task,
 	}
 }
 

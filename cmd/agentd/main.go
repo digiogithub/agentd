@@ -51,7 +51,7 @@ func newRootCmd() *cobra.Command {
 	}
 	root.AddCommand(
 		daemonCmd(), runCmd(), lsCmd(), attachCmd(), dumpCmd(), viewCmd(), eventsCmd(), typeCmd(), actCmd(), killCmd(), rmCmd(),
-		sendCmd(), inboxCmd(), readCmd(), replyCmd(), peersCmd(), aliasesCmd(), shutdownCmd(),
+		sendCmd(), askCmd(), inboxCmd(), readCmd(), replyCmd(), peersCmd(), aliasesCmd(), shutdownCmd(),
 		versionCmd(), mcpCmd(), whoamiCmd(), purgeCmd(), serveCmd(), hcCmd(), turnsCmd(),
 		claimCmd(), queueCmd(), relayCmd(),
 	)
@@ -697,7 +697,7 @@ func inboxCmd() *cobra.Command {
 				if text == "" {
 					text = m.Body
 				}
-				fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n", m.ID, m.Sender, m.State, ago(m.CreatedAt), oneLine(text, 60))
+				fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n", m.ID, m.Sender, m.State, ago(m.CreatedAt), oneLine(text, 60)+questionSuffix(m))
 			}
 			return tw.Flush()
 		},
@@ -741,6 +741,9 @@ func readCmd() *cobra.Command {
 				fmt.Printf("Subject: %s\n", m.Subject)
 			}
 			fmt.Printf("\n%s\n", strings.TrimRight(m.Body, "\n"))
+			if q := questionSuffix(m); q != "" {
+				fmt.Printf("\n%s\n", strings.TrimSpace(q))
+			}
 			return nil
 		},
 	}

@@ -262,11 +262,16 @@ func (s *Server) publish(kind, session string, data any) {
 // publishMail emits a mail.* event; the session is the recipient when it is
 // a registered session. The body is never included.
 func (s *Server) publishMail(kind string, id int64, from, to string) {
+	s.publishMailKind(kind, id, from, to, "")
+}
+
+// publishMailKind is publishMail with the message kind (question) in the data.
+func (s *Server) publishMailKind(kind string, id int64, from, to, msgKind string) {
 	sess := ""
 	if s.isSession(to) {
 		sess = to
 	}
-	s.bus.publish(kind, sess, from, to, proto.MailEventData{ID: id, From: from, To: to})
+	s.bus.publish(kind, sess, from, to, proto.MailEventData{ID: id, From: from, To: to, Kind: msgKind})
 }
 
 // publishQueueMail emits a mail.* event about a work-queue item m. A post

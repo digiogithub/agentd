@@ -642,6 +642,13 @@ type SendArgs struct {
 	Subject string `json:"subject,omitempty"`
 	Body    string `json:"body"`
 	ReplyTo *int64 `json:"reply_to,omitempty"`
+	// Kind "question" asks a human (a session sender and a human:<name>
+	// recipient are required; an empty To or "human:" means the daemon's own
+	// user). Options (<= 8, 1..80 runes each) and Task (a task id of the
+	// sender) are only valid with it. The answer is an ordinary reply.
+	Kind    string   `json:"kind,omitempty"`
+	Options []string `json:"options,omitempty"`
+	Task    string   `json:"task,omitempty"`
 }
 
 // InboxArgs lists the caller's mailbox; All includes read messages. As
@@ -763,6 +770,10 @@ type Message struct {
 	// claim); ClaimedAt is when a session claimed it.
 	Queue     string     `json:"queue,omitempty"`
 	ClaimedAt *time.Time `json:"claimed_at,omitempty"`
+	// Kind is "question" for a question to a human (Options and Task as sent).
+	Kind    string   `json:"kind,omitempty"`
+	Options []string `json:"options,omitempty"`
+	Task    string   `json:"task,omitempty"`
 	// Warning is set by the daemon when the operation succeeded with a caveat
 	// (e.g. a reply to a sender that is not a known mailbox).
 	Warning string `json:"warning,omitempty"`
@@ -1038,4 +1049,5 @@ type MailEventData struct {
 	To    string `json:"to"`
 	Queue string `json:"queue,omitempty"`
 	By    string `json:"by,omitempty"`
+	Kind  string `json:"kind,omitempty"` // "question" for a question to a human
 }

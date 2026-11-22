@@ -3,10 +3,14 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/digiogithub/agentd/internal/mailbox"
 	"github.com/digiogithub/agentd/internal/proto"
+	"github.com/digiogithub/agentd/internal/screen"
 )
 
 // Identity-aware op handlers: type and the mailbox ops. who is the caller as
@@ -54,6 +58,10 @@ func (s *Server) knownRecipient(to string) bool {
 }
 
 func (s *Server) send(ctx context.Context, who caller, a proto.SendArgs) (proto.Message, error) {
+	opts, err := s.checkQuestion(who, &a)
+	if err != nil {
+		return proto.Message{}, err
+	}
 	if a.To == "" {
 		return proto.Message{}, proto.Errorf(proto.CodeInvalid, "send: missing recipient")
 	}
@@ -66,6 +74,7 @@ func (s *Server) send(ctx context.Context, who caller, a proto.SendArgs) (proto.
 	}
 	m, err := s.Store.Send(ctx, mailbox.Message{
 		Sender: who.id, Recipient: a.To, Subject: a.Subject, Body: a.Body, ReplyTo: a.ReplyTo,
+		Kind: a.Kind, Options: opts, Task: a.Task,
 	})
 	if err != nil {
 		return proto.Message{}, err
@@ -76,9 +85,57 @@ func (s *Server) send(ctx context.Context, who caller, a proto.SendArgs) (proto.
 		return toWire(m), nil
 	}
 	s.Log.Info("message queued", "id", m.ID, "from", m.Sender, "to", m.Recipient, "via", who.via)
-	s.publishMail(proto.EvMailQueued, m.ID, m.Sender, m.Recipient)
+	s.publishMailKind(proto.EvMailQueued, m.ID, m.Sender, m.Recipient, m.Kind)
 	s.kick(m.Recipient)
 	return toWire(m), nil
+}
+
+// Limits of a question's options.
+const (
+	maxQuestionOptions   = 8
+	maxQuestionOptionLen = 80
+)
+
+// checkQuestion validates the question fields of a send. For kind question
+// it requires a session caller and a human:<name> recipient; an empty To or
+// the bare "human:" is filled with the daemon's own user (humanAddr of its
+// uid), so an agent can ask "the human" without knowing the name. Options are
+// sanitized (agent-written, untrusted) and returned; a.To is updated.
+func (s *Server) checkQuestion(who caller, a *proto.SendArgs) ([]string, error) {
+	switch a.Kind {
+	case "":
+		if len(a.Options) > 0 || a.Task != "" {
+			return nil, proto.Errorf(proto.CodeInvalid, "send: options and task need kind %q", mailbox.KindQuestion)
+		}
+		return nil, nil
+	case mailbox.KindQuestion:
+	default:
+		return nil, proto.Errorf(proto.CodeInvalid, "send: unknown kind %q (want \"\" or %q)", a.Kind, mailbox.KindQuestion)
+	}
+	if !who.session {
+		return nil, proto.Errorf(proto.CodeInvalid, "send: a question can only be asked by a session")
+	}
+	if a.To == "" || a.To == HumanPrefix {
+		a.To = humanAddr(os.Getuid())
+	}
+	if !validHumanAddr(a.To) {
+		return nil, proto.Errorf(proto.CodeInvalid, "send: a question goes to human:<name>, not %q", a.To)
+	}
+	if len(a.Options) > maxQuestionOptions {
+		return nil, proto.Errorf(proto.CodeInvalid, "send: at most %d options", maxQuestionOptions)
+	}
+	var opts []string
+	for _, o := range a.Options {
+		o = strings.TrimSpace(screen.Sanitize(o, maxQuestionOptionLen+1))
+		if n := utf8.RuneCountInString(o); n < 1 || n > maxQuestionOptionLen {
+			return nil, proto.Errorf(proto.CodeInvalid, "send: each option needs 1..%d characters", maxQuestionOptionLen)
+		}
+		opts = append(opts, o)
+	}
+	if a.Task != "" && !mailbox.ValidTaskID(a.Task) {
+		return nil, proto.Errorf(proto.CodeInvalid, "send: bad task id %q (want [A-Za-z0-9._-]{1,64})", a.Task)
+	}
+	return opts, nil
 }
 
 // mailboxOf returns the mailbox an inbox/read request addresses and whether

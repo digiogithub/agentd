@@ -261,7 +261,7 @@ func TestMigrateV2Database(t *testing.T) {
 	}
 	defer s.Close()
 	ctx := context.Background()
-	if v, err := s.SchemaVersion(ctx); err != nil || v != 3 || len(migrations) != 3 {
+	if v, err := s.SchemaVersion(ctx); err != nil || v != 4 || len(migrations) != 4 {
 		t.Fatalf("schema version = %d, %v", v, err)
 	}
 	m1, err := s.Get(ctx, 1)

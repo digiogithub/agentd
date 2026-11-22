@@ -584,6 +584,18 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   humans can `purge --recipient queue:<name>` / `--state unclaimed`. Schema v3 rebuilds the table like v2
   (new state in the CHECK constraint, columns `queue`, `claimed_at`; ids and the AUTOINCREMENT counter
   kept, `PRAGMA foreign_key_check`).
+- **Questions** (AGED-US-0040, plan `docs/plans/agentd/dashboard_plan.md`, `internal/mailbox/questions.go`): a session asks a
+  human with `send {kind: "question", options?, task?}` (CLI `agentd ask TEXT [--option A]... [--task ID] [--to human:NAME]`,
+  MCP `agentd_ask`). No second store: it is a mailbox message with `Message.Kind = "question"`, `Options` (<= 8, each 1..80
+  runes after `screen.Sanitize`) and `Task` (`[A-Za-z0-9._-]{1,64}`, a task id of the sender, not checked against the list).
+  Schema v4 = plain `ADD COLUMN`s `kind TEXT NOT NULL DEFAULT ''`, `options TEXT` (JSON array, NULL when none), `task TEXT`
+  (+ partial index on `kind`): ids and the AUTOINCREMENT counter untouched. `kind` must be `""` or `question` and options/task
+  need it (`invalid`); a question needs a session caller and a `human:<name>` recipient (`invalid` otherwise; an empty `to` or the
+  bare `human:` is filled by the daemon with `human:<daemon user>`, `humanAddr(os.Getuid())`, so agents need not know the name).
+  Open question = kind question and state not `replied`; `Store.OpenQuestions(ctx, sender, recipient)` lists them (used by the future op
+  `board`). The answer is an ordinary `reply` (body = chosen option or free text) injected into the agent by the delivery loop.
+  Event `mail.queued` data carries `kind` (omitempty); `session` keeps its meaning (the recipient when it is a session, so none for
+  a question to a human; clients use `from`).
 - **Conditional fetch**: `inbox` answers carry `digest` (`d` + 16 hex of SHA-256 over the listed `(id,
   state)` pairs, `mailbox.Digest`); `inbox {…, since_digest}` whose digest still matches returns
   `{messages: [], digest, not_modified: true}` computed without reading bodies and with no state change (a
@@ -643,7 +655,7 @@ is resolved against the caller's absolute `cwd`; `harness` defaults to `cmd[0]` 
 `agentd aliases` reads the CLI's own environment, so it agrees with `run`), `ls` (a session caller without `[security] agent_view` gets other sessions' `preview` blanked; status and
 attention stay), `kill {name, signal}`, `rm {name}`,
 `dump {name, scrollback:bool, ansi:bool, ghost:bool, plain:bool, compact:bool, cells:bool, row?:int}` (`plain` = `screen.PlainText`: box/frame glyphs and rule lines dropped, blank runs collapsed; not with `ansi`; CLI `--plain`; `compact` = plain + `screen.CompactTools`: tool-call output folded to `… N lines`, reasoning to its title, CLI `--compact`) (→ `{text, ghost, ghost_hidden, cells?}`; `cells` = `{cursor_x, cursor_y, row, cells:[{x, content, rune, fg, bg, attrs[], width}]}` for `row` or the cursor's row, diagnostics), `type {name, text, submit:bool}` (raw injection, for humans/scripts),
-`send {to, subject, body, reply_to}`, `inbox {as?, all:bool, since_digest?}` (→ `{messages[], digest, not_modified?}`),
+`send {to, subject, body, reply_to, kind?, options?, task?}` (questions: see "Questions"), `inbox {as?, all:bool, since_digest?}` (→ `{messages[], digest, not_modified?}`),
 `read {as?, id}`, `reply {id, body}`, `claim {queue, id?, inject?}` (→ the claimed message),
 `queue {name?, bodies?, since_digest?}` (→ `{name, items[], digest, not_modified?}` or `{queues[{name, unclaimed}]}`; see
 "Work queues"),
@@ -673,7 +685,7 @@ compacted in `docs.json`, atomic rename; a broken file is renamed `.bad` and the
 `"auth": {"id", "token"}` (filled by `internal/client` from `AGENTD_ID` / `AGENTD_TOKEN`).
 
 MCP tools (`agentd mcp`, identity resolved by the daemon, see "Identity"): `agentd_peers`,
-`agentd_send` (`to` may be `queue:<name>`), `agentd_inbox` (`since_digest` in, `digest`/`not_modified` out),
+`agentd_send` (`to` may be `queue:<name>`), `agentd_ask {question, options?, task?}` (asks the human, see "Questions"), `agentd_inbox` (`since_digest` in, `digest`/`not_modified` out),
 `agentd_read`, `agentd_reply`, `agentd_claim {queue, id?}` (returns the claimed task with its body, state
 `delivered`) and `agentd_queue {name?}` (ids, posters and subjects, never bodies) (no purge tool). The mailbox tools call `whoami` first
 and fail with a clear error when the daemon sees the caller as a human (MCP server not started from

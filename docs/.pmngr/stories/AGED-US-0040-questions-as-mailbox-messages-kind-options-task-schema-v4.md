@@ -2,13 +2,14 @@
 id: AGED-US-0040
 type: story
 title: "Questions as mailbox messages: kind, options, task (schema v4) and agentd ask"
-status: in_progress
+status: done
 priority: high
 parent: AGED-EP-0007
 labels: [dashboard, mailbox]
 created: 2026-11-22T08:23:29Z
-updated: 2026-11-22T08:24:05Z
+updated: 2026-11-22T08:32:52Z
 started: 2026-11-22T08:24:05Z
+closed: 2026-11-22T08:32:52Z
 ---
 
 ## Goal
