@@ -126,9 +126,18 @@ type NotifyConfig struct {
 
 var notifyReasons = map[string]bool{"waiting": true, "turn_done": true, "exited": true}
 
-func (n *NotifyConfig) applyDefaults() {
+// daemonNotifyReasons are the reasons [notify] (the daemon's own notifications)
+// accepts; [api.notify] keeps the three above.
+var daemonNotifyReasons = map[string]bool{"question": true, "waiting": true, "blocked": true, "turn_done": true, "exited": true}
+
+// DefaultDaemonNotifyOn is the default `on` of [notify].
+var DefaultDaemonNotifyOn = []string{"question", "waiting", "blocked", "exited"}
+
+func (n *NotifyConfig) applyDefaults() { n.applyDefaultsOn([]string{"waiting", "turn_done", "exited"}) }
+
+func (n *NotifyConfig) applyDefaultsOn(on []string) {
 	if n.On == nil {
-		n.On = []string{"waiting", "turn_done", "exited"}
+		n.On = append([]string(nil), on...)
 	}
 	if n.Debounce == 0 {
 		n.Debounce = Duration(DefaultNotifyDebounce)
@@ -139,49 +148,55 @@ func (n *NotifyConfig) applyDefaults() {
 }
 
 // ValidateNotifyURL requires https, or http only for a loopback host.
-func ValidateNotifyURL(name, raw string) error {
+func ValidateNotifyURL(name, raw string) error { return validateNotifyURL("api.notify", name, raw) }
+
+func validateNotifyURL(prefix, name, raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
-		return fmt.Errorf("api.notify.%s is not a valid URL", name)
+		return fmt.Errorf("%s.%s is not a valid URL", prefix, name)
 	}
 	switch u.Scheme {
 	case "https":
 	case "http":
 		if !IsLoopbackAddr(net.JoinHostPort(u.Hostname(), "0")) {
-			return fmt.Errorf("api.notify.%s must use https (http is only allowed for loopback hosts)", name)
+			return fmt.Errorf("%s.%s must use https (http is only allowed for loopback hosts)", prefix, name)
 		}
 	default:
-		return fmt.Errorf("api.notify.%s must be an https URL", name)
+		return fmt.Errorf("%s.%s must be an https URL", prefix, name)
 	}
 	return nil
 }
 
 func (n NotifyConfig) validate() error {
+	return n.validateAs("api.notify", notifyReasons, "waiting, turn_done, exited")
+}
+
+func (n NotifyConfig) validateAs(prefix string, reasons map[string]bool, list string) error {
 	if !n.Enabled {
 		return nil
 	}
 	if n.NtfyURL == "" && n.WebhookURL == "" {
-		return fmt.Errorf("api.notify.enabled needs ntfy_url or webhook_url")
+		return fmt.Errorf("%s.enabled needs ntfy_url or webhook_url", prefix)
 	}
 	for name, v := range map[string]string{"ntfy_url": n.NtfyURL, "webhook_url": n.WebhookURL} {
 		if v != "" {
-			if err := ValidateNotifyURL(name, v); err != nil {
+			if err := validateNotifyURL(prefix, name, v); err != nil {
 				return err
 			}
 		}
 	}
 	for name, v := range map[string]string{"ntfy_token_env": n.NtfyTokenEnv, "webhook_secret_env": n.WebhookSecretEnv} {
 		if v != "" && !envNameRe.MatchString(v) {
-			return fmt.Errorf("api.notify.%s %q is not a valid environment variable name", name, v)
+			return fmt.Errorf("%s.%s %q is not a valid environment variable name", prefix, name, v)
 		}
 	}
 	for _, r := range n.On {
-		if !notifyReasons[r] {
-			return fmt.Errorf("api.notify.on: unknown reason %q (waiting, turn_done, exited)", r)
+		if !reasons[r] {
+			return fmt.Errorf("%s.on: unknown reason %q (%s)", prefix, r, list)
 		}
 	}
 	if time.Duration(n.Debounce) < 0 {
-		return fmt.Errorf("api.notify.debounce must be >= 0")
+		return fmt.Errorf("%s.debounce must be >= 0", prefix)
 	}
 	return nil
 }
@@ -323,21 +338,27 @@ var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // an error is returned and notifications must not start. A no-op when
 // notifications are disabled. Secret values are never part of an error.
 func (n *NotifyConfig) ResolveSecrets(getenv func(string) string, cfgPath string) error {
+	return n.ResolveSecretsFor("api.notify", getenv, cfgPath)
+}
+
+// ResolveSecretsFor is ResolveSecrets for the table named prefix ("notify" for
+// the daemon's own [notify]); the prefix only shapes error messages.
+func (n *NotifyConfig) ResolveSecretsFor(prefix string, getenv func(string) string, cfgPath string) error {
 	if !n.Enabled {
 		return nil
 	}
 	if cfgPath != "" && (n.NtfyToken != "" || n.WebhookSecret != "") {
 		if err := checkPrivateFile(cfgPath); err != nil {
-			return fmt.Errorf("api.notify: plain secret in config.toml: %w (chmod 600 it, or use ntfy_token_env / webhook_secret_env)", err)
+			return fmt.Errorf("%s: plain secret in config.toml: %w (chmod 600 it, or use ntfy_token_env / webhook_secret_env)", prefix, err)
 		}
 	}
-	if err := resolveEnvSecret("ntfy_token", n.NtfyTokenEnv, &n.NtfyToken, getenv); err != nil {
+	if err := resolveEnvSecret(prefix, "ntfy_token", n.NtfyTokenEnv, &n.NtfyToken, getenv); err != nil {
 		return err
 	}
-	return resolveEnvSecret("webhook_secret", n.WebhookSecretEnv, &n.WebhookSecret, getenv)
+	return resolveEnvSecret(prefix, "webhook_secret", n.WebhookSecretEnv, &n.WebhookSecret, getenv)
 }
 
-func resolveEnvSecret(key, env string, dst *string, getenv func(string) string) error {
+func resolveEnvSecret(prefix, key, env string, dst *string, getenv func(string) string) error {
 	if env == "" {
 		return nil
 	}
@@ -346,7 +367,7 @@ func resolveEnvSecret(key, env string, dst *string, getenv func(string) string) 
 		return nil
 	}
 	if *dst == "" {
-		return fmt.Errorf("api.notify.%s_env: environment variable %s is not set", key, env)
+		return fmt.Errorf("%s.%s_env: environment variable %s is not set", prefix, key, env)
 	}
 	return nil
 }

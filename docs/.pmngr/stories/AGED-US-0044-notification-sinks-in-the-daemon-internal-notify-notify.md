@@ -2,13 +2,14 @@
 id: AGED-US-0044
 type: story
 title: Notification sinks in the daemon (internal/notify, [notify])
-status: in_progress
+status: done
 priority: high
 parent: AGED-EP-0007
 labels: [dashboard, notify]
 created: 2026-11-22T08:23:34Z
-updated: 2026-11-22T08:24:06Z
+updated: 2026-11-22T08:42:47Z
 started: 2026-11-22T08:24:06Z
+closed: 2026-11-22T08:42:47Z
 ---
 
 ## Goal

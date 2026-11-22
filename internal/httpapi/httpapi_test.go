@@ -537,7 +537,7 @@ func TestDependencies(t *testing.T) {
 	if err != nil {
 		t.Skipf("go list: %v", err)
 	}
-	allowed := map[string]bool{"client": true, "proto": true}
+	allowed := map[string]bool{"client": true, "proto": true, "notify": true}
 	for _, p := range strings.Fields(string(out)) {
 		_, rest, ok := strings.Cut(p, "github.com/digiogithub/agentd/internal/")
 		if !ok {
@@ -547,6 +547,6 @@ func TestDependencies(t *testing.T) {
 		if pkg == "httpapi" || allowed[pkg] {
 			continue
 		}
-		t.Errorf("internal/httpapi depends on internal/%s (only client and proto are allowed)", pkg)
+		t.Errorf("internal/httpapi depends on internal/%s (only client, proto and notify are allowed)", pkg)
 	}
 }

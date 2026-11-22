@@ -238,6 +238,10 @@ type Config struct {
 	Herdr HerdrConfig `toml:"herdr"`
 	// Relay holds the relay transport settings ([relay], see relay.go).
 	Relay RelayConfig `toml:"relay"`
+	// Notify is [notify]: the daemon's own ntfy / webhook notifications
+	// (same keys as [api.notify]; reasons question, waiting, blocked,
+	// turn_done, exited). Off by default.
+	Notify NotifyConfig `toml:"notify"`
 
 	// Path is the file the config was loaded from ("" for defaults).
 	Path string `toml:"-"`
@@ -452,6 +456,10 @@ func (c *Config) init() error {
 	}
 	c.API.applyDefaults()
 	if err := c.API.Validate(); err != nil {
+		return err
+	}
+	c.Notify.applyDefaultsOn(DefaultDaemonNotifyOn)
+	if err := c.Notify.validateAs("notify", daemonNotifyReasons, "question, waiting, blocked, turn_done, exited"); err != nil {
 		return err
 	}
 	for name, pc := range c.Profiles {

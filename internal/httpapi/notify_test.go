@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/digiogithub/agentd/internal/notify"
 	"github.com/digiogithub/agentd/internal/proto"
 )
 
@@ -239,32 +240,6 @@ func TestNotifyNoRetryOnClientError(t *testing.T) {
 	}
 }
 
-func TestNotifyQueueOverflowDoesNotBlock(t *testing.T) {
-	block := make(chan struct{})
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-block }))
-	defer ts.Close()
-	defer close(block)
-	_, n := newNotifier(t, NotifyConfig{WebhookURL: ts.URL, QueueSize: 4, Timeout: time.Minute})
-	done := make(chan struct{})
-	go func() {
-		for i := 0; i < 500; i++ {
-			n.offer(exitEv("s"+string(rune('a'+i%26))+strings.Repeat("x", i/26), 0))
-		}
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("offer blocked on a stuck sink")
-	}
-	n.mu.Lock()
-	l := len(n.queue)
-	n.mu.Unlock()
-	if l > 4 {
-		t.Fatalf("queue = %d, want <= 4", l)
-	}
-}
-
 func TestNotifyDisabledNoGoroutines(t *testing.T) {
 	before := runtime.NumGoroutine()
 	s := &Server{Config: Config{Notify: NotifyConfig{WebhookURL: "http://127.0.0.1:1"}}} // Enabled=false
@@ -279,13 +254,6 @@ func TestNotifyDisabledNoGoroutines(t *testing.T) {
 	s.Close()
 }
 
-func TestNotifyCleanPreview(t *testing.T) {
-	got := cleanPreview("a\x1b[31m\tb\n" + strings.Repeat("é", 300))
-	if strings.ContainsAny(got, "\x1b\n\t") || len([]rune(got)) != 160 {
-		t.Fatalf("%q", got)
-	}
-}
-
 // End to end against a real daemon: session.exited reaches the webhook through
 // the hub, and the screen text stays out of the payload unless asked.
 func TestNotifyEndToEndPreview(t *testing.T) {
@@ -297,7 +265,7 @@ func TestNotifyEndToEndPreview(t *testing.T) {
 		})
 		e.run(t, "sh@x", "sh", "-c", "echo SECRET-SCREEN-LINE; sleep 1; exit 3")
 		r := k.wait(t, 1)[0]
-		var p webhookPayload
+		var p notify.Payload
 		if err := json.Unmarshal([]byte(r.body), &p); err != nil {
 			t.Fatal(err)
 		}

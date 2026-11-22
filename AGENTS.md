@@ -240,6 +240,7 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
 | `internal/relaywire` | Relay transport wire format (no file I/O, no daemon): host key (ed25519 route key + X25519 Noise key), route/device ids, invite link (`agentd://relay?...`), Noise `ServerHandshake`/`ClientHandshake` (IK, IKpsk2 for invites), `Secure`, stream `Mux` (streams are `net.Conn`), WebSocket adapter, `RunHostLink` (the host's reconnecting link) | coder/websocket, flynn/noise, x/crypto |
 | `internal/relayserver` | agentd-relay: host registration (challenge signed with the route key + join token), client tunnels spliced to a fresh host data connection, limits; forwards opaque frames only | relaywire, coder/websocket |
 | `internal/relayclient` | Go client side: `Pair` (redeem an invite), `Connect`, `Dialer` (one reconnecting tunnel per host, `Dial` = one daemon connection) | relaywire |
+| `internal/notify` | ntfy / webhook notification sinks (AGED-US-0044): `Event`, `Notifier` (`Offer` never blocks; bounded queue 256 drop-oldest, one worker, 10 s timeout, 3 retries on 429/5xx/network, no redirects, debounce per session+reason, HMAC `X-Agentd-Signature`), `Payload`, `CleanText`; never logs URLs, secrets or bodies | stdlib only |
 | `internal/mailbox` | Message store: send, inbox, get, state transitions, replies, purge/vacuum, work queues (`Claim`, `QueueItems`, `Queues`), listing digests (`Digest`, `InboxDigest`, `QueueDigest`) | sqlite |
 | `internal/inject` | Safe input path: guard, bracketed paste, paste verification, submit delay, per-session input lock | session, config |
 | `internal/delivery` | Decide when a session is idle and inject queued messages (via `inject`) | session, mailbox, config, inject |
@@ -250,7 +251,7 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
 | `internal/mcpserver` | MCP stdio server exposing mailbox + peers tools | client (+ proto types), go-sdk |
 | `internal/apitoken` | Device-token store for the gateway: `agd_<id>_<secret>` tokens, `api/devices.json` (0600, flock, SHA-256 hashes), verify/expiry/last-seen/revoke, `httpapi.Authenticator` + revoke guard; pairing: `api/pairing.json` (0600, flock, salted code hashes) + the unauthenticated `POST /v1/pair` route (`PairRoute`) | stdlib, httpapi (types only; httpapi never imports it) |
 | `internal/tlsutil` | Gateway TLS: persisted self-signed cert, files mode with reload, SPKI pin, pin-verifying client callback | stdlib only |
-| `internal/httpapi` | HTTP/JSON + SSE gateway (`agentd serve`): routing table, middleware (request id, recover, body cap, auth hook, JSON error envelope), daemon connection pool. Config is passed in by `cmd/agentd` | client, proto (stdlib otherwise; never daemon/session/config) |
+| `internal/httpapi` | HTTP/JSON + SSE gateway (`agentd serve`): routing table, middleware (request id, recover, body cap, auth hook, JSON error envelope), daemon connection pool; `notify.go` is a thin adapter from hub events onto `internal/notify`. Config is passed in by `cmd/agentd` | client, proto, notify (stdlib otherwise; never daemon/session/config) |
 | `internal/hcompat` | herdr-core (`hc`) client protocol, generation 1, translated onto daemon ops (Herdr Desktop / Whip compatibility, proof of concept): JSON-RPC 2.0 lines then 9-byte LE frames, per-stream credit, first paint, events, in-memory labels/keep/turn/docs; `Listener` (unix socket with herdr-core's `core.lock` ownership, admission hook, cleanup) and `LoadCoreID` | client, proto (stdlib otherwise; never daemon/session/config) |
 | `cmd/agentd-relay` | Relay server binary (flags, TLS files / ACME / plain HTTP behind a proxy, join tokens) | relayserver, version, x/crypto/acme/autocert |
 | `cmd/agentd` | Cobra CLI wiring; invoked as `herdr-core`/`hc` (argv[0]) it is the hc CLI subset (`hc.go`) | client, attach, daemon, mcpserver, httpapi, hcompat, config, tlsutil (never desktopui, never MyGo) |
@@ -383,7 +384,7 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   `api/audit.log` (JSONL 0600, size-capped, one rotation `.1`; run, act, kill, rm, send, reply, view_ack, device
   pair/add/revoke; never prompt text or bodies). `httpapi.Server.Guard` (device-token guard) runs inside the
   request-id/access-log chain; `last_seen` writes are asynchronous and coalesced. 
-  **Notifications** (`internal/httpapi/notify.go`, `[api.notify]`, off by default): the gateway taps its event hub
+  **Notifications** (`internal/httpapi/notify.go` = adapter over `internal/notify`, `[api.notify]`, off by default): the gateway taps its event hub
   (`hub.tap`, never HTTP) and, for `attention.changed` (set; reason `waiting`/`bell`/`notify` map to `waiting`,
   `turn_done` stays) and `session.exited`, queues a POST per sink: ntfy (`ntfy_url`, optional Bearer `ntfy_token` or `ntfy_token_env`;
   headers Title/Tags/Priority/Click, short text message) and webhook (`webhook_url`, JSON `{host, session, reason,
@@ -405,6 +406,22 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   `sha256:<hex>` of the leaf SPKI (`tlsutil.Pin`; `CurrentPin(mode, cfg)` is what `agentd serve pair` puts in
   the QR `fp`). `agentd serve tls [show|rotate]` prints pin/SANs/expiry or regenerates the self-signed pair
   (restart serve; devices re-pair). Tailscale identity headers are never trusted.
+- **Daemon notifications** (`[notify]`, `internal/daemon/notify.go` + `internal/notify`, AGED-US-0044; plan
+  `docs/plans/agentd/dashboard_plan.md`): the daemon alerts the human through ntfy and/or a signed webhook with no
+  gateway and no backend. Same keys as `[api.notify]` (`enabled`, `ntfy_url`, `ntfy_token[_env]`, `webhook_url`,
+  `webhook_secret[_env]`, `debounce` 30s, `include_preview`, `host_label`, `deep_link_base`) and the same secret rules
+  (`*_env` wins; a plain secret needs `config.toml` owned by the user with no group/other bits, else the tap stays off and
+  the cause is logged; https required except loopback). `on` reasons: `question`, `waiting`, `blocked`, `turn_done`,
+  `exited`; default `["question","waiting","blocked","exited"]`. Off by default; disabled = no goroutine and no bus
+  subscription. `startNotify` (in `Serve`) registers an in-process bus subscriber (human filter, only the four kinds below;
+  a full queue is a bus `resync`, never a blocked publish) and `stopNotify` (first in `Shutdown`, before the bus closes)
+  ends it. Mapping: `attention.changed` set (reason `waiting`/`bell`/`notify` -> `waiting`, `turn_done` stays),
+  `session.exited` -> `exited`, `mail.queued` with data `kind == "question"` and `to` starting `human:` -> `question`
+  (session = the sender), `task.changed` with a `changed[]` entry `status == "blocked"` and `from != "blocked"` ->
+  `blocked`. Text is short ("<session> is waiting for input", "... asked you a question", "... has a blocked task");
+  no screen or agent-written text unless `include_preview` (then the session's preview line, or for `question`/`blocked`
+  the task title or the question text read from the mailbox by message id, always sanitized and capped at 160 chars). Delivery rules (queue, retries, no redirects, never
+  logging URLs/secrets/bodies, payload) are those of the gateway sinks: both use `internal/notify`.
 - **Relay transport** (design `docs/design/relay-transport.md`, plan `docs/plans/agentd/relay_plan.md` = normative
   protocol v1): with `[relay] enabled = true` and `url` (https/wss; http/ws only on loopback) the daemon keeps one
   outbound WebSocket link to an `agentd-relay` (`relaywire.RunHostLink`, backoff 1 s → 60 s; started in `Serve`, stopped
