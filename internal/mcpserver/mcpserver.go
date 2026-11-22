@@ -9,7 +9,9 @@
 //     agentd_queue: mailbox and work-queue operations as the calling session. The daemon resolves that identity
 //     itself (the MCP server process descends from the session's child
 //     process; AGENTD_TOKEN as a fallback), so AGENTD_ID is not required and
-//     harnesses that start MCP servers with a filtered environment work.
+//     harnesses that start MCP servers with a filtered environment work;
+//   - agentd_tasks_set, agentd_task_update: the calling session reports its
+//     plan (task list) to the daemon (sessions only, like the mailbox tools).
 //
 // There is deliberately no run/kill/type/attach over MCP: an agent must not
 // spawn or drive other agents' terminals directly.
@@ -202,6 +204,32 @@ type ReplyInput struct {
 	Body string `json:"body" jsonschema:"reply text"`
 }
 
+// TaskItem is one task of agentd_tasks_set.
+type TaskItem struct {
+	ID     string `json:"id,omitempty" jsonschema:"stable task id [A-Za-z0-9._-]{1,64}; omitted ids become t1, t2..."`
+	Title  string `json:"title" jsonschema:"short task title (1..200 characters)"`
+	Status string `json:"status,omitempty" jsonschema:"pending (default), in_progress, blocked, done or cancelled"`
+	Note   string `json:"note,omitempty" jsonschema:"optional note, e.g. why it is blocked (<= 500 characters)"`
+}
+
+// TasksSetInput is the input of agentd_tasks_set.
+type TasksSetInput struct {
+	Tasks []TaskItem `json:"tasks" jsonschema:"your whole plan, in order (at most 50 tasks); replaces the previous list"`
+}
+
+// TaskUpdateInput is the input of agentd_task_update.
+type TaskUpdateInput struct {
+	ID     string  `json:"id" jsonschema:"id of the task to change (from agentd_tasks_set)"`
+	Status string  `json:"status,omitempty" jsonschema:"new status: pending, in_progress, blocked, done or cancelled (empty = unchanged)"`
+	Note   *string `json:"note,omitempty" jsonschema:"new note (empty string clears it; omitted = unchanged)"`
+}
+
+// TasksOutput is the output of the task tools.
+type TasksOutput struct {
+	Revision uint64     `json:"revision" jsonschema:"list revision (bumps only when the list changes)"`
+	Tasks    []TaskItem `json:"tasks"`
+}
+
 // ---- descriptions (what the model reads) ----
 
 const (
@@ -235,6 +263,11 @@ const (
 		"agentd_reply when done."
 	descQueue = "List the unclaimed items of a shared work queue (id, poster, subject; no body), or without " +
 		"name the queues you may claim from that have items. Claim one with agentd_claim. Avoid polling."
+	descTasksSet = "Report your plan (task list) to agentd so the human sees what you are doing on their dashboard. " +
+		"Replaces your whole list, in order (at most 50 tasks; status pending, in_progress, blocked, done or " +
+		"cancelled). Call it when you make or change your plan; keep ids stable. Use agentd_task_update for one task."
+	descTaskUpdate = "Change one task of your reported plan: its status (e.g. in_progress when you start it, done " +
+		"when finished, blocked with a note saying what you need) and/or its note."
 )
 
 // New returns the MCP server with the agentd tools registered.
@@ -264,6 +297,10 @@ func New(opts Options) *mcp.Server {
 		Annotations: &mcp.ToolAnnotations{OpenWorldHint: &closedWorld}}, h.claim)
 	mcp.AddTool(srv, &mcp.Tool{Name: "agentd_queue", Description: descQueue,
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closedWorld}}, h.queue)
+	mcp.AddTool(srv, &mcp.Tool{Name: "agentd_tasks_set", Description: descTasksSet,
+		Annotations: &mcp.ToolAnnotations{IdempotentHint: true, OpenWorldHint: &closedWorld}}, h.tasksSet)
+	mcp.AddTool(srv, &mcp.Tool{Name: "agentd_task_update", Description: descTaskUpdate,
+		Annotations: &mcp.ToolAnnotations{IdempotentHint: true, OpenWorldHint: &closedWorld}}, h.taskUpdate)
 	if h.agentViewEnabled() {
 		mcp.AddTool(srv, &mcp.Tool{Name: "agentd_view", Description: descView,
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closedWorld}}, h.view)
@@ -457,6 +494,49 @@ func (h *handlers) queue(_ context.Context, _ *mcp.CallToolRequest, in QueueInpu
 			out.Items = append(out.Items, it)
 		}
 		return nil
+	})
+	return nil, out, err
+}
+
+func toTasksOutput(r proto.TasksResult) TasksOutput {
+	out := TasksOutput{Revision: r.Revision, Tasks: []TaskItem{}}
+	for _, t := range r.Tasks {
+		out.Tasks = append(out.Tasks, TaskItem{ID: t.ID, Title: t.Title, Status: t.Status, Note: t.Note})
+	}
+	return out
+}
+
+func (h *handlers) tasksSet(_ context.Context, _ *mcp.CallToolRequest, in TasksSetInput) (*mcp.CallToolResult, TasksOutput, error) {
+	var out TasksOutput
+	tasks := make([]proto.Task, 0, len(in.Tasks))
+	for _, t := range in.Tasks {
+		tasks = append(tasks, proto.Task{ID: strings.TrimSpace(t.ID), Title: t.Title, Status: strings.TrimSpace(t.Status), Note: t.Note})
+	}
+	err := h.asSession(func(c *client.Client) error {
+		r, err := c.TasksSet(tasks)
+		out = toTasksOutput(r)
+		return err
+	})
+	return nil, out, err
+}
+
+func (h *handlers) taskUpdate(_ context.Context, _ *mcp.CallToolRequest, in TaskUpdateInput) (*mcp.CallToolResult, TasksOutput, error) {
+	var out TasksOutput
+	in.ID = strings.TrimSpace(in.ID)
+	if in.ID == "" {
+		return nil, out, errors.New("'id' is required (see agentd_tasks_set)")
+	}
+	a := proto.TaskUpdateArgs{ID: in.ID, Note: in.Note}
+	if st := strings.TrimSpace(in.Status); st != "" {
+		a.Status = &st
+	}
+	if a.Status == nil && a.Note == nil {
+		return nil, out, errors.New("give 'status' and/or 'note'")
+	}
+	err := h.asSession(func(c *client.Client) error {
+		r, err := c.TaskUpdate(a)
+		out = toTasksOutput(r)
+		return err
 	})
 	return nil, out, err
 }

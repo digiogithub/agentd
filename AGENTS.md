@@ -244,7 +244,7 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
 | `internal/inject` | Safe input path: guard, bracketed paste, paste verification, submit delay, per-session input lock | session, config |
 | `internal/delivery` | Decide when a session is idle and inject queued messages (via `inject`) | session, mailbox, config, inject |
 | `internal/proto` | Wire protocol: JSON request/response + binary framed attach stream | stdlib |
-| `internal/daemon` | Socket server, registry, op handlers, lifecycle, autostart helpers; per-session view state + watcher (`view.go`, `view_rules.go`: profile → `screen.Rules`) behind ops `view`/`view_ack` and the `ls` summary; event bus + op `subscribe` (`events.go`); the opt-in hc socket listener + op `hc_listener` (`hclisten.go`, peer admission); the relay host link, devices, invites, op `relay` (`relay.go`) and the device op gate (`relaygate.go`) | all above (incl. hcompat and, through it, client: the listener's translator dials this daemon; relaywire) |
+| `internal/daemon` | Socket server, registry, op handlers, lifecycle, autostart helpers; per-session view state + watcher (`view.go`, `view_rules.go`: profile → `screen.Rules`) behind ops `view`/`view_ack` and the `ls` summary; event bus + op `subscribe` (`events.go`); per-session task lists + ops `tasks_set`/`task_update`/`tasks` (`tasks.go`); the opt-in hc socket listener + op `hc_listener` (`hclisten.go`, peer admission); the relay host link, devices, invites, op `relay` (`relay.go`) and the device op gate (`relaygate.go`) | all above (incl. hcompat and, through it, client: the listener's translator dials this daemon; relaywire) |
 | `internal/client` | Go client for the socket API (used by CLI, MCP and agentd-desktop); `Subscribe` returns a `Subscription` (event channel + `Close`); `NewConn(conn, auth)` wraps an already open connection (agentd-desktop: a unix socket reached through an SSH `direct-streamlocal` channel; `auth` nil = none, the remote daemon resolves the SSH user's human identity) | proto |
 | `internal/attach` | Client-side terminal: raw mode, SIGWINCH, detach key, redraw | client, x/term |
 | `internal/mcpserver` | MCP stdio server exposing mailbox + peers tools | client (+ proto types), go-sdk |
@@ -425,7 +425,7 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   relay stream is served by `serveConn` with `peerInfo.device` set; `resolveCaller` answers `human:<user>` with `via:
   "relay"` and the device (owner devices act for the host's user); `whoami` adds `device`. Every request first goes
   through `relayGate` (`internal/daemon/relaygate.go`, deny by default): any scope `ping whoami info ls subscribe view
-  turns dump attach` (view: attach forced `observe`); `operate` + `act view_ack`, and owners `send inbox read reply`;
+  turns tasks dump attach` (view: attach forced `observe`; `tasks_set`/`task_update` are denied: session-only writes); `operate` + `act view_ack`, and owners `send inbox read reply`;
   `admin` + `run` (no `cmd`/`env`/`env_base`: a harness/target/profile only; a session-limited device must give a
   matching `name`), `kill rm label`, `doc_get doc_set` (not for session-limited devices); never `type purge shutdown
   hc_listener claim queue peers relay`. The device's `sessions` globs filter `ls`, the subscribe snapshot and events (a
@@ -489,6 +489,23 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   working (or within 5 s after): `human` (attach keystrokes), `act`, `mail` (delivery), else `program`; message =
   the view preview. Op `turns {name}` (view visibility rules), event `turn.completed` (after `status.changed`),
   CLI `agentd turns NAME [--json]`.
+- **Task lists** (`internal/daemon/tasks.go`, wire `internal/proto/task.go`; contract
+  `docs/plans/agentd/dashboard_plan.md` "Contract > Tasks"): an agent reports its plan. `proto.Task {id, title,
+  status, note?, updated_at}`: id `[A-Za-z0-9._-]{1,64}` (missing ids in `tasks_set` become `t1`, `t2`..., the first
+  free among the list's ids; duplicates `invalid`), status `pending|in_progress|blocked|done|cancelled` (default
+  `pending`), title 1..200 runes and note 0..500 runes through `screen.Sanitize` (longer text is truncated, a title
+  blank after sanitizing is `invalid`), at most 50 tasks, order = the agent's. Op `tasks_set {tasks[]}` replaces the
+  caller's list (idempotent), `task_update {id, status?, title?, note?}` changes one task (nil field = unchanged, `note
+  ""` clears; unknown id `not_found`); both answer `{tasks, revision}` and need the caller to be a running session
+  (humans and relay devices `forbidden`). Op `tasks {name}` → `{name, tasks, revision}`: humans any session, a session
+  itself unless `[security] agent_view` (relay devices: any scope, session globs). `revision` per session, bumps only
+  when id/title/status/note/order change (`updated_at` kept for unchanged tasks). Each bump publishes `task.changed`
+  (session = owner) `{revision, counts{pending,in_progress,blocked,done,cancelled}, current?, changed[{id, title,
+  status, from?}]}` (`current` = title of the first `in_progress` task; `changed` = new or modified tasks, `from` =
+  previous status when it changed; removed tasks are not listed, counts reflect them). `SessionInfo.tasks` =
+  `{revision, counts, current?}` (nil until the first `tasks_set`). Memory only: kept after exit, dropped by `rm`.
+  CLI `agentd task set` (stdin: JSON array of tasks or one title per line), `task add TITLE`, `task start|done ID`,
+  `task block ID [--note N]`, `task ls [NAME] [--json]` (NAME defaults to the calling session).
 - **Chrome vs content** (`screen.Split`, same idea as Herdr, which keeps pinned chrome out of the text it reads back): a full-height vertical divider (one column holding `│ ┃ ║` on >= 60 % of the rows, interior of the screen) cuts a right-hand info panel off before anything else is detected: transcript, input and dialog come from the left columns only and the panel text is `Regions.Side` (rows without the divider, such as a full-width status bar, stay whole). Profile key `header_regex` marks the top rows that are chrome (tab bar, title strip: `RegionHeader`, `Regions.Header`), next to `footer_regex` for the status bar. Built-in `pando`: header `\bChat\b.*\bEditor\+Chat\b`, footer `ctrl\+h help`, busy `Thinking\.\.\.|press enter to`.
 - **Idle detection** (per harness profile, configurable): idle ⇔ no PTY output for `idle_ms`
   (default 1500) AND (no `prompt_regex` configured OR it matches the current screen text) AND no
@@ -680,14 +697,16 @@ optimistic: a `version` other than the current one is `conflict`; `null` deletes
 names `[A-Za-z0-9._-]{1,64}`, value <=1 MiB of JSON (`daemon.MaxDocBytes`); humans only, sessions may read; stored
 compacted in `docs.json`, atomic rename; a broken file is renamed `.bad` and the store starts empty; publishes
 `doc.changed {name, version}` with no session, so session subscribers never see it),
-`turns {name}` (→ `{turns[]}`, see "Turn records"), `hc_listener {action}` (humans only, see "Herdr compatibility"),
+`turns {name}` (→ `{turns[]}`, see "Turn records"), `tasks_set {tasks[]}` / `task_update {id, status?, title?, note?}`
+(sessions only, → `{tasks, revision}`) and `tasks {name}` (→ `{name, tasks, revision}`), see "Task lists"; `hc_listener {action}` (humans only, see "Herdr compatibility"),
 `relay {action: status|invite|pending|approve|cancel|devices|revoke, ...}` (humans on the socket only, see "Relay transport"), `peers`, `whoami`, `attach {name, cols, rows, observe?, passive?, history?}`, `shutdown`. Every request may carry
 `"auth": {"id", "token"}` (filled by `internal/client` from `AGENTD_ID` / `AGENTD_TOKEN`).
 
 MCP tools (`agentd mcp`, identity resolved by the daemon, see "Identity"): `agentd_peers`,
 `agentd_send` (`to` may be `queue:<name>`), `agentd_ask {question, options?, task?}` (asks the human, see "Questions"), `agentd_inbox` (`since_digest` in, `digest`/`not_modified` out),
 `agentd_read`, `agentd_reply`, `agentd_claim {queue, id?}` (returns the claimed task with its body, state
-`delivered`) and `agentd_queue {name?}` (ids, posters and subjects, never bodies) (no purge tool). The mailbox tools call `whoami` first
+`delivered`), `agentd_queue {name?}` (ids, posters and subjects, never bodies), `agentd_tasks_set {tasks[]}` and
+`agentd_task_update {id, status?, note?}` (the caller's own task list, see "Task lists") (no purge tool). The mailbox and task tools call `whoami` first
 and fail with a clear error when the daemon sees the caller as a human (MCP server not started from
 inside a session). No run/kill/type over MCP in v0.1 (an agent must not spawn or drive other agents'
 terminals directly). `agentd_peers` also returns each peer's `status` and `attention` (no screen content).
@@ -810,10 +829,11 @@ call `view`), `input.changed` `{state}`, `attention.changed` `{attention, reason
 session; a work-queue post is `mail.queued` with `to: "queue:<name>"`, `queue` and no `session`),
 `mail.claimed` `{id, from, to, queue, by}` (`session` = `by` = the claimer; followed by `mail.delivered` unless
 `inject`), `session.labels` `{labels}`, `doc.changed` `{name, version}` (no `session`), `status.reported`
-`{status, records, reported}` (OSC 7501), `turn.completed` (a turn record), `resync` `{reason: overflow|since_seq_too_old|epoch_mismatch}`, `heartbeat` (every 15 s,
+`{status, records, reported}` (OSC 7501), `turn.completed` (a turn record), `task.changed` `{revision, counts,
+current?, changed[]}` (session = owner, see "Task lists"), `resync` `{reason: overflow|since_seq_too_old|epoch_mismatch}`, `heartbeat` (every 15 s,
 `Server.HeartbeatInterval`; `heartbeat_ms` min 1000) and `bye` (daemon shutdown, sent before connections
 are closed). `kinds` filters by exact kind or prefix (`session`, `status`, `view`, `input`, `attention`,
-`mail`, `doc`, `turn`); control kinds always pass.
+`mail`, `doc`, `turn`, `task`); control kinds always pass.
 - The bus keeps a 1024-event replay ring. `since_seq` requires `epoch` (`invalid` otherwise); inside the
   ring (same `epoch`) it replays the missed events, then goes live; outside it, or with another `epoch`,
   the stream starts with `resync`.

@@ -164,7 +164,8 @@ func TestTools(t *testing.T) {
 		}
 	}
 	slices.Sort(names)
-	want := []string{"agentd_ask", "agentd_claim", "agentd_inbox", "agentd_peers", "agentd_queue", "agentd_read", "agentd_reply", "agentd_send"}
+	want := []string{"agentd_ask", "agentd_claim", "agentd_inbox", "agentd_peers", "agentd_queue", "agentd_read", "agentd_reply", "agentd_send",
+		"agentd_task_update", "agentd_tasks_set"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("tools = %v, want %v", names, want)
 	}
@@ -282,12 +283,14 @@ func TestNoIdentity(t *testing.T) {
 		t.Fatalf("peers without identity: %+v %+v", res, peers)
 	}
 	for name, args := range map[string]map[string]any{
-		"agentd_send":  {"to": "x", "body": "hi"},
-		"agentd_inbox": {},
-		"agentd_read":  {"id": 1},
-		"agentd_reply": {"id": 1, "body": "hi"},
-		"agentd_claim": {"queue": "q"},
-		"agentd_queue": {},
+		"agentd_send":        {"to": "x", "body": "hi"},
+		"agentd_inbox":       {},
+		"agentd_read":        {"id": 1},
+		"agentd_reply":       {"id": 1, "body": "hi"},
+		"agentd_claim":       {"queue": "q"},
+		"agentd_queue":       {},
+		"agentd_tasks_set":   {"tasks": []any{map[string]any{"title": "x"}}},
+		"agentd_task_update": {"id": "t1", "status": "done"},
 	} {
 		res := call(t, anon, name, args, nil)
 		if !res.IsError || !strings.Contains(errText(res), "not inside an agentd session") {

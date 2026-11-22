@@ -20,33 +20,36 @@ import (
 
 // Op names (AGENTS.md, "Ops").
 const (
-	OpPing      = "ping"
-	OpRun       = "run"
-	OpLs        = "ls"
-	OpKill      = "kill"
-	OpRm        = "rm"
-	OpDump      = "dump"
-	OpType      = "type"
-	OpSend      = "send"
-	OpInbox     = "inbox"
-	OpRead      = "read"
-	OpReply     = "reply"
-	OpPeers     = "peers"
-	OpAttach    = "attach"
-	OpShutdown  = "shutdown"
-	OpWhoami    = "whoami"
-	OpPurge     = "purge"
-	OpInfo      = "info"
-	OpView      = "view"
-	OpViewAck   = "view_ack"
-	OpSubscribe = "subscribe"
-	OpLabel     = "label"
-	OpDocGet    = "doc_get"
-	OpDocSet    = "doc_set"
-	OpTurns     = "turns"
-	OpClaim     = "claim"
-	OpQueue     = "queue"
-	OpHCListen  = "hc_listener"
+	OpPing       = "ping"
+	OpRun        = "run"
+	OpLs         = "ls"
+	OpKill       = "kill"
+	OpRm         = "rm"
+	OpDump       = "dump"
+	OpType       = "type"
+	OpSend       = "send"
+	OpInbox      = "inbox"
+	OpRead       = "read"
+	OpReply      = "reply"
+	OpPeers      = "peers"
+	OpAttach     = "attach"
+	OpShutdown   = "shutdown"
+	OpWhoami     = "whoami"
+	OpPurge      = "purge"
+	OpInfo       = "info"
+	OpView       = "view"
+	OpViewAck    = "view_ack"
+	OpSubscribe  = "subscribe"
+	OpLabel      = "label"
+	OpDocGet     = "doc_get"
+	OpDocSet     = "doc_set"
+	OpTurns      = "turns"
+	OpClaim      = "claim"
+	OpQueue      = "queue"
+	OpHCListen   = "hc_listener"
+	OpTasksSet   = "tasks_set"
+	OpTaskUpdate = "task_update"
+	OpTasks      = "tasks"
 )
 
 // MaxLineSize bounds one JSON request or response line.
@@ -452,6 +455,9 @@ type SessionInfo struct {
 	ProgramStatus  *ProgramStatus           `json:"program_status,omitempty"`
 	ProgramRecords map[string]ProgramStatus `json:"program_records,omitempty"`
 	Reported       bool                     `json:"reported,omitempty"`
+	// Tasks summarizes the plan the agent reported (op tasks_set); nil
+	// when it never reported one.
+	Tasks *TaskSummary `json:"tasks,omitempty"`
 }
 
 // TurnRecord is one finished turn of a session (op turns, event
@@ -940,6 +946,7 @@ const (
 	EvDocChanged       = "doc.changed"
 	EvStatusReported   = "status.reported"
 	EvTurnCompleted    = "turn.completed"
+	EvTaskChanged      = "task.changed"
 	EvResync           = "resync"
 	EvHeartbeat        = "heartbeat"
 	EvBye              = "bye"

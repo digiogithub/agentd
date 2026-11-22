@@ -493,6 +493,7 @@ type entry struct {
 	active  *attachClient
 	labels  map[string]string // op label (meta.go)
 	turns   turnTrack         // turn records (turns.go)
+	tasks   taskList          // the agent's task list (tasks.go)
 }
 
 type attachClient struct {

@@ -328,6 +328,36 @@ func (s *Server) dispatch(ctx context.Context, req proto.Request, peer peerInfo)
 			return nil, err
 		}
 		return s.turnsOp(who, a)
+	case proto.OpTasksSet:
+		var a proto.TasksSetArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.tasksSet(who, a)
+	case proto.OpTaskUpdate:
+		var a proto.TaskUpdateArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.taskUpdate(who, a)
+	case proto.OpTasks:
+		var a proto.NameArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.tasksOp(who, a)
 	case proto.OpHCListen:
 		var a proto.HCListenArgs
 		if err := req.DecodeArgs(&a); err != nil {
@@ -525,6 +555,7 @@ func (s *Server) info(ctx context.Context, e *entry) proto.SessionInfo {
 		Attached:   e.attachedCount(),
 		Title:      sess.Title(),
 		Labels:     e.labelsCopy(),
+		Tasks:      e.taskSummary(),
 	}
 	if ps := sess.ProgramStatus(); ps.Reported {
 		info.Reported = true

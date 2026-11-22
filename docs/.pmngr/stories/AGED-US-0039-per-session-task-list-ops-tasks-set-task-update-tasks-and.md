@@ -2,13 +2,14 @@
 id: AGED-US-0039
 type: story
 title: "Per-session task list: ops tasks_set, task_update, tasks and event task.changed"
-status: in_progress
+status: done
 priority: high
 parent: AGED-EP-0007
 labels: [dashboard, daemon]
 created: 2026-11-22T08:23:28Z
-updated: 2026-11-22T08:24:04Z
+updated: 2026-11-22T08:36:29Z
 started: 2026-11-22T08:24:04Z
+closed: 2026-11-22T08:36:29Z
 ---
 
 ## Goal

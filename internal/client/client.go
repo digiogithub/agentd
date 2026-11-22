@@ -475,6 +475,30 @@ func (c *Client) Turns(name string) ([]proto.TurnRecord, error) {
 	return r.Turns, err
 }
 
+// TasksSet replaces the calling session's task list (sessions only).
+func (c *Client) TasksSet(tasks []proto.Task) (proto.TasksResult, error) {
+	if tasks == nil {
+		tasks = []proto.Task{}
+	}
+	var r proto.TasksResult
+	err := c.Call(proto.OpTasksSet, proto.TasksSetArgs{Tasks: tasks}, &r)
+	return r, err
+}
+
+// TaskUpdate changes one task of the calling session's list (sessions only).
+func (c *Client) TaskUpdate(a proto.TaskUpdateArgs) (proto.TasksResult, error) {
+	var r proto.TasksResult
+	err := c.Call(proto.OpTaskUpdate, a, &r)
+	return r, err
+}
+
+// Tasks returns a session's task list.
+func (c *Client) Tasks(name string) (proto.TasksResult, error) {
+	var r proto.TasksResult
+	err := c.Call(proto.OpTasks, proto.NameArgs{Name: name}, &r)
+	return r, err
+}
+
 // Relay calls op relay (humans on this host only; see proto.RelayArgs).
 func (c *Client) Relay(a proto.RelayArgs) (proto.RelayResult, error) {
 	var r proto.RelayResult
