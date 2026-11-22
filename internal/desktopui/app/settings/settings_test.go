@@ -24,6 +24,12 @@ func TestTogglesAndThemePersist(t *testing.T) {
 	if !e.A.Prefs.Get().NotifyExit {
 		t.Error("NotifyExit not saved")
 	}
+	e.Has("Preguntas", "Un agente te pregunta por el buzón", "Tareas bloqueadas", "Un agente marca una tarea como bloqueada")
+	e.Click("Preguntas")
+	e.Click("Tareas bloqueadas")
+	if s := e.A.Prefs.Get(); s.NotifyQuestion || s.NotifyBlocked {
+		t.Errorf("question/blocked toggles not saved: %v %v", s.NotifyQuestion, s.NotifyBlocked)
+	}
 	e.Click("Claro")
 	if e.A.Prefs.Get().Theme != kit.ModeLight || kit.Current().Dark {
 		t.Errorf("theme %q dark %v", e.A.Prefs.Get().Theme, kit.Current().Dark)

@@ -14,15 +14,22 @@ import (
 // Settings are the local preferences of the desktop app (Ajustes). They
 // live in $XDG_CONFIG_HOME/agentd/desktop/settings.json (0600).
 type Settings struct {
-	NotifyWaiting  bool     `json:"notify_waiting"`
-	NotifyTurnDone bool     `json:"notify_turn_done"`
-	NotifyExit     bool     `json:"notify_exit"`
+	NotifyWaiting  bool `json:"notify_waiting"`
+	NotifyTurnDone bool `json:"notify_turn_done"`
+	NotifyExit     bool `json:"notify_exit"`
+	// NotifyQuestion: an agent asks the human (a mailbox question);
+	// NotifyBlocked: an agent marks a task blocked. Both default on.
+	NotifyQuestion bool     `json:"notify_question"`
+	NotifyBlocked  bool     `json:"notify_blocked"`
 	ReplyFromAlert bool     `json:"reply_from_notification"`
 	Theme          kit.Mode `json:"theme"`
 	Muted          []Mute   `json:"muted,omitempty"`
 	// AgentsGroup is how the agents list groups sessions: GroupProject
 	// (default) or GroupState.
 	AgentsGroup string `json:"agents_group,omitempty"`
+	// PanelView is the Panel's view: PanelByAgent ("" = default) or
+	// PanelBoard.
+	PanelView string `json:"panel_view,omitempty"`
 	// ChatFontSize is the size of the chat view's prose in points (0 = the
 	// default, DefaultChatFontSize; kept within MinChatFontSize..MaxChatFontSize).
 	ChatFontSize float32 `json:"chat_font_size,omitempty"`
@@ -122,6 +129,12 @@ const (
 	GroupState   = "state"
 )
 
+// Values of Settings.PanelView.
+const (
+	PanelByAgent = "agent"
+	PanelBoard   = "board"
+)
+
 // Mute silences the notifications of one session until a time.
 type Mute struct {
 	Session string    `json:"session"` // Session.Key()
@@ -129,8 +142,10 @@ type Mute struct {
 	Until   time.Time `json:"until"`
 }
 
-// DefaultSettings match the mockup: waiting, turn done and reply on.
-var DefaultSettings = Settings{NotifyWaiting: true, NotifyTurnDone: true, NotifyExit: false, ReplyFromAlert: true, Theme: kit.ModeDark, AgentsGroup: GroupProject}
+// DefaultSettings match the mockup: waiting, turn done, questions, blocked
+// tasks and reply on.
+var DefaultSettings = Settings{NotifyWaiting: true, NotifyTurnDone: true, NotifyExit: false, NotifyQuestion: true, NotifyBlocked: true,
+	ReplyFromAlert: true, Theme: kit.ModeDark, AgentsGroup: GroupProject, PanelView: PanelByAgent}
 
 // Prefs stores Settings, in a file or in memory.
 type Prefs struct {

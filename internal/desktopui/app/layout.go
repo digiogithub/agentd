@@ -140,7 +140,10 @@ func (r *Root) sidebar(c *ui.Context, t *kit.Tokens, all []Area) {
 				continue
 			}
 			badge := 0
-			if ar.ID == "agents" {
+			switch {
+			case ar.Badge != nil:
+				badge = ar.Badge(a)
+			case ar.ID == "agents":
 				badge = a.Live.NeedsAnswer()
 			}
 			r.navItem(c, t, ar, ar.ID == active, badge)

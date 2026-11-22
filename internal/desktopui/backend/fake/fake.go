@@ -3,7 +3,7 @@
 // through agentd-relay with an operate device; sessions
 // claude@webapp waiting on a permission, codex@api asking a question with
 // three options, pando@agentd working, zellij main on portatil, claude@docs
-// done...). It simulates agentd behaviour closely enough for UI work and
+// done...; task lists and an open question for the Panel in board.go). It simulates agentd behaviour closely enough for UI work and
 // headless tests: act choose/prompt change the view and bump its revision
 // (a stale revision is a conflict), the terminal is a PTY that shows a
 // canned screen and echoes what is typed, provisioning streams events.
@@ -59,9 +59,11 @@ type Fake struct {
 	resizes       [][2]int
 	keysInstalled []string
 	paired        []string
+	replies       []ReplyCall
 
-	hostSubs []chan []backend.HostStatus
-	sessSubs []chan []backend.Session
+	hostSubs  []chan []backend.HostStatus
+	sessSubs  []chan []backend.Session
+	boardSubs []chan []backend.HostBoard
 }
 
 type hostRec struct {
@@ -76,6 +78,9 @@ type sessRec struct {
 	view  *proto.View // nil for zellij/tmux/shell
 	subs  []chan *proto.View
 	reply string // what the agent answers next
+	// tasks and questions are the session's board entries (agentd only).
+	tasks     []proto.Task
+	questions []proto.BoardQuestion
 }
 
 var _ backend.Backend = (*Fake)(nil)
@@ -83,7 +88,9 @@ var _ backend.Backend = (*Fake)(nil)
 // New returns a fake with the mockup data.
 func New() *Fake {
 	f := &Fake{Delay: 600 * time.Millisecond, nextMsg: 154}
-	f.seed(time.Now())
+	now := time.Now()
+	f.seed(now)
+	f.seedBoard(now)
 	return f
 }
 
@@ -354,6 +361,12 @@ func (f *Fake) publishLocked() {
 	}
 	for _, ch := range f.sessSubs {
 		replace(ch, ss)
+	}
+	if len(f.boardSubs) > 0 {
+		bs := f.boardSnapshot()
+		for _, ch := range f.boardSubs {
+			replace(ch, bs)
+		}
 	}
 }
 

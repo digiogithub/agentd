@@ -23,6 +23,7 @@ type hostMon struct {
 	cancel context.CancelFunc
 	wake   chan struct{}
 	muxK   chan struct{}
+	boardK chan struct{}
 
 	mu       sync.Mutex
 	sessions map[string]proto.SessionInfo
@@ -32,6 +33,7 @@ type hostMon struct {
 	seq      uint64
 	mux      map[backend.Source][]backend.Session
 	views    map[string]map[chan struct{}]struct{}
+	board    boardState
 }
 
 var errBye = errors.New("core: daemon closed the event stream")
@@ -48,6 +50,7 @@ func (b *Backend) activate(id string) *hostMon {
 		b: b, id: id, ctx: ctx, cancel: cancel,
 		wake:     make(chan struct{}, 1),
 		muxK:     make(chan struct{}, 1),
+		boardK:   make(chan struct{}, 1),
 		sessions: map[string]proto.SessionInfo{},
 		mux:      map[backend.Source][]backend.Session{},
 		views:    map[string]map[chan struct{}]struct{}{},
@@ -60,6 +63,11 @@ func (b *Backend) activate(id string) *hostMon {
 	go func() {
 		defer b.wg.Done()
 		m.runAgentd()
+	}()
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+		m.runBoard()
 	}()
 	if b.opts.Mux != nil {
 		b.wg.Add(1)
@@ -174,9 +182,11 @@ func (m *hostMon) setDown() {
 	m.version = ""
 	m.sessions = map[string]proto.SessionInfo{}
 	m.kickViewsLocked("")
+	m.resetBoardLocked()
 	m.mu.Unlock()
 	if changed {
 		m.b.publishSessions()
+		m.b.publishBoard()
 	}
 }
 
@@ -239,9 +249,11 @@ func (m *hostMon) streamOnce() (connected bool, err error) {
 		m.sessions[si.Name] = si
 	}
 	m.kickViewsLocked("")
+	m.board.unsupported = false // maybe a newer daemon: ask again
 	m.mu.Unlock()
 	m.b.publishSessions()
 	kick(m.muxK)
+	kick(m.boardK)
 
 	var refresh <-chan time.Time
 	var timer *time.Timer
@@ -261,6 +273,9 @@ func (m *hostMon) streamOnce() (connected bool, err error) {
 			}
 			if ev.Seq > 0 && ev.Seq <= snapSeq && ev.Epoch == sub.Info.Epoch {
 				continue // already in the snapshot
+			}
+			if boardEvent(ev.Kind) {
+				kick(m.boardK)
 			}
 			changed, reload, prev, bye := m.apply(ev)
 			if bye {

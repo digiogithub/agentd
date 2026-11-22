@@ -34,6 +34,7 @@ import (
 	_ "github.com/digiogithub/agentd/internal/desktopui/app/hosts"
 	_ "github.com/digiogithub/agentd/internal/desktopui/app/mailbox"
 	_ "github.com/digiogithub/agentd/internal/desktopui/app/newsession"
+	_ "github.com/digiogithub/agentd/internal/desktopui/app/panel"
 	_ "github.com/digiogithub/agentd/internal/desktopui/app/provision"
 	_ "github.com/digiogithub/agentd/internal/desktopui/app/settings"
 )

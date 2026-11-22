@@ -3,7 +3,8 @@
 `cmd/agentd-desktop` is the native desktop client of agentd: the agents of every host (agentd
 sessions, zellij/tmux sessions, plain SSH shells; hosts reached over SSH or, paired with an invite
 link, through agentd-relay), their Chat (semantic view + act) and Terminal
-(attach), hosts and provisioning, the mailbox and work queues, settings. Plan:
+(attach), the Panel (what every agent is doing, its tasks and what needs your answer), hosts and
+provisioning, the mailbox and work queues, settings. Plan:
 `docs/plans/agentd/desktop_plan.md`; normative rules: "Desktop client" in `AGENTS.md`. Design: the
 validated mockups linked from the plan (phone layout adapted to a window). Reference implementation:
 Pando's `internal/nativeui` (same toolkit, same patterns).
@@ -20,10 +21,10 @@ The daemon and the `agentd` CLI never import anything here:
 
 | Package | Role | Imports MyGo |
 |---|---|---|
-| `backend/` | Contract between the UI and the code that reaches hosts (`Backend`, `Shell`, `PTY`, `Session`, `Host` with its transport: SSH or `Relay *RelayTarget`, `Host.Allows(Capability)` from the relay device scope, `PairRelay`, provisioning types). Change it only together with every implementation | **no** |
-| `backend/fake/` | In-memory `Backend` with the mockup data (hosts estudio, vps-hetzner, portatil, raspberry, and nube over the relay with an `operate` device; a permission dialog, a question with options, a working session...). Act bumps revisions, the PTY echoes, provisioning streams events, `PairRelay` accepts `fake.InviteLink`; never runs a program | no |
+| `backend/` | Contract between the UI and the code that reaches hosts (`Backend`, `Shell`, `PTY`, `Session`, `Host` with its transport: SSH or `Relay *RelayTarget`, `Host.Allows(Capability)` from the relay device scope, `PairRelay`, provisioning types, `HostBoard` + `WatchBoard` + `Reply` for the Panel). Change it only together with every implementation | **no** |
+| `backend/fake/` | In-memory `Backend` with the mockup data (hosts estudio, vps-hetzner, portatil, raspberry, and nube over the relay with an `operate` device; a permission dialog, a question with options, a working session...). Act bumps revisions, the PTY echoes, provisioning streams events, `PairRelay` accepts `fake.InviteLink`, task lists and an open question for the Panel (`WatchBoard`, `Reply`, `SetTasks`, `Ask`); never runs a program | no |
 | `remote/` | `backend.Shell` over SSH (`golang.org/x/crypto/ssh`) and on this computer, `DialUnix` (direct-streamlocal), app key, relay device key (`RelayKey`), TOFU host keys, `hosts.json` (SSH and relay hosts), `~/.ssh/config` import, connection pool. `remote/sshtest/`: in-process SSH server for tests | no |
-| `core/` | The real `Backend`: hosts + shells, daemon socket probe, session aggregation (agentd `ls` + `subscribe`, zellij/tmux polling, plain shells), views, mailbox, act, attach, run, kill. Every daemon op on a fresh `client.Client` (`client.Dial` locally, `client.NewConn` over a direct-streamlocal channel for SSH hosts, over a stream of the host's relay tunnel for relay hosts: `relay.go`, `internal/relayclient`) | no |
+| `core/` | The real `Backend`: hosts + shells, daemon socket probe, session aggregation (agentd `ls` + `subscribe`, zellij/tmux polling, plain shells), views, mailbox, act, attach, run, kill, the board per host (`board.go`: op `board {since_digest}` after the host's `task.*`/`mail.*`/`status.*`/`attention.*`/`session.*` events, debounced 300 ms). Every daemon op on a fresh `client.Client` (`client.Dial` locally, `client.NewConn` over a direct-streamlocal channel for SSH hosts, over a stream of the host's relay tunnel for relay hosts: `relay.go`, `internal/relayclient`) | no |
 | `dirlist/` | Folder browser, host side: the sh script that lists the directories under a path (run through `Shell.Exec`) and the parser of its NUL-separated output; tested under a real `sh` | **no** |
 | `mux/` | zellij and tmux adapters over a `Shell` (port of agentd-app `lib/src/mux`). `mux/muxtest/`: fake Shell | no |
 | `provision/` | Detect script, install plan and steps (agentd `install.sh` + `SHA256SUMS`, systemd user unit, `[herdr] listen`, MCP snippets, agent CLIs); port of agentd-app `lib/src/provision` | no |
@@ -31,8 +32,8 @@ The daemon and the `agentd` CLI never import anything here:
 | `chatfmt/` | Pure Chat text parsing, no MyGo: `Split` finds tables in an assistant block (box-drawing light/heavy/double, columns from the border junctions, wrapped cell fragments joined with a space, header = first row before a separator, markdown pipe tables with alignment; anything inconsistent stays plain text), `Linkify`/`TrimURL` (http/https, trailing punctuation trimmed unless balanced), `OpenURL` (xdg-open / open, replaceable in tests) | no |
 | `kit/` | Palette of the mockups -> `ui.Theme`, embedded fonts (Inter, JetBrains Mono, Atkinson Hyperlegible Next, Literata; OFL 1.1, license texts in `kit/fonts/OFL-*.txt`, embedded too), lucide icon subset (`kit/icons`, ISC), base components | yes |
 | `shell/` | `mygo.App`, main window, application menu, desktop notifications; owns the event loop (main goroutine) | yes |
-| `app/` | `Context`, area registry, router, layout (sidebar + content), `Live` hosts/sessions, `Views` cache, notifier, prefs (`settings.json`). `app/apptest/`: headless harness on the fake backend | yes |
-| `app/<area>/` | `agents`, `session` (Chat + Terminal), `newsession`, `hosts`, `addhost`, `provision`, `mailbox`, `settings` | yes |
+| `app/` | `Context`, area registry (`Area.Badge` = sidebar count), router, layout (sidebar + content), `Live` hosts/sessions/boards, `Views` cache, notifier (sessions and boards), prefs (`settings.json`). `app/apptest/`: headless harness on the fake backend | yes |
+| `app/<area>/` | `panel` (Panel: Por agente / Tablero), `agents`, `session` (Chat + Terminal), `newsession`, `hosts`, `addhost`, `provision`, `mailbox`, `settings` | yes |
 | `desktopui.go` | `Run(Options)`: context, natives, root view, shell; blank-imports the areas; dev aids | yes |
 
 ## Relay hosts
@@ -65,7 +66,24 @@ Regular + Bold TTFs) and line spacing (`chat_line_height`: `compact` | `normal` 
 scale of the agent prose line height 1.5, the user messages' 1.45 and the paragraph gaps). Unknown values
 fall back to `sans` / `normal`.
 
-Routes: agents `/agents` (+ `/agents/s/{host}/{source}/{name}`), hosts `/hosts`, addhost `/hosts/add`,
+## Panel
+
+`app/panel` (first sidebar entry, badge = items needing attention on every host): one screen built from
+`Live.Boards` (`Backend.WatchBoard`, op `board` per host) joined with the session list. "Por agente"
+(default) shows four tiles (esperan tu respuesta, tareas en curso, pendientes, hechas hoy), "Necesita tu
+atención" (open questions: an option or free text answered with `Backend.Reply` (Buzón) or act `prompt`
+with the view's revision + epoch, forced while working (Prompt); menus of `waiting` sessions: act
+`choose` with revision + epoch, a conflict refreshes the cached view and toasts; blocked tasks: Responder
+= `Backend.Send` to the agent, Abrir agente) and one card per agent (current task, progress, next
+pending, footer; agents that report no tasks show status + preview, "Sin tareas informadas"). "Tablero"
+shows four columns from every task list (Pendiente, En curso, Bloqueada, Hecha hoy = done with
+`updated_at` on today's local date). The view is saved as `panel_view` in `settings.json`
+(`/panel?view=tablero|agente` sets it too); "Todos los hosts" filters by host. Relay devices follow
+`Host.Allows`: no mailbox = no Buzón/options/Responder, no operate = no Prompt/menu choices. The human
+never adds or edits tasks. Notifications: a new open question ("<sesión> pregunta") and a task newly
+blocked, behind Ajustes toggles "Preguntas" / "Tareas bloqueadas" (default on); a click opens the Panel.
+
+Routes: panel `/panel`, agents `/agents` (+ `/agents/s/{host}/{source}/{name}`), hosts `/hosts`, addhost `/hosts/add`,
 provision `/hosts/provision/{host}`, newsession `/new` (+ `/new/{host}`), mailbox `/mailbox`
 (+ `/mailbox/{host}`), settings `/settings`. UI copy is Spanish, as in the mockups.
 
@@ -119,7 +137,7 @@ provision `/hosts/provision/{host}`, newsession `/new` (+ `/new/{host}`), mailbo
 | `known_hosts` | Host keys accepted on first use (`~/.ssh/known_hosts` is read too, never written) |
 | `id_ed25519`, `id_ed25519.pub` | The app's own SSH key (0600), generated on first use |
 | `relay_key` | The relay device key (X25519 private half, base64url, 0600), generated on the first pairing; one per install |
-| `settings.json` | UI preferences: notifications, muted sessions, theme (0600; `app.DefaultPrefsPath`) |
+| `settings.json` | UI preferences: notifications, muted sessions, theme, agents grouping, Panel view (0600; `app.DefaultPrefsPath`) |
 
 ## Tests
 

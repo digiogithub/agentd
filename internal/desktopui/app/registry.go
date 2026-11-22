@@ -15,7 +15,7 @@ type Section string
 
 // Sidebar sections.
 const (
-	SectionMain   Section = "main"   // agents, hosts, mailbox
+	SectionMain   Section = "main"   // panel, agents, hosts, mailbox
 	SectionBottom Section = "bottom" // settings
 	SectionHidden Section = "hidden" // routable pages (new session, add host, provision)
 )
@@ -50,6 +50,9 @@ type Area struct {
 	Parent string
 	// Shortcut is the digit of Ctrl/Cmd+digit (0 = none).
 	Shortcut int
+	// Badge is the count the sidebar entry shows (nil or 0 = none). It runs
+	// on the UI thread every frame.
+	Badge func(a *Context) int
 	// New builds the area's view once, the first time it is shown.
 	New func(a *Context) View
 }

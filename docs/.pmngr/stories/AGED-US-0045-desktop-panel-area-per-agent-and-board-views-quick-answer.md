@@ -2,13 +2,14 @@
 id: AGED-US-0045
 type: story
 title: "Desktop: Panel area (per-agent and board views), quick answer, notifications"
-status: in_progress
+status: done
 priority: high
 parent: AGED-EP-0007
 labels: [dashboard, desktop]
 created: 2026-11-22T08:23:35Z
-updated: 2026-11-22T08:53:43Z
+updated: 2026-11-22T09:12:40Z
 started: 2026-11-22T08:53:43Z
+closed: 2026-11-22T09:12:40Z
 ---
 
 ## Goal

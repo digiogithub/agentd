@@ -27,6 +27,12 @@ type fakeDaemon struct {
 	lsCalls   int
 	viewCalls int
 	conns     []net.Conn
+	// board is what op board answers; boardArgs records each call. A call
+	// whose since_digest equals board.Digest gets not_modified.
+	board     proto.BoardResult
+	boardArgs []proto.BoardArgs
+	noBoard   bool // answer board like a daemon without the op
+	replies   []proto.ReplyArgs
 }
 
 func newFakeDaemon(t *testing.T) *fakeDaemon {
@@ -139,6 +145,29 @@ func (f *fakeDaemon) serve(c net.Conn) {
 			}
 			resp, _ = proto.OKResponse(proto.View{Name: a.Name, Epoch: "E1", Revision: 1, Status: "idle",
 				Lines: []proto.ViewLine{{Text: "hola *mundo*", Role: "transcript"}}})
+		case proto.OpBoard:
+			var a proto.BoardArgs
+			_ = req.DecodeArgs(&a)
+			f.mu.Lock()
+			f.boardArgs = append(f.boardArgs, a)
+			b, no := f.board, f.noBoard
+			f.mu.Unlock()
+			switch {
+			case no:
+				resp = proto.ErrorResponse(proto.Errorf(proto.CodeInvalid, "unknown op %q", req.Op))
+			case a.SinceDigest != "" && a.SinceDigest == b.Digest:
+				resp, _ = proto.OKResponse(proto.BoardResult{Digest: b.Digest, NotModified: true})
+			default:
+				resp, _ = proto.OKResponse(b)
+			}
+		case proto.OpReply:
+			var a proto.ReplyArgs
+			_ = req.DecodeArgs(&a)
+			f.mu.Lock()
+			f.replies = append(f.replies, a)
+			f.mu.Unlock()
+			id := a.ID
+			resp, _ = proto.OKResponse(proto.Message{ID: 900, Sender: "human:u", Recipient: "a@p", Body: a.Body, ReplyTo: &id, State: "queued"})
 		default:
 			resp = proto.ErrorResponse(proto.Errorf(proto.CodeInvalid, "fake: %s", req.Op))
 		}
@@ -146,6 +175,18 @@ func (f *fakeDaemon) serve(c net.Conn) {
 			return
 		}
 	}
+}
+
+func (f *fakeDaemon) setBoard(b proto.BoardResult) {
+	f.mu.Lock()
+	f.board = b
+	f.mu.Unlock()
+}
+
+func (f *fakeDaemon) boardCalls() []proto.BoardArgs {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]proto.BoardArgs(nil), f.boardArgs...)
 }
 
 func rawJSON(v any) json.RawMessage {

@@ -209,3 +209,54 @@ func TestNotifierTransitions(t *testing.T) {
 		t.Errorf("sent %q", sh.sent)
 	}
 }
+
+func TestNotifierBoards(t *testing.T) {
+	a := NewContext(context.Background(), nil, nil)
+	sh := &fakeShell{}
+	a.SetShell(sh)
+	n := StartNotifier(a)
+	now := time.Now()
+	n.Now = func() time.Time { return now }
+	task := func(st string) proto.Task {
+		return proto.Task{ID: "t1", Title: "Prueba del relay", Status: st, Note: "falta el token"}
+	}
+	board := func(tasks []proto.Task, qs ...proto.BoardQuestion) []backend.HostBoard {
+		return []backend.HostBoard{{HostID: "h", Board: proto.BoardResult{Sessions: []proto.BoardSession{
+			{Name: "codex@relay", Status: "idle", Tasks: tasks, Questions: qs}}}}}
+	}
+	var prev []backend.HostBoard
+	emit := func(next []backend.HostBoard) {
+		for _, fn := range a.Live.OnBoards {
+			fn(prev, next)
+		}
+		prev = next
+	}
+	q := proto.BoardQuestion{ID: 7, Body: "¿Migro ahora?", Options: []string{"Sí", "No"}}
+	emit(board([]proto.Task{task(proto.TaskBlocked)}, q)) // first board: baseline only
+	emit(board([]proto.Task{task(proto.TaskBlocked)}, q))
+	if len(sh.sent) != 0 {
+		t.Fatalf("baseline notified: %q", sh.sent)
+	}
+	emit(board([]proto.Task{task(proto.TaskInProgress)}))
+	emit(board([]proto.Task{task(proto.TaskBlocked)}, proto.BoardQuestion{ID: 8, Body: "¿Y los tests?"}))
+	want := []string{"codex@relay pregunta|¿Y los tests?", "codex@relay · tarea bloqueada|Prueba del relay · falta el token"}
+	if len(sh.sent) != 2 || sh.sent[0] != want[0] || sh.sent[1] != want[1] {
+		t.Errorf("sent %q, want %q", sh.sent, want)
+	}
+	// Settings off and mutes silence them.
+	_ = a.Prefs.Update(func(st *Settings) { st.NotifyQuestion, st.NotifyBlocked = false, false })
+	emit(board([]proto.Task{task(proto.TaskInProgress)}))
+	emit(board([]proto.Task{task(proto.TaskBlocked)}, proto.BoardQuestion{ID: 9, Body: "¿Otra?"}))
+	_ = a.Prefs.Update(func(st *Settings) {
+		st.NotifyQuestion, st.NotifyBlocked = true, true
+		st.Muted = []Mute{{Session: BoardSessionKey("h", "codex@relay"), Until: now.Add(time.Hour)}}
+	})
+	emit(board([]proto.Task{task(proto.TaskInProgress)}))
+	emit(board([]proto.Task{task(proto.TaskBlocked)}, proto.BoardQuestion{ID: 10, Body: "¿Una más?"}))
+	if len(sh.sent) != 2 {
+		t.Errorf("silenced notifications sent: %q", sh.sent)
+	}
+	if !DefaultSettings.NotifyQuestion || !DefaultSettings.NotifyBlocked {
+		t.Errorf("defaults %+v", DefaultSettings)
+	}
+}

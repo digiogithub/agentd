@@ -54,6 +54,10 @@ func (v *View) Build(c *ui.Context, r *ui.Route) {
 						func(s *app.Settings, on bool) { s.NotifyWaiting = on })
 					v.toggle(c, t, "done", "Termina un turno", "Agrupado cada 30 s por sesión", s.NotifyTurnDone,
 						func(s *app.Settings, on bool) { s.NotifyTurnDone = on })
+					v.toggle(c, t, "question", "Preguntas", "Un agente te pregunta por el buzón", s.NotifyQuestion,
+						func(s *app.Settings, on bool) { s.NotifyQuestion = on })
+					v.toggle(c, t, "blocked", "Tareas bloqueadas", "Un agente marca una tarea como bloqueada", s.NotifyBlocked,
+						func(s *app.Settings, on bool) { s.NotifyBlocked = on })
 					v.toggle(c, t, "exit", "Una sesión se cierra", "Incluye el código de salida", s.NotifyExit,
 						func(s *app.Settings, on bool) { s.NotifyExit = on })
 					v.toggle(c, t, "reply", "Responder desde el aviso", "Al hacer clic en el aviso se abre la pregunta para permitir, denegar o escribir",

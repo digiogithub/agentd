@@ -19,10 +19,15 @@ type Live struct {
 	Sessions       []backend.Session
 	HostsLoaded    bool
 	SessionsLoaded bool
+	// Boards are the work boards of the hosts whose agentd is up (op board).
+	Boards       []backend.HostBoard
+	BoardsLoaded bool
 
 	// OnSessions runs on the UI thread with the previous and new sessions
 	// (the notification service uses it).
 	OnSessions []func(prev, next []backend.Session)
+	// OnBoards runs on the UI thread with the previous and new boards.
+	OnBoards []func(prev, next []backend.HostBoard)
 }
 
 // Start subscribes to the backend (once). Call it on the UI thread.
@@ -48,6 +53,30 @@ func (l *Live) Start() {
 			})
 		}
 	})
+	a.Go(func(ctx context.Context) {
+		for bs := range a.Backend.WatchBoard(ctx) {
+			a.Update(func() {
+				prev := l.Boards
+				if !l.BoardsLoaded {
+					prev = nil
+				}
+				l.Boards, l.BoardsLoaded = bs, true
+				for _, fn := range l.OnBoards {
+					fn(prev, bs)
+				}
+			})
+		}
+	})
+}
+
+// Board returns the board of a host.
+func (l *Live) Board(hostID string) (backend.HostBoard, bool) {
+	for _, b := range l.Boards {
+		if b.HostID == hostID {
+			return b, true
+		}
+	}
+	return backend.HostBoard{}, false
 }
 
 // Host returns the status of a host.

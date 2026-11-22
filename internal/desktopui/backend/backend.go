@@ -326,6 +326,21 @@ var (
 	ErrDirDenied   = errors.New("directory not accessible")
 )
 
+// HostBoard is the work board of one host whose agentd daemon is up (op
+// board): every session's status, task list and the open questions it asked
+// the human.
+type HostBoard struct {
+	HostID string
+	// Board is the daemon's last answer (Digest kept for since_digest).
+	Board proto.BoardResult
+	// Updated is when Board was fetched.
+	Updated time.Time
+	// Err is the last refresh error ("" = fresh). Board keeps the last good
+	// answer; a daemon without op board (before AGED-US-0041) has an empty
+	// Board and Err set, and the UI falls back to the session list.
+	Err string
+}
+
 // PlannedStep is one provisioning step, shown before it runs.
 type PlannedStep struct {
 	Step    string // download verify install service hc_listener mcp cli:<name>
@@ -401,6 +416,18 @@ type Backend interface {
 	Inbox(ctx context.Context, hostID string) ([]proto.Message, error)
 	Queues(ctx context.Context, hostID string) ([]proto.QueueCount, error)
 	Send(ctx context.Context, hostID string, args proto.SendArgs) (*proto.Message, error)
+	// Reply answers message id (an agent's question) as the host's human
+	// user (op reply): the reply goes to the asking session and closes the
+	// question. Relay devices need CapMailbox.
+	Reply(ctx context.Context, hostID string, id int64, body string) (*proto.Message, error)
+
+	// Board (agentd hosts)
+	// WatchBoard streams the boards of every host whose daemon is up
+	// (offline hosts and hosts without agentd are left out), ordered by host
+	// ID. A host's board is refreshed with board {since_digest} on its
+	// task.*, mail.*, status.*, attention.* and session.* events (debounced)
+	// and when its event stream reconnects.
+	WatchBoard(ctx context.Context) <-chan []HostBoard
 
 	// Provisioning
 	Detect(ctx context.Context, hostID string) (*Capabilities, error)

@@ -90,6 +90,9 @@ type Options struct {
 	// PreviewRefresh debounces the ls reload that refreshes previews after
 	// view/status events (default 750 ms).
 	PreviewRefresh time.Duration
+	// BoardDebounce is the wait between a board-relevant event and the
+	// board refresh it triggers (default 300 ms).
+	BoardDebounce time.Duration
 	// FirstPromptTimeout bounds the wait for a launched session to become
 	// idle before its first prompt (default 60 s).
 	FirstPromptTimeout time.Duration
@@ -122,8 +125,11 @@ type Backend struct {
 	shells   map[string]map[string]*shellSession // host -> name
 	shellSeq int
 	watchers int // WatchSessions consumers
-	hostList []backend.Host
-	hostOK   bool
+	// boardWatchers counts WatchBoard consumers (boards are fetched only
+	// while there is one).
+	boardWatchers int
+	hostList      []backend.Host
+	hostOK        bool
 	// passwords are one-time passwords of ConnectWithPassword, only
 	// while its dial runs (never stored or logged).
 	passwords map[string]string
@@ -134,6 +140,7 @@ type Backend struct {
 
 	hostsB *bcast[[]backend.HostStatus]
 	sessB  *bcast[[]backend.Session]
+	boardB *bcast[[]backend.HostBoard]
 }
 
 var _ backend.Backend = (*Backend)(nil)
@@ -159,6 +166,9 @@ func New(opts Options) *Backend {
 	}
 	if opts.PreviewRefresh <= 0 {
 		opts.PreviewRefresh = 750 * time.Millisecond
+	}
+	if opts.BoardDebounce <= 0 {
+		opts.BoardDebounce = 300 * time.Millisecond
 	}
 	if opts.FirstPromptTimeout <= 0 {
 		opts.FirstPromptTimeout = 60 * time.Second
@@ -195,6 +205,7 @@ func New(opts Options) *Backend {
 		relays:    map[string]*relayLink{},
 		hostsB:    newBcast[[]backend.HostStatus](),
 		sessB:     newBcast[[]backend.Session](),
+		boardB:    newBcast[[]backend.HostBoard](),
 	}
 	dial := opts.Dial
 	if dial == nil {
@@ -445,6 +456,7 @@ func (b *Backend) RemoveHost(ctx context.Context, id string) error {
 	b.pool.Forget(id)
 	b.publishHosts()
 	b.publishSessions()
+	b.publishBoard()
 	return nil
 }
 
