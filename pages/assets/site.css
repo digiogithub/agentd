@@ -333,3 +333,16 @@ footer nav { display: flex; flex-wrap: wrap; gap: 18px; margin-left: auto; }
 
 /* app icon (same as the desktop and Android apps) */
 .app-icon { display: block; width: 72px; height: 72px; margin: 0 0 14px; border-radius: 16px; box-shadow: 3px 4px 0 rgba(34, 36, 58, .18); }
+
+/* work dashboard: screenshots pinned like photographs (the only raster images of the site) */
+.dashboard .snip { max-width: 860px; margin-top: 34px; }
+.shots { display: grid; grid-template-columns: minmax(0, 980px); justify-content: center; gap: 44px; margin-top: 54px; }
+.shots.phones { grid-template-columns: repeat(3, minmax(0, 250px)); justify-content: center; gap: 40px 54px; }
+.shot { margin: 0; padding: 14px 14px 12px; }
+.shot::before { background: var(--grain), var(--card); background-size: 220px; box-shadow: 4px 6px 0 rgb(34 36 58 / .14); }
+.shot img { width: 100%; height: auto; border: 2px solid var(--ink); border-radius: 6px; background: #0d1117; }
+.shot figcaption { margin-top: 10px; font: 1.08rem/1.3 var(--body); color: var(--ink-soft); text-align: center; }
+.shot .tape { position: absolute; z-index: 1; top: -12px; left: 50%; width: 92px; height: 24px; transform: translateX(-50%) rotate(-3deg); background: rgb(241 181 49 / .55); box-shadow: 0 1px 2px rgb(0 0 0 / .08); }
+.dashboard .note { margin-top: 34px; }
+@media (max-width: 900px) { .shots.phones { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 30px 20px; } }
+@media (max-width: 640px) { .shots.phones { grid-template-columns: minmax(0, 300px); } }

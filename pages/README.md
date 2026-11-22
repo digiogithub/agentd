@@ -8,13 +8,21 @@ copies this folder as-is.
 pages/
   index.html        English
   es/index.html     Spanish (same markup; keep both in sync when editing)
-  assets/site.css   hand-drawn postcard / wax-crayon look (SVG noise + #wobble filter, no images)
+  assets/site.css   hand-drawn postcard / wax-crayon look (SVG noise + #wobble filter; the only raster
+                    images are the screenshots below)
   assets/site.js    copy buttons, scroll reveal, OS detection, latest-release download links
   assets/fonts/     Caveat, Patrick Hand, Courier Prime (OFL-1.1, latin subset, woff2)
   assets/favicon.svg         the app icon (same as packaging/agentd-desktop.svg)
   assets/app-icon.svg        the app icon, shown in the Apps section
   assets/apple-touch-icon.png  180x180 render of the app icon
+  assets/shots/     work dashboard screenshots (webp), shown in the `#dashboard` section as taped
+                    photographs (`.shots` / `.shot`): panel-desktop-agents, panel-desktop-board (1600x1012),
+                    panel-mobile, panel-mobile-answer, panel-mobile-agent (780x1688)
 ```
+
+The screenshots are renders of the Panel design artboards (Spanish UI, sample data), exported at 2x
+and saved as webp (quality 84, under 250 KB each). Both languages use the same files; every `<img>`
+carries `width`/`height` and an `alt` in the page's language.
 
 Download links are filled at run time from the GitHub API
 (`repos/digiogithub/agentd/releases/latest`), matched by asset name pattern (`.deb` amd64/arm64,
