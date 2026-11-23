@@ -31,7 +31,8 @@ const (
 // output, or a status line.
 type Item struct {
 	Kind  ItemKind
-	Title string // tool: the call ("go test ./...")
+	Title string // tool: the call ("go test ./..."), its first line
+	Call  string // tool: the whole call when it spans several lines
 	Meta  string // tool: "4,1 s", "+42 −7"
 	Text  string // prose (agent: chat markup, CommonMark), prompt, or the tool's output
 	OK    *bool  // tool outcome when the marker tells it (✓ / ✗)
@@ -43,12 +44,33 @@ var (
 	toolCallRe = regexp.MustCompile(`^(?:[A-Z][A-Za-z]+\(.*\)|(?:Edited|Ran|Read|Wrote|Updated|Created|Deleted|Searched|Explored)\b.*|[a-z][\w.-]* .*)$`)
 	durationRe = regexp.MustCompile(`\s+(\d+(?:[.,]\d+)?\s?(?:ms|s|min))$`)
 	diffRe     = regexp.MustCompile(`\s*\((\+\d+\s*[−-]\d+)\)$`)
+	// turnEndRe is the line a harness prints when a turn ends ("✻ Brewed for
+	// 8s · done 15:16"): a status note, not agent prose.
+	turnEndRe = regexp.MustCompile(`^[✻✶✳✢✽·*] \p{Lu}\p{L}* for \d`)
 )
+
+// codeFence opens and closes the code blocks Items writes into agent prose.
+const codeFence = "````"
+
+// boldCall reports whether md (a line's chat markup after its mark) starts
+// with a bold name followed by "(" or by nothing: how a harness draws a tool
+// call header ("**Bash**(go test ./...", "**Read**" while the call is still
+// being written). The header may be the first of several lines.
+func boldCall(md string) bool {
+	rest, ok := strings.CutPrefix(md, "**")
+	if !ok {
+		return false
+	}
+	name, after, ok := strings.Cut(rest, "**")
+	return ok && strings.TrimSpace(name) != "" && (after == "" || strings.HasPrefix(after, "("))
+}
 
 // Items turns view lines into chat entries. Dialog lines are left out when
 // the dialog shows as the question card. Agent prose is built from the lines'
 // chat markup (ViewLine.Md, else the text), with a blank line kept as a
-// paragraph break.
+// paragraph break; runs of code lines (ViewLine.Code) become fenced code
+// blocks. A tool call takes the indented lines under its header: those before
+// the output mark (⎿) continue the call, the rest are its output.
 func Items(lines []proto.ViewLine, hideDialog bool) []Item {
 	var out []Item
 	last := func() *Item {
@@ -57,8 +79,43 @@ func Items(lines []proto.ViewLine, hideDialog bool) []Item {
 		}
 		return &out[len(out)-1]
 	}
-	blank := false // a blank line since the last agent text
-	addAgent := func(it *Item, md string) {
+	blank := false  // a blank line since the last agent text
+	inCode := false // the last agent item ends inside an open code fence
+	output := false // the last tool item has reached its output
+	closeCode := func() {
+		if inCode {
+			out[len(out)-1].Text += "\n" + codeFence
+			inCode = false
+		}
+	}
+	push := func(it Item) {
+		closeCode()
+		out = append(out, it)
+		blank, output = false, false
+	}
+	// addAgent appends one line to agent item it: md is its chat markup, raw
+	// its text as code (indentation kept).
+	addAgent := func(it *Item, md, raw string, code bool) {
+		// An unhighlighted line right under code (a lone brace) is code too.
+		if code || (inCode && !blank) {
+			switch {
+			case !inCode && it.Text == "":
+				it.Text = codeFence + "\n"
+			case !inCode:
+				it.Text += "\n\n" + codeFence + "\n"
+			case blank:
+				it.Text += "\n\n"
+			default:
+				it.Text += "\n"
+			}
+			it.Text += raw
+			inCode, blank = true, false
+			return
+		}
+		if inCode {
+			closeCode()
+			blank = true
+		}
 		switch {
 		case it.Text == "":
 		case blank:
@@ -82,11 +139,11 @@ func Items(lines []proto.ViewLine, hideDialog bool) []Item {
 				continue
 			}
 		case "gap":
-			out = append(out, Item{Kind: ItemSystem, Text: "…"})
+			push(Item{Kind: ItemSystem, Text: "…"})
 			continue
 		case "status":
 			if strings.TrimSpace(text) != "" {
-				out = append(out, Item{Kind: ItemSystem, Text: strings.TrimSpace(text)})
+				push(Item{Kind: ItemSystem, Text: strings.TrimSpace(text)})
 			}
 			continue
 		}
@@ -95,27 +152,47 @@ func Items(lines []proto.ViewLine, hideDialog bool) []Item {
 			continue
 		}
 		if p, ok := cutAny(text, userPrefix); ok {
-			out = append(out, Item{Kind: ItemUser, Text: p})
-			blank = false
+			push(Item{Kind: ItemUser, Text: p})
 			continue
 		}
 		indented := strings.HasPrefix(text, " ") || strings.HasPrefix(text, "⎿")
 		if indented {
-			body := strings.TrimLeft(strings.TrimSpace(text), "⎿ ")
-			mdBody := strings.TrimLeft(strings.TrimSpace(md), "⎿ ")
+			trimmed := strings.TrimSpace(text)
+			body := strings.TrimLeft(trimmed, "⎿ \u00a0")
+			mdBody := strings.TrimLeft(strings.TrimSpace(md), "⎿ \u00a0")
+			// Agent prose is indented two columns under its mark.
+			raw := strings.TrimPrefix(strings.TrimPrefix(text, " "), " ")
 			if it := last(); it != nil && it.Kind == ItemAgent {
-				addAgent(it, mdBody)
+				addAgent(it, mdBody, raw, l.Code)
+				continue
+			}
+			if it := last(); it != nil && it.Kind == ItemUser {
+				// A prompt of several lines: only its first carries the mark.
+				if blank {
+					it.Text += "\n"
+				}
+				it.Text += "\n" + trimmed
+				blank = false
 				continue
 			}
 			if it := last(); it != nil && it.Kind == ItemTool {
+				if !output && !strings.HasPrefix(trimmed, "⎿") {
+					// The call goes on: a wrapped path, a multi-line command.
+					if it.Call == "" {
+						it.Call = it.Title
+					}
+					it.Call += "\n" + raw
+					continue
+				}
+				output = true
 				if it.Text != "" {
 					it.Text += "\n"
 				}
 				it.Text += body
 				continue
 			}
-			out = append(out, Item{Kind: ItemAgent, Text: mdBody})
-			blank = false
+			push(Item{Kind: ItemAgent})
+			addAgent(last(), mdBody, raw, l.Code)
 			continue
 		}
 		mark := ""
@@ -126,8 +203,9 @@ func Items(lines []proto.ViewLine, hideDialog bool) []Item {
 			}
 		}
 		rest := strings.TrimPrefix(text, mark)
-		if mark != "" && (toolCallRe.MatchString(rest) || strings.HasPrefix(mark, "✓") || strings.HasPrefix(mark, "✗") ||
-			strings.HasPrefix(mark, "✔") || strings.HasPrefix(mark, "✘")) && len(rest) < 160 {
+		mdRest := strings.TrimPrefix(md, mark)
+		outcome := strings.HasPrefix(mark, "✓") || strings.HasPrefix(mark, "✗") || strings.HasPrefix(mark, "✔") || strings.HasPrefix(mark, "✘")
+		if mark != "" && !l.Code && (boldCall(mdRest) || ((toolCallRe.MatchString(rest) || outcome) && len(rest) < 160)) {
 			it := Item{Kind: ItemTool, Title: rest}
 			if m := durationRe.FindStringSubmatch(it.Title); m != nil {
 				it.Meta, it.Title = m[1], strings.TrimSpace(strings.TrimSuffix(it.Title, m[0]))
@@ -142,18 +220,21 @@ func Items(lines []proto.ViewLine, hideDialog bool) []Item {
 				ok := false
 				it.OK = &ok
 			}
-			out = append(out, it)
-			blank = false
+			push(it)
 			continue
 		}
-		mdRest := strings.TrimPrefix(md, mark)
+		if mark == "" && turnEndRe.MatchString(text) {
+			push(Item{Kind: ItemSystem, Text: text})
+			continue
+		}
 		if it := last(); it != nil && it.Kind == ItemAgent && mark == "" {
-			addAgent(it, mdRest)
+			addAgent(it, mdRest, text, l.Code)
 			continue
 		}
-		out = append(out, Item{Kind: ItemAgent, Text: mdRest})
-		blank = false
+		push(Item{Kind: ItemAgent})
+		addAgent(last(), mdRest, rest, l.Code)
 	}
+	closeCode()
 	return out
 }
 
@@ -235,7 +316,7 @@ func (v *View) item(c *ui.Context, t *kit.Tokens, i int, it Item) {
 	case ItemSystem:
 		ui.Text(c, it.Text).FontSize(12).TextColor(t.Muted).TextAlign(ui.Center).FillWidth()
 	case ItemTool:
-		hasBody := strings.TrimSpace(it.Text) != ""
+		hasBody := strings.TrimSpace(it.Text) != "" || it.Call != ""
 		open := v.expanded[i]
 		card := ui.ButtonBase(c).Label(it.Title).Column().Padding(0, 12).Radius(12).Background(t.Surface).
 			Border(1, t.Border).MaxWidthPercent(92).AlignItems(ui.Stretch).Expanded(open)
@@ -268,8 +349,17 @@ func (v *View) item(c *ui.Context, t *kit.Tokens, i int, it Item) {
 				}
 			})
 			if open && hasBody {
-				ui.Column(c).Margin(0, 0, 10, 0).AlignItems(ui.Stretch).Children(func() {
-					v.prose(c, t, it.Text, v.a.Prefs.Get().ChatSize()*0.83, 1.45, true)
+				ui.Column(c).Margin(0, 0, 10, 0).Gap(8).AlignItems(ui.Stretch).Children(func() {
+					size := v.a.Prefs.Get().ChatSize() * 0.83
+					if it.Call != "" {
+						v.prose(c.Key("call"), t, it.Call, size, 1.45, true)
+						if strings.TrimSpace(it.Text) != "" {
+							ui.Row(c).Height(1).Background(t.Divider)
+						}
+					}
+					if strings.TrimSpace(it.Text) != "" {
+						v.prose(c.Key("out"), t, it.Text, size, 1.45, true)
+					}
 				})
 			}
 		})

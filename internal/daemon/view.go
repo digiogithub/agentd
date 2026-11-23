@@ -279,14 +279,17 @@ func (v *viewState) observeLocked(snap *screen.Snapshot, now time.Time) {
 }
 
 // transientFn builds the History filter for status rows of a profile: lines
-// matching busy_regex or starting with a spinner_chars glyph.
+// matching busy_regex or info_regex, or starting with a spinner_chars glyph.
 func transientFn(r screen.Rules) func(string) bool {
-	if r.BusyRegex == nil && r.SpinnerChars == "" {
+	if r.BusyRegex == nil && r.InfoRegex == nil && r.SpinnerChars == "" {
 		return nil
 	}
 	return func(t string) bool {
 		t = strings.TrimSpace(t)
 		if r.BusyRegex != nil && r.BusyRegex.MatchString(t) {
+			return true
+		}
+		if r.InfoRegex != nil && r.InfoRegex.MatchString(t) {
 			return true
 		}
 		for _, c := range t {
@@ -539,7 +542,9 @@ func (s *Server) viewOp(who caller, a proto.ViewArgs) (any, error) {
 	for i, l := range lines {
 		out.Lines[i] = proto.ViewLine{Text: l.Text, Role: string(l.Role)}
 		if a.Markup && (l.Role == screen.RoleTranscript || l.Role == "") {
-			if md := screen.Markup(l); md != l.Text {
+			if v.rules.CodeANSI && screen.CodeLine(l) {
+				out.Lines[i].Code = true
+			} else if md := screen.Markup(l); md != l.Text {
 				out.Lines[i].Md = md
 			}
 		}

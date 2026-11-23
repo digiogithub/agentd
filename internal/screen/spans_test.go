@@ -80,3 +80,30 @@ func TestSpansSurviveWrapJoin(t *testing.T) {
 		t.Fatalf("markup %q", m)
 	}
 }
+
+// A line with text in an ANSI palette colour is syntax-highlighted code; the
+// theme colours of inline code and chrome ("#rrggbb") and bold are not.
+func TestCodeLine(t *testing.T) {
+	pal := func(s string) Row {
+		r := styledRow("  ", "~"+s, " /tmp")
+		for i := range r.Cells {
+			if r.Cells[i].Fg != "" {
+				r.Cells[i].Fg = "6"
+			}
+		}
+		return r
+	}
+	theme := styledRow("  usa ", "~agentd", " aquí")
+	for i := range theme.Cells {
+		if theme.Cells[i].Fg != "" {
+			theme.Cells[i].Fg = "#99ccff"
+		}
+	}
+	lines := ReflowRows([]Row{pal("cd"), theme, styledRow("  ", "*Bash", "(ls)"), styledRow("  plain")}, 80, ReflowOpts{})
+	want := []bool{true, false, false, false}
+	for i, l := range lines {
+		if CodeLine(l) != want[i] {
+			t.Errorf("line %d %q: CodeLine = %v", i, l.Text, !want[i])
+		}
+	}
+}

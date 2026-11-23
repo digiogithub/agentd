@@ -18,6 +18,7 @@ const (
 	RegionHeader     Region = "header"
 	RegionDialog     Region = "dialog"
 	RegionStatus     Region = "status"
+	RegionInfo       Region = "info"
 	RegionRule       Region = "rule"
 )
 
@@ -241,13 +242,19 @@ func Split(s *Snapshot, r Rules) Regions {
 	}
 
 	// Status: busy / spinner rows directly above the input box (or footer),
-	// separated from the transcript only by blank rows.
+	// separated from the transcript only by blank rows. Rows matching
+	// info_regex there are chrome (RegionInfo): left out of the transcript
+	// without counting as busy.
 	for y := limit - 1; y >= 0 && res.Of[y] == RegionTranscript; y-- {
 		if sep[y] {
 			continue
 		}
 		t := rowText(s.Screen[y], s.Cols)
 		if t == "" {
+			continue
+		}
+		if r.InfoRegex != nil && r.InfoRegex.MatchString(t) {
+			res.Of[y] = RegionInfo
 			continue
 		}
 		if !isStatusRow(t, r) {

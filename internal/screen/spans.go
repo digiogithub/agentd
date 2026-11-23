@@ -255,3 +255,20 @@ func escapeMarkup(s string) string {
 	}
 	return b.String()
 }
+
+// CodeLine reports whether l is syntax-highlighted program text: it has a
+// run of letters or digits, not bold, drawn in an ANSI palette colour (a
+// colour index, not "#RRGGBB"). Meant for harnesses whose prose, inline code
+// and chrome use theme (truecolor) colours while their code blocks use the
+// palette (profile code_ansi_colors).
+func CodeLine(l Line) bool {
+	for _, sp := range l.Spans {
+		if sp.Fg == "" || strings.HasPrefix(sp.Fg, "#") || sp.Attrs&Bold != 0 || sp.Start < 0 || sp.End > len(l.Text) || sp.Start >= sp.End {
+			continue
+		}
+		if strings.IndexFunc(l.Text[sp.Start:sp.End], func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) >= 0 {
+			return true
+		}
+	}
+	return false
+}

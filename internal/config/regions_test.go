@@ -39,6 +39,8 @@ spinner_chars = "✻✳"
 reflow_break_regex = "^[⏺●] "
 input_bg_colors = ["#101010", "236"]
 dialog_context_rows = 3
+info_regex = "^\\d+ tokens$"
+code_ansi_colors = true
 `)
 	if err != nil {
 		t.Fatal(err)
@@ -47,6 +49,13 @@ dialog_context_rows = 3
 	if p.WrapMargin != 4 || p.Footer == nil || !p.Footer.MatchString("? for shortcuts") || p.Busy == nil || p.SpinnerChars != "✻✳" ||
 		p.ReflowBreak == nil || len(p.InputBgSpecs) != 2 || p.DialogContextRows != 3 {
 		t.Fatalf("mine = %+v", p)
+	}
+	if p.Info == nil || !p.Info.MatchString("134920 tokens") || !p.CodeANSIColors {
+		t.Fatalf("info/code = %+v", p)
+	}
+	if cl := c.Profile("claude").Regions; cl.Info == nil || !cl.Info.MatchString("✶ Brewing… (23s · ↓ 1.4k tokens)") || !cl.Info.MatchString("134920 tokens") ||
+		cl.Info.MatchString("● Listo…") || cl.Info.MatchString("✻ Brewed for 8s") || !cl.CodeANSIColors || c.Profile("codex").Regions.CodeANSIColors {
+		t.Fatalf("claude built-in info_regex / code_ansi_colors: %+v", cl)
 	}
 	if c.Profile("claude").Regions.WrapMargin != 4 {
 		t.Error("default layer not inherited by claude")

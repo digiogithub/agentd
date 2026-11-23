@@ -307,3 +307,16 @@ func TestHistoryForcedDeferralThenAlignedRetry(t *testing.T) {
 		t.Fatalf("empty history: %d %v", n, def)
 	}
 }
+
+// A tool call header that expands into its arguments and output replaces
+// several rows of the live tail at once: the frame still aligns on the lines
+// above it instead of being stored again after a gap.
+func TestHistoryAlignsWhenLiveTailIsRewritten(t *testing.T) {
+	h := screen.NewHistory(screen.HistoryOpts{})
+	h.Observe(tl("one", "two", "three", "four", "● Read", "", "● Bash", "", "● Grep"), 0, time.Time{})
+	h.Observe(tl("two", "three", "four", "● Read(a.go)", "  ⎿  Read 260 lines", "", "● Bash(ls", "  -la)", "  ⎿  a.go", "", "● Grep(x)"), 0, time.Time{})
+	eq(t, h, "one", "two", "three", "four", "● Read(a.go)", "  ⎿  Read 260 lines", "", "● Bash(ls", "  -la)", "  ⎿  a.go", "", "● Grep(x)")
+	if h.Gaps() != 0 {
+		t.Fatalf("gaps %d", h.Gaps())
+	}
+}

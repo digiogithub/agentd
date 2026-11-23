@@ -874,6 +874,10 @@ type ViewLine struct {
 	// line has no styles worth marking and no character to escape: then it
 	// is Text.
 	Md string `json:"md,omitempty"`
+	// Code marks a line of syntax-highlighted program text (view markup:true,
+	// profiles with code_ansi_colors): clients show runs of such lines as a
+	// code block. Such a line carries no Md: its Text is the code.
+	Code bool `json:"code,omitempty"`
 }
 
 // ViewInput is the harness input line.

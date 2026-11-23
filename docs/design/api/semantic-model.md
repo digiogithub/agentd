@@ -225,6 +225,8 @@ only detected on the cursor row.
   transcript.
 - **Status line**: rows between the transcript and the input box matching `busy_regex` or starting
   with a glyph in `spinner_chars`; reported as `View.Activity` text, not committed to History.
+- **Info rows**: rows in the same place matching `info_regex` (a spinner row, a token counter, a tip): chrome,
+  never transcript or History, and no busy sign.
 - **Dialog**: a framed block (`╭…╮`/`╰…╯`, `┌…┐`, or a block bounded by rule rows) **or** the block of
   rows containing a detected option list (§6) plus up to `dialog_context_rows` (default 6) non-blank
   rows above it (the question). When a dialog is present and no input candidate exists, the dialog
@@ -342,6 +344,8 @@ harness → user default → user harness). All are data (ADR-A04).
 | key | default | claude | codex | pando |
 |---|---|---|---|---|
 | `busy_regex` | `""` | `(?i)esc to interrupt` † | `(?i)esc to interrupt` † | `""` |
+| `info_regex` | `""` | spinner row, token counter, tip (`config.ClaudeInfoRegex`) | `""` | `""` |
+| `code_ansi_colors` | `false` | `true` | `false` | `false` |
 | `waiting_regex` | `""` | `""` | `""` | `""` |
 | `spinner_chars` | `""` | `"✻✳✢✶✽·*"` † | `""` | `""` |
 | `rule_chars` | `"─━═╌┄"` | = | = | = |

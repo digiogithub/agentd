@@ -263,3 +263,21 @@ func TestRuleRowDetection(t *testing.T) {
 		}
 	}
 }
+
+// Rows matching info_regex above the input box (a spinner row, a token
+// counter) are chrome: out of the transcript and not a busy sign.
+func TestSplitInfoRowsAreNotTranscriptNorBusy(t *testing.T) {
+	w := 60
+	s := snapOf(w, "● Bash(go test ./...)", "  ⎿  Running…", "", "✶ Brewing… (23s · ↓ 1.4k tokens)", "                 134920 tokens", rule(w), "❯ ", rule(w))
+	s.Cursor = Pos{X: 2, Y: 6}
+	rules := claudeRules()
+	rules.BusyRegex, rules.SpinnerChars = nil, ""
+	rules.InfoRegex = regexp.MustCompile(`^[^\s\w●⏺❯›>⎿│] \p{Lu}[\p{L}'’ -]*…( \(.*\))?$|^\d[\d.,]*[kKmM]? tokens$`)
+	r := Split(s, rules)
+	if r.Of[1] != RegionTranscript || r.Of[3] != RegionInfo || r.Of[4] != RegionInfo || len(r.Status) != 0 {
+		t.Fatalf("Of %v status %v", r.Of, r.Status)
+	}
+	if got := texts(r.Transcript); len(got) != 2 || got[1] != "  ⎿  Running…" {
+		t.Fatalf("transcript %q", got)
+	}
+}

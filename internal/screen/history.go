@@ -17,7 +17,11 @@ const (
 	// DefaultTailSlack is how many of the newest stored lines may differ from
 	// the incoming frame while still counting as aligned (the live tail mutates
 	// while a reply streams).
-	DefaultTailSlack = 3
+	DefaultTailSlack = 8
+	// tailAnchors is how many non-blank lines must match for a frame to align
+	// when more of the live tail differs than matches (a tool call header
+	// expanding into its arguments and output replaces several rows at once).
+	tailAnchors = 3
 	// SettleQuiet is the output quiet time after which a frame is settled.
 	SettleQuiet = 60 * time.Millisecond
 	// SettleMax is the longest the transcript goes unobserved during
@@ -248,7 +252,8 @@ func (h *History) align(ck []string) (s, o int, ok bool) {
 
 // matches reports whether ck[:o] aligns with keys[s:s+o]: equal keys, except
 // that the newest TailSlack stored lines may differ as long as at least one
-// non-blank line matches and the mismatches do not outnumber the matches.
+// non-blank line matches and the mismatches do not outnumber the matches (or
+// at least tailAnchors non-blank lines match).
 func (h *History) matches(s, o int, ck []string) bool {
 	n := len(h.keys)
 	slack := h.opt.TailSlack
@@ -271,7 +276,7 @@ func (h *History) matches(s, o int, ck []string) bool {
 			return false
 		}
 	}
-	return anchors >= 1 && anchors >= mism
+	return anchors >= 1 && (anchors >= mism || anchors >= tailAnchors)
 }
 
 func (h *History) push(l Line, key string) {

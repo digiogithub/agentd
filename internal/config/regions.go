@@ -34,9 +34,11 @@ type RegionConfig struct {
 	FooterRegex       *string   `toml:"footer_regex"`
 	HeaderRegex       *string   `toml:"header_regex"`
 	BusyRegex         *string   `toml:"busy_regex"`
+	InfoRegex         *string   `toml:"info_regex"`
 	SpinnerChars      *string   `toml:"spinner_chars"`
 	ReflowBreakRegex  *string   `toml:"reflow_break_regex"`
 	WrapMargin        *int      `toml:"wrap_margin"`
+	CodeANSIColors    *bool     `toml:"code_ansi_colors"`
 	DialogContextRows *int      `toml:"dialog_context_rows"`
 }
 
@@ -51,10 +53,15 @@ type RegionProfile struct {
 	Header           *regexp.Regexp // nil when HeaderRegex is ""
 	BusyRegex        string
 	Busy             *regexp.Regexp
+	InfoRegex        string
+	Info             *regexp.Regexp // nil when InfoRegex is ""
 	SpinnerChars     string
 	ReflowBreakRegex string
 	ReflowBreak      *regexp.Regexp
 	WrapMargin       int
+	// CodeANSIColors: text in an ANSI palette colour is syntax-highlighted
+	// code (screen.Rules.CodeANSI).
+	CodeANSIColors bool
 	// DialogContextRows: 0..20 (0 = the screen package default, 6).
 	DialogContextRows int
 }
@@ -66,9 +73,11 @@ func defaultRegionConfig() RegionConfig {
 		FooterRegex:       strp(""),
 		HeaderRegex:       strp(""),
 		BusyRegex:         strp(""),
+		InfoRegex:         strp(""),
 		SpinnerChars:      strp(""),
 		ReflowBreakRegex:  strp(""),
 		WrapMargin:        intp(DefaultWrapMargin),
+		CodeANSIColors:    boolp(false),
 		DialogContextRows: intp(DefaultDialogContextRows),
 	}
 }
@@ -89,6 +98,9 @@ func (r *RegionConfig) merge(o RegionConfig) {
 	if o.BusyRegex != nil {
 		r.BusyRegex = o.BusyRegex
 	}
+	if o.InfoRegex != nil {
+		r.InfoRegex = o.InfoRegex
+	}
 	if o.SpinnerChars != nil {
 		r.SpinnerChars = o.SpinnerChars
 	}
@@ -97,6 +109,9 @@ func (r *RegionConfig) merge(o RegionConfig) {
 	}
 	if o.WrapMargin != nil {
 		r.WrapMargin = o.WrapMargin
+	}
+	if o.CodeANSIColors != nil {
+		r.CodeANSIColors = o.CodeANSIColors
 	}
 	if o.DialogContextRows != nil {
 		r.DialogContextRows = o.DialogContextRows
@@ -163,6 +178,7 @@ func (r RegionConfig) validate() error {
 		{"footer_regex", r.FooterRegex, true},
 		{"header_regex", r.HeaderRegex, true},
 		{"busy_regex", r.BusyRegex, true},
+		{"info_regex", r.InfoRegex, true},
 		{"reflow_break_regex", r.ReflowBreakRegex, true},
 	} {
 		if f.v != nil {
@@ -188,9 +204,11 @@ func (r RegionConfig) resolve() (RegionProfile, error) {
 		FooterRegex:       *r.FooterRegex,
 		HeaderRegex:       *r.HeaderRegex,
 		BusyRegex:         *r.BusyRegex,
+		InfoRegex:         *r.InfoRegex,
 		SpinnerChars:      strings.Clone(*r.SpinnerChars),
 		ReflowBreakRegex:  *r.ReflowBreakRegex,
 		WrapMargin:        *r.WrapMargin,
+		CodeANSIColors:    *r.CodeANSIColors,
 		DialogContextRows: *r.DialogContextRows,
 	}
 	var err error
@@ -204,6 +222,9 @@ func (r RegionConfig) resolve() (RegionProfile, error) {
 		return p, err
 	}
 	if p.Busy, err = stateRegex("busy_regex", p.BusyRegex, true); err != nil {
+		return p, err
+	}
+	if p.Info, err = stateRegex("info_regex", p.InfoRegex, true); err != nil {
 		return p, err
 	}
 	if p.ReflowBreak, err = stateRegex("reflow_break_regex", p.ReflowBreakRegex, true); err != nil {

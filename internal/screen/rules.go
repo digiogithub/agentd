@@ -66,11 +66,18 @@ type Rules struct {
 	HeaderRegex *regexp.Regexp
 	// BusyRegex (profile busy_regex): status-line rows.
 	BusyRegex *regexp.Regexp
+	// InfoRegex (profile info_regex): rows next to the status line that are
+	// chrome (a spinner row, a token counter, a tip): never transcript and,
+	// unlike BusyRegex rows, no sign that the harness is working.
+	InfoRegex *regexp.Regexp
 	// SpinnerChars (profile spinner_chars): glyphs that start a status line.
 	SpinnerChars string
 	// NoJoin (profile reflow_break_regex): a row matching it never continues
 	// the previous row.
 	NoJoin *regexp.Regexp
+	// CodeANSI (profile code_ansi_colors): a transcript line with text in an
+	// ANSI palette colour is syntax-highlighted code (CodeLine).
+	CodeANSI bool
 	// WrapMargin (profile wrap_margin): columns by which a TUI may wrap early.
 	WrapMargin int
 	// DialogContextRows (profile dialog_context_rows); 0 = default.

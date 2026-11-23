@@ -28,9 +28,11 @@ func screenRules(p config.Profile) screen.Rules {
 	r.FooterRegex = rg.Footer
 	r.HeaderRegex = rg.Header
 	r.BusyRegex = rg.Busy
+	r.InfoRegex = rg.Info
 	r.SpinnerChars = rg.SpinnerChars
 	r.NoJoin = rg.ReflowBreak
 	r.WrapMargin = rg.WrapMargin
+	r.CodeANSI = rg.CodeANSIColors
 	if rg.DialogContextRows > 0 {
 		r.DialogContextRows = rg.DialogContextRows
 	}

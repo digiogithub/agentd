@@ -327,6 +327,9 @@ func strp(s string) *string      { return &s }
 func boolp(b bool) *bool         { return &b }
 func strsp(s []string) *[]string { return &s }
 
+// ClaudeInfoRegex is the built-in claude info_regex.
+const ClaudeInfoRegex = `^[^\s\w●⏺❯›>⎿│] \p{Lu}[\p{L}'’ -]*…( \(.*\))?$|^\d[\d.,]*[kKmM]? tokens$|^⎿\s+Tip: `
+
 // builtinProfiles are the profiles known without any config file.
 //
 // The claude and codex values come from captures of the real TUIs
@@ -367,6 +370,17 @@ var builtinProfiles = map[string]ProfileConfig{
 		PromptMarker:          strp("❯"),
 		MenuConfig:            MenuConfig{MenuPointers: strsp([]string{"❯"}), MenuDigitAction: strp(MenuDigitSelect)}, // digit action to confirm (F8)
 		ActConfig:             ActConfig{InterruptKeys: strsp([]string{"esc"})},                                       // to confirm (F8)
+		// Rows Claude Code keeps between the transcript and its input box
+		// (seen in session logs, v2.1.x): the spinner row ("✶ Brewing… (23s ·
+		// ↓ 1.4k tokens)"), the context counter ("134920 tokens") and the tip
+		// under the spinner. They change on every frame, so as transcript
+		// they broke the alignment of the history. Not busy_regex: the
+		// status comes from the output the spinner itself produces.
+		//
+		// Claude Code draws fenced code blocks without the fences, syntax
+		// highlighted in ANSI palette colours; its inline code and its own
+		// chrome use truecolor theme colours.
+		RegionConfig: RegionConfig{InfoRegex: strp(ClaudeInfoRegex), CodeANSIColors: boolp(true)},
 	},
 	"codex": {
 		PromptRegex:        strp(`(?m)^›( |$)`),

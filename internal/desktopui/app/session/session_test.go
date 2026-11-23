@@ -320,3 +320,70 @@ func TestSendErrorText(t *testing.T) {
 		t.Errorf("default %q %q", title, d)
 	}
 }
+
+// A tool call is recognised by its bold name, also while it is still being
+// written and when it spans several lines; the lines before the output mark
+// continue the call, the rest are its output, and none leaks into the prose.
+func TestItemsGroupMultiLineToolCalls(t *testing.T) {
+	items := session.Items([]proto.ViewLine{
+		{Text: "● Miro el estado.", Role: "transcript"},
+		{Text: "", Role: "transcript"},
+		{Text: "● Bash(agentd task set <<'EOF'", Md: "● **Bash**(agentd task set \\<\\<'EOF'", Role: "transcript"},
+		{Text: "  [", Md: "  \\[", Role: "transcript"},
+		{Text: "", Role: "transcript"},
+		{Text: "   {\"id\":\"a\"}", Role: "transcript"},
+		{Text: "  EOF)", Role: "transcript"},
+		{Text: "  ⎿  revision 2", Role: "transcript"},
+		{Text: "     second line", Role: "transcript"},
+		{Text: "", Role: "transcript"},
+		{Text: "● Read", Md: "● **Read**", Role: "transcript"},
+		{Text: "", Role: "transcript"},
+		{Text: "● agentd - agentd_inbox (MCP)(all: true)", Md: "● **agentd - agentd\\_inbox (MCP)**(all: true)", Role: "transcript"},
+		{Text: "● Listo", Role: "transcript"},
+		{Text: "✻ Brewed for 8s · done 15:16", Role: "transcript"},
+	}, true)
+	kinds := []session.ItemKind{session.ItemAgent, session.ItemTool, session.ItemTool, session.ItemTool, session.ItemAgent, session.ItemSystem}
+	if len(items) != len(kinds) {
+		t.Fatalf("items %+v", items)
+	}
+	for i, k := range kinds {
+		if items[i].Kind != k {
+			t.Errorf("item %d kind %v, want %v (%+v)", i, items[i].Kind, k, items[i])
+		}
+	}
+	bash := items[1]
+	if bash.Title != "Bash(agentd task set <<'EOF'" || bash.Call != "Bash(agentd task set <<'EOF'\n[\n {\"id\":\"a\"}\nEOF)" || bash.Text != "revision 2\nsecond line" {
+		t.Errorf("bash %+v", bash)
+	}
+	if items[2].Title != "Read" || items[4].Text != "Listo" {
+		t.Errorf("read %+v, prose %+v", items[2], items[4])
+	}
+}
+
+// Runs of code lines become one fenced block (MyGo's Markdown draws it with a
+// copy button), with the code's own indentation; a prompt of several lines
+// stays one user entry.
+func TestItemsFenceCodeAndJoinPrompt(t *testing.T) {
+	items := session.Items([]proto.ViewLine{
+		{Text: "❯ primera línea", Role: "transcript"},
+		{Text: "  segunda línea", Role: "transcript"},
+		{Text: "● Instálalo así:", Role: "transcript"},
+		{Text: "", Role: "transcript"},
+		{Text: "  func main() {", Code: true, Role: "transcript"},
+		{Text: "", Role: "transcript"},
+		{Text: "      run(\"a_b\")", Code: true, Role: "transcript"},
+		{Text: "  }", Role: "transcript"},
+		{Text: "", Role: "transcript"},
+		{Text: "  Y reinicia `agentd`.", Md: "  Y reinicia \\`agentd\\`.", Role: "transcript"},
+		{Text: "● sudo dpkg -i a.deb", Code: true, Role: "transcript"},
+	}, true)
+	if len(items) != 3 || items[0].Text != "primera línea\nsegunda línea" {
+		t.Fatalf("items %+v", items)
+	}
+	if want := "Instálalo así:\n\n````\nfunc main() {\n\n    run(\"a_b\")\n}\n````\n\nY reinicia \\`agentd\\`."; items[1].Text != want {
+		t.Errorf("agent %q, want %q", items[1].Text, want)
+	}
+	if want := "````\nsudo dpkg -i a.deb\n````"; items[2].Text != want {
+		t.Errorf("code only %q, want %q", items[2].Text, want)
+	}
+}
