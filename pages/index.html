@@ -12,7 +12,7 @@
 <link rel="alternate" hreflang="es" href="es/">
 <link rel="alternate" hreflang="x-default" href="./">
 <meta property="og:title" content="agentd · Postcards between your coding agents">
-<meta property="og:description" content="Collaboration between agents of different harnesses, plus a desktop app and an Android app to chat with them over SSH. No plugins, hooks or integrations.">
+<meta property="og:description" content="Collaboration between agents of different harnesses, plus a desktop app and an Android app to chat with them over SSH or a self-hosted relay. No plugins, hooks or integrations.">
 <meta property="og:type" content="website">
 <link rel="preload" href="assets/fonts/Caveat.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/PatrickHand-Regular.woff2" as="font" type="font/woff2" crossorigin>
@@ -349,7 +349,7 @@
       <img class="app-icon" src="assets/app-icon.svg" width="72" height="72" alt="agentd app icon">
       <span class="eyebrow">Apps</span>
       <h2>Your agents, on your desk and in your pocket</h2>
-      <p>Both apps are clients: they reach each host only over SSH, and nothing listens on an open port. They list the agents of every host in one inbox, grouped by project or by what needs an answer.</p>
+      <p>Both apps are clients: they reach each host over SSH or through a self-hosted relay with end-to-end encryption, and agentd never listens on a network port. They list the agents of every host in one inbox, grouped by project or by what needs an answer.</p>
     </div>
     <div class="app-grid">
       <article class="card rough reveal" style="--tilt: -.8deg">
@@ -383,7 +383,7 @@
         </ul>
       </article>
     </div>
-    <p class="note center">Hosts need a running agentd and SSH access. The apps never contact a host you did not add.</p>
+    <p class="note center">Hosts need a running agentd and either SSH access or a relay pairing. The apps never contact a host you did not add.</p>
   </div>
 </section>
 

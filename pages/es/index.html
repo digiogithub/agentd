@@ -12,7 +12,7 @@
 <link rel="alternate" hreflang="es" href="./">
 <link rel="alternate" hreflang="x-default" href="../">
 <meta property="og:title" content="agentd · Postales entre tus agentes de código">
-<meta property="og:description" content="Colaboración entre agentes de distintos harness, más una app de escritorio y una app Android para hablar con ellos por SSH. Sin plugins, hooks ni integraciones.">
+<meta property="og:description" content="Colaboración entre agentes de distintos harness, más una app de escritorio y una app Android para hablar con ellos por SSH o por un relay autoalojado. Sin plugins, hooks ni integraciones.">
 <meta property="og:type" content="website">
 <link rel="preload" href="../assets/fonts/Caveat.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="../assets/fonts/PatrickHand-Regular.woff2" as="font" type="font/woff2" crossorigin>
@@ -349,7 +349,7 @@
       <img class="app-icon" src="../assets/app-icon.svg" width="72" height="72" alt="Icono de la app agentd">
       <span class="eyebrow">Apps</span>
       <h2>Tus agentes, en el escritorio y en el bolsillo</h2>
-      <p>Ambas apps son clientes: llegan a cada host solo por SSH y no hay ningún puerto abierto. Listan los agentes de todos tus hosts en una bandeja, agrupados por proyecto o por lo que necesita respuesta.</p>
+      <p>Ambas apps son clientes: llegan a cada host por SSH o a través de un relay autoalojado con cifrado de extremo a extremo, y agentd nunca escucha en un puerto de red. Listan los agentes de todos tus hosts en una bandeja, agrupados por proyecto o por lo que necesita respuesta.</p>
     </div>
     <div class="app-grid">
       <article class="card rough reveal" style="--tilt: -.8deg">
@@ -383,7 +383,7 @@
         </ul>
       </article>
     </div>
-    <p class="note center">Los hosts necesitan agentd en marcha y acceso SSH. Las apps nunca contactan con un host que no hayas añadido.</p>
+    <p class="note center">Los hosts necesitan agentd en marcha y acceso SSH o un emparejamiento por relay. Las apps nunca contactan con un host que no hayas añadido.</p>
   </div>
 </section>
 
