@@ -111,4 +111,6 @@ Unchanged for humans on the socket. New, for relay devices (`relayGate` + `relay
 ## Status
 
 - 2026-11-24: P1 to P5 and P7 done (see `changes/backlog-notes-panel-detail-revoke.md`). `internal/backlog` also
-  imports `internal/proto` (returns `proto.Note`). P6 (mobile) delegated to the agentd-app agent, pending.
+  imports `internal/proto` (returns `proto.Note`). P6 (mobile) done in agentd-app by that project's agent: commits 10475a2
+  (invite links as the terminal shows them, explicit pairing errors), 2bffe59 (QR scan), 9550b76 (backlog notes), 3ceaafa
+  (devices and revoke); local commits, not pushed.
