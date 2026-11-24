@@ -368,6 +368,56 @@ func (s *Server) dispatch(ctx context.Context, req proto.Request, peer peerInfo)
 			return nil, err
 		}
 		return s.tasksOp(who, a)
+	case proto.OpNotes:
+		var a proto.NotesArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.notesOp(ctx, who, a)
+	case proto.OpNoteAdd:
+		var a proto.NoteAddArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.noteAdd(ctx, who, a)
+	case proto.OpNoteUpdate:
+		var a proto.NoteUpdateArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.noteUpdate(ctx, who, a)
+	case proto.OpNoteRm:
+		var a proto.NoteIDArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.noteRm(ctx, who, a)
+	case proto.OpNoteAssign:
+		var a proto.NoteAssignArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.noteAssign(ctx, who, a)
 	case proto.OpHCListen:
 		var a proto.HCListenArgs
 		if err := req.DecodeArgs(&a); err != nil {

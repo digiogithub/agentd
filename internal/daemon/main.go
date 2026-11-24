@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/digiogithub/agentd/internal/backlog"
 	"github.com/digiogithub/agentd/internal/config"
 	"github.com/digiogithub/agentd/internal/mailbox"
 )
@@ -81,6 +82,13 @@ func Main(ctx context.Context, opts Options) error {
 		return err
 	}
 	srv.Store = store
+	if blPath, err := config.BacklogPath(); err != nil {
+		log.Warn("backlog path", "err", err)
+	} else if bl, err := backlog.Open(blPath); err != nil {
+		log.Error("open backlog (note ops disabled)", "err", err)
+	} else {
+		srv.Backlog = bl
+	}
 	srv.Delivery = srv.NewDeliveryLoop(log.With("component", "delivery"))
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	defer stop()

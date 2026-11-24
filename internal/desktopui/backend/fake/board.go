@@ -111,7 +111,9 @@ func (f *Fake) boardSnapshot() []backend.HostBoard {
 			fmt.Fprintf(&sig, "%s:%s:%d:%d;", bs.Name, bs.Status, len(bs.Tasks), len(bs.Questions))
 		}
 		b.Digest = fmt.Sprintf("d%x", len(sig.String()))
-		out = append(out, backend.HostBoard{HostID: h.st.Host.ID, Board: b, Updated: now})
+		hb := backend.HostBoard{HostID: h.st.Host.ID, Board: b, Updated: now}
+		hb.Notes, hb.NotesErr = f.notesBoard(h.st.Host)
+		out = append(out, hb)
 	}
 	slices.SortFunc(out, func(a, b backend.HostBoard) int { return strings.Compare(a.HostID, b.HostID) })
 	return out

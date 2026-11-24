@@ -15,7 +15,8 @@ import (
 
 // relayAudited are the side-effecting ops recorded in relay/audit.log.
 var relayAudited = []string{proto.OpRun, proto.OpAct, proto.OpKill, proto.OpRm, proto.OpSend, proto.OpReply,
-	proto.OpViewAck, proto.OpLabel, proto.OpDocSet, proto.OpAttach}
+	proto.OpViewAck, proto.OpLabel, proto.OpDocSet, proto.OpAttach,
+	proto.OpNoteAdd, proto.OpNoteUpdate, proto.OpNoteRm, proto.OpNoteAssign}
 
 // relayGate checks (and may rewrite) a request from device d. It returns the
 // session the request names ("" if none) for the audit log.
@@ -95,6 +96,22 @@ func relayGate(d *relayDevice, req *proto.Request) (string, error) {
 			return "", err
 		}
 		return session()
+	case proto.OpRelay:
+		// A device may list devices (its own entry unless it is a device
+		// admin) and revoke itself; relayDeviceOp decides the rest.
+		var a proto.RelayArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return "", proto.Errorf(proto.CodeInvalid, "relay: %v", err)
+		}
+		if a.Action != proto.RelayDevices && a.Action != proto.RelayRevoke {
+			return "", forbid("only devices and revoke")
+		}
+		return "", nil
+	case proto.OpNotes, proto.OpNoteAdd, proto.OpNoteUpdate, proto.OpNoteRm, proto.OpNoteAssign:
+		if d.Kind != relayDeviceKindOwner || len(d.Sessions) > 0 {
+			return "", forbid("the backlog is for owner devices that are not limited to some sessions")
+		}
+		return "", need(config.RelayScopeOperate)
 	case proto.OpDocGet, proto.OpDocSet:
 		if len(d.Sessions) > 0 {
 			return "", forbid("documents are host-wide; this device is limited to some sessions")

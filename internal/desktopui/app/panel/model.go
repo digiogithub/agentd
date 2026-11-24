@@ -1,6 +1,7 @@
 package panel
 
 import (
+	"net/url"
 	"sort"
 	"time"
 
@@ -260,4 +261,156 @@ func Board(agents []Agent, now time.Time) []Column {
 		sort.SliceStable(cs, func(a, b int) bool { return cs[a].Task.UpdatedAt.After(cs[b].Task.UpdatedAt) })
 	}
 	return cols
+}
+
+// AgentPath is the route of the detail of one agent (host + session name).
+func AgentPath(hostID, name string) string {
+	return app.PanelPath + "/agent/" + url.PathEscape(hostID) + "/" + url.PathEscape(name)
+}
+
+// FindAgent returns the agent of the detail route. ok is false when the
+// session is not in the Panel (gone, or never an agentd session).
+func FindAgent(l *app.Live, hostID, name string) (Agent, bool) {
+	for _, ag := range Agents(l, hostID) {
+		if ag.Session.HostID == hostID && ag.Session.Name == name {
+			return ag, true
+		}
+	}
+	return Agent{}, false
+}
+
+// Group is one section of the agent detail.
+type Group struct {
+	Status string
+	Title  string
+	Tasks  []proto.Task
+}
+
+// TaskGroups splits a task list into the detail sections, in display order:
+// En curso, Bloqueadas, Pendientes, Hechas (newest first) and Canceladas.
+// Empty sections are left out.
+func TaskGroups(ts []proto.Task) []Group {
+	groups := []Group{
+		{Status: proto.TaskInProgress, Title: "En curso"},
+		{Status: proto.TaskBlocked, Title: "Bloqueadas"},
+		{Status: proto.TaskPending, Title: "Pendientes"},
+		{Status: proto.TaskDone, Title: "Hechas"},
+		{Status: proto.TaskCancelled, Title: "Canceladas"},
+	}
+	for _, t := range ts {
+		for i := range groups {
+			if groups[i].Status == t.Status {
+				groups[i].Tasks = append(groups[i].Tasks, t)
+			}
+		}
+	}
+	for i := range groups {
+		if groups[i].Status == proto.TaskDone {
+			ts := groups[i].Tasks
+			sort.SliceStable(ts, func(a, b int) bool { return ts[a].UpdatedAt.After(ts[b].UpdatedAt) })
+		}
+	}
+	out := groups[:0]
+	for _, g := range groups {
+		if len(g.Tasks) > 0 {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+// TaskStateLabel is the Spanish name of a task status.
+func TaskStateLabel(status string) string {
+	switch status {
+	case proto.TaskPending:
+		return "Pendiente"
+	case proto.TaskInProgress:
+		return "En curso"
+	case proto.TaskBlocked:
+		return "Bloqueada"
+	case proto.TaskDone:
+		return "Hecha"
+	case proto.TaskCancelled:
+		return "Cancelada"
+	}
+	return status
+}
+
+// FromBacklog reports whether a task was assigned from the backlog.
+func FromBacklog(t proto.Task) bool { return t.Origin == proto.TaskOriginBacklog }
+
+// HostNotes is the backlog of one host, split by state.
+type HostNotes struct {
+	HostID   string
+	Open     []proto.Note
+	Assigned []proto.Note
+	Done     []proto.Note
+	// Writable: the app may add, edit, delete and assign (CapBacklog).
+	Writable bool
+}
+
+// Total counts every note of the host.
+func (h HostNotes) Total() int { return len(h.Open) + len(h.Assigned) + len(h.Done) }
+
+// Backlog collects the backlogs of the hosts that have one (hostID "" =
+// every host, ordered by host id). A host whose daemon cannot serve notes
+// (NotesErr set: an older daemon, a device without access) is left out.
+func Backlog(l *app.Live, hostID string) []HostNotes {
+	var out []HostNotes
+	for _, hb := range l.Boards {
+		if hostID != "" && hb.HostID != hostID || hb.NotesErr != "" {
+			continue
+		}
+		h := HostNotes{HostID: hb.HostID, Writable: l.Allows(hb.HostID, backend.CapBacklog)}
+		for _, n := range hb.Notes {
+			switch n.State {
+			case proto.NoteAssigned:
+				h.Assigned = append(h.Assigned, n)
+			case proto.NoteDone:
+				h.Done = append(h.Done, n)
+			default:
+				h.Open = append(h.Open, n)
+			}
+		}
+		out = append(out, h)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].HostID < out[j].HostID })
+	return out
+}
+
+// NoteTaskStatus returns the status of the task an assigned note became on
+// its session's board ("" when the board has no such task).
+func NoteTaskStatus(l *app.Live, hostID string, n proto.Note) string {
+	if n.TaskID == "" {
+		return ""
+	}
+	for _, hb := range l.Boards {
+		if hb.HostID != hostID {
+			continue
+		}
+		for _, bs := range hb.Board.Sessions {
+			if bs.Name != n.AssignedTo {
+				continue
+			}
+			for _, t := range bs.Tasks {
+				if t.ID == n.TaskID {
+					return t.Status
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// AssignTargets lists the running agentd sessions of a host that can take a
+// note (not exited or starting), by name.
+func AssignTargets(l *app.Live, hostID string) []backend.Session {
+	var out []backend.Session
+	for _, s := range l.Sessions {
+		if s.HostID == hostID && s.Source == backend.SourceAgentd && s.Status != "exited" && s.Status != "starting" {
+			out = append(out, s)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }

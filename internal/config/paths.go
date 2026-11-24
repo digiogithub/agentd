@@ -22,6 +22,7 @@ const (
 const (
 	socketName    = "agentd.sock"
 	mailboxName   = "mailbox.db"
+	backlogName   = "backlog.db"
 	logDirName    = "logs"
 	daemonLogName = "daemon.log"
 	docsName      = "docs.json"
@@ -167,3 +168,6 @@ func ValidName(s string) error {
 
 // RelayDir is $STATE/relay: the relay host key, paired devices and audit log.
 func RelayDir() (string, error) { return inStateDir("relay") }
+
+// BacklogPath returns <state>/backlog.db (backlog notes).
+func BacklogPath() (string, error) { return inStateDir(backlogName) }

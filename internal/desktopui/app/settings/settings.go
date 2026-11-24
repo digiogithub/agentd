@@ -30,6 +30,9 @@ type View struct {
 	a       *app.Context
 	keyOpen bool
 	pubKey  string
+	// devs are the relay devices per host id; ask is the open revoke dialog.
+	devs map[string]*hostDevices
+	ask  *revokeAsk
 	// Now is the clock of mute expiry (tests).
 	Now func() time.Time
 }
@@ -99,10 +102,8 @@ func (v *View) Build(c *ui.Context, r *ui.Route) {
 					if link(c.Key("keys"), t, "Claves SSH", "1 ed25519") {
 						v.showKey()
 					}
-					if link(c.Key("devices"), t, "Dispositivos y tokens", "revocar") {
-						v.a.Toasts.Info("Gestión de dispositivos: pendiente")
-					}
 				})
+				v.devicesSection(c, t)
 				kit.SectionLabel(c, "Vista chat", t.Muted).Margin(12, 0, 0, 0)
 				v.chatFont(c, t, s)
 				kit.SectionLabel(c, "Apariencia", t.Muted).Margin(12, 0, 0, 0)

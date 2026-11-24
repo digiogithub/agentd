@@ -72,6 +72,7 @@ func startDaemonWith(t *testing.T, cfg *config.Config) *env {
 		t.Fatal(err)
 	}
 	srv := daemon.New(cfg, nil, store, nil)
+	srv.Backlog = openTestBacklog(t)
 	if err := srv.Listen(); err != nil {
 		t.Fatal(err)
 	}

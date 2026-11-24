@@ -62,8 +62,13 @@ func TestFallbackCardWithoutTasks(t *testing.T) {
 	e := newPanel(t)
 	e.Has("Sin tareas informadas", "Hecho: la cabecera usa 24 px a cada lado.",
 		"Este agente no informa de su plan: se muestra la última línea de su pantalla.", "turno 4 · hace 2 h")
-	// Clicking an agent opens its session.
-	e.Click("claude@landing: abrir agente")
+	// Clicking an agent opens its detail; "Abrir agente" there opens the chat.
+	e.Click("claude@landing: ver detalle")
+	if p := e.A.Router.Path(); p != panel.AgentPath("nube", "claude@landing") {
+		t.Fatalf("path %q", p)
+	}
+	e.Has("claude@landing", "SIN TAREAS INFORMADAS", "Este agente no ha informado de tareas.", "Hecho: la cabecera usa 24 px a cada lado.", "Abrir agente")
+	e.Click("Abrir claude@landing")
 	if p := e.A.Router.Path(); p != "/agents/s/nube/agentd/claude@landing" {
 		t.Errorf("path %q", p)
 	}
@@ -207,8 +212,8 @@ func TestTableroColumns(t *testing.T) {
 			}
 		}
 	}
-	if len(cols) != 4 || len(cols[0].Cards) != 5 || len(cols[1].Cards) != 4 || len(cols[2].Cards) != 1 || len(cols[3].Cards) != done {
-		t.Fatalf("columns %d/%d/%d/%d, want 5/4/1/%d", len(cols[0].Cards), len(cols[1].Cards), len(cols[2].Cards), len(cols[3].Cards), done)
+	if len(cols) != 4 || len(cols[0].Cards) != 6 || len(cols[1].Cards) != 4 || len(cols[2].Cards) != 1 || len(cols[3].Cards) != done {
+		t.Fatalf("columns %d/%d/%d/%d, want 6/4/1/%d", len(cols[0].Cards), len(cols[1].Cards), len(cols[2].Cards), len(cols[3].Cards), done)
 	}
 	for _, cd := range cols[3].Cards {
 		if cd.Task.Title == "Índice de la documentación" {
@@ -231,9 +236,9 @@ func TestTableroColumns(t *testing.T) {
 	if e.UI.HasText("Índice de la documentación") {
 		t.Errorf("yesterday's task shown")
 	}
-	// A click opens the agent.
+	// A click opens the agent's detail.
 	e.Click("Prueba de campo del relay en el VPS · codex@webapp")
-	if p := e.A.Router.Path(); p != "/agents/s/estudio/agentd/codex@webapp" {
+	if p := e.A.Router.Path(); p != panel.AgentPath("estudio", "codex@webapp") {
 		t.Errorf("path %q", p)
 	}
 }

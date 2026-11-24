@@ -147,7 +147,7 @@ func TestRelayPairConnectAndScopes(t *testing.T) {
 		"type":     func() error { return rc.Type(proto.TypeArgs{Name: "codex@web", Text: "x"}) },
 		"kill":     func() error { return rc.Kill("codex@web", "") },
 		"shutdown": func() error { return rc.Call(proto.OpShutdown, nil, nil) },
-		"relay":    func() error { _, err := rc.Relay(proto.RelayArgs{Action: "devices"}); return err },
+		"relay":    func() error { _, err := rc.Relay(proto.RelayArgs{Action: "invite"}); return err },
 		"run":      func() error { _, err := rc.Run(proto.RunArgs{Name: "codex@x", Cmd: []string{"sh"}}); return err },
 	} {
 		if err := call(); client.ErrorCode(err) != proto.CodeForbidden {

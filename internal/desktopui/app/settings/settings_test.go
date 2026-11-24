@@ -12,10 +12,10 @@ import (
 )
 
 func TestTogglesAndThemePersist(t *testing.T) {
-	e := apptest.New(t, "/settings", 1400, 1400)
+	e := apptest.New(t, "/settings", 1400, 2600)
 	e.Has("Ajustes", "AVISARME CUANDO", "Un agente espera respuesta", "Permisos, preguntas y planes", "Termina un turno",
 		"Agrupado cada 30 s por sesión", "Una sesión se cierra", "Incluye el código de salida", "Responder desde el aviso",
-		"SILENCIADAS", "Ninguna sesión silenciada", "SEGURIDAD", "Claves SSH", "Dispositivos y tokens", "APARIENCIA",
+		"SILENCIADAS", "Ninguna sesión silenciada", "SEGURIDAD", "Claves SSH", "DISPOSITIVOS", "APARIENCIA",
 		"Oscuro", "Claro", "Sistema")
 	if e.UI.HasText("Pedir huella para aprobar") {
 		t.Error("biometrics shown on desktop")
@@ -60,7 +60,7 @@ func TestMutesAndKey(t *testing.T) {
 }
 
 func TestChatFontSettings(t *testing.T) {
-	e := apptest.New(t, "/settings", 1400, 1400)
+	e := apptest.New(t, "/settings", 1400, 2600)
 	e.Has("VISTA CHAT", "Tamaño del texto", "14.5 pt", "Tipo de letra", "Sans", "Serif", "Monoespaciada")
 	e.Click("Texto más grande")
 	if got := e.A.Prefs.Get().ChatSize(); got != 15.5 {

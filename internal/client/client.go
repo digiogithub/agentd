@@ -515,6 +515,42 @@ func (c *Client) Board(sinceDigest string) (proto.BoardResult, error) {
 	return r, err
 }
 
+// Notes lists the backlog notes (humans and owner relay devices only). A
+// matching sinceDigest answers NotModified.
+func (c *Client) Notes(states []string, sinceDigest string) (proto.NotesResult, error) {
+	var r proto.NotesResult
+	err := c.Call(proto.OpNotes, proto.NotesArgs{States: states, SinceDigest: sinceDigest}, &r)
+	return r, err
+}
+
+// NoteAdd stores a new open backlog note.
+func (c *Client) NoteAdd(title, body string) (proto.Note, error) {
+	var r proto.Note
+	err := c.Call(proto.OpNoteAdd, proto.NoteAddArgs{Title: title, Body: body}, &r)
+	return r, err
+}
+
+// NoteUpdate edits a backlog note (nil fields unchanged; State may only be "open").
+func (c *Client) NoteUpdate(a proto.NoteUpdateArgs) (proto.Note, error) {
+	var r proto.Note
+	err := c.Call(proto.OpNoteUpdate, a, &r)
+	return r, err
+}
+
+// NoteRm removes a backlog note and returns it.
+func (c *Client) NoteRm(id int64) (proto.Note, error) {
+	var r proto.Note
+	err := c.Call(proto.OpNoteRm, proto.NoteIDArgs{ID: id}, &r)
+	return r, err
+}
+
+// NoteAssign hands a backlog note to a running session as a task.
+func (c *Client) NoteAssign(a proto.NoteAssignArgs) (proto.NoteAssignResult, error) {
+	var r proto.NoteAssignResult
+	err := c.Call(proto.OpNoteAssign, a, &r)
+	return r, err
+}
+
 // Relay calls op relay (humans on this host only; see proto.RelayArgs).
 func (c *Client) Relay(a proto.RelayArgs) (proto.RelayResult, error) {
 	var r proto.RelayResult

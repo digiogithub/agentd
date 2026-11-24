@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/digiogithub/agentd/internal/config"
 	"github.com/digiogithub/agentd/internal/mailbox"
 	"github.com/digiogithub/agentd/internal/proto"
 )
@@ -118,11 +119,17 @@ func (f eventFilter) match(be busEvent) bool {
 		if limited && (ev.Session == "" || strings.HasPrefix(ev.Kind, "mail.")) {
 			return false
 		}
+		if ev.Kind == proto.EvNoteChanged && !f.dev.atLeast(config.RelayScopeOperate) {
+			return false
+		}
 	}
 	if len(f.sessions) > 0 && !slices.Contains(f.sessions, ev.Session) {
 		return false
 	}
 	if f.self != "" {
+		if ev.Kind == proto.EvNoteChanged {
+			return false // the backlog is for humans, whatever agent_view says
+		}
 		if strings.HasPrefix(ev.Kind, "mail.") {
 			if be.queue != "" && f.canClaim != nil && f.canClaim(be.queue) {
 				return true
@@ -303,7 +310,7 @@ var knownKinds = []string{
 	proto.EvStatusChanged, proto.EvViewChanged, proto.EvInputChanged, proto.EvAttentionChanged,
 	proto.EvMailQueued, proto.EvMailDelivered, proto.EvMailRead, proto.EvMailClaimed,
 	proto.EvSessionLabels, proto.EvDocChanged, proto.EvStatusReported, proto.EvTurnCompleted,
-	proto.EvTaskChanged,
+	proto.EvTaskChanged, proto.EvNoteChanged,
 }
 
 func validKind(k string) bool {

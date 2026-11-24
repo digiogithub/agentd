@@ -133,6 +133,16 @@ func runRelayInvite(ctx context.Context, a proto.RelayArgs, in io.Reader, out, e
 		return err
 	}
 	inv := res.Invite
+	// An invite can be created while the host is not linked to the relay;
+	// no device can redeem it then, so say it before printing the QR.
+	if st, serr := c.Relay(proto.RelayArgs{Action: proto.RelayStatus}); serr == nil && st.State != "online" {
+		why := st.Error
+		if why == "" {
+			why = "no error reported yet"
+		}
+		fmt.Fprintf(errw, "warning: this host is not linked to the relay (state %s: %s).\n"+
+			"         Devices cannot use the invite until the link is up; see 'agentd relay status'.\n", orDash(st.State), why)
+	}
 	if a.NoApprove {
 		fmt.Fprintln(errw, "warning: --no-approve: the first device to redeem the invite is paired without confirmation")
 	}

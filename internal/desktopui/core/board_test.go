@@ -140,3 +140,60 @@ func TestWatchBoardOldDaemon(t *testing.T) {
 		t.Errorf("unsupported board asked again on an event: %d calls, want %d", got, n)
 	}
 }
+
+func TestWatchBoardNotes(t *testing.T) {
+	dir := isolate(t)
+	fd := newFakeDaemon(t)
+	fd.setSessions(proto.SessionInfo{Name: "a@p", State: "running", Status: "idle", StartedAt: time.Now()})
+	fd.setBoard(proto.BoardResult{Digest: "d1", Sessions: []proto.BoardSession{{Name: "a@p", Status: "idle"}}})
+	fd.mu.Lock()
+	fd.notes = []proto.Note{{ID: 1, Title: "Revisar licencias", State: proto.NoteOpen}}
+	fd.mu.Unlock()
+	opts := sshOpts(dir, fd.sock)
+	opts.BoardDebounce = 20 * time.Millisecond
+	b := newBackend(t, opts)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	boards := b.WatchBoard(ctx)
+	waitBoards(t, boards, "board with notes", func(bs []backend.HostBoard) bool {
+		hb, ok := localBoard(bs)
+		return ok && len(hb.Notes) == 1 && hb.NotesErr == "" && hb.Err == ""
+	})
+	// NoteAdd goes to the daemon and refreshes the backlog.
+	if _, err := b.NoteAdd(ctx, backend.LocalHostID, "Migrar CI", "con cache"); err != nil {
+		t.Fatal(err)
+	}
+	waitBoards(t, boards, "board after note_add", func(bs []backend.HostBoard) bool {
+		hb, ok := localBoard(bs)
+		return ok && len(hb.Notes) == 2
+	})
+	// A note.changed event refreshes it too.
+	fd.mu.Lock()
+	fd.notes = append(fd.notes, proto.Note{ID: 3, Title: "Otra", State: proto.NoteOpen})
+	fd.mu.Unlock()
+	fd.emit(proto.Event{Seq: 11, Epoch: "E1", Kind: "note.changed"})
+	waitBoards(t, boards, "board after note.changed", func(bs []backend.HostBoard) bool {
+		hb, ok := localBoard(bs)
+		return ok && len(hb.Notes) == 3
+	})
+}
+
+func TestWatchBoardNotesOldDaemon(t *testing.T) {
+	dir := isolate(t)
+	fd := newFakeDaemon(t)
+	fd.setSessions(proto.SessionInfo{Name: "a@p", State: "running", Status: "idle", StartedAt: time.Now()})
+	fd.setBoard(proto.BoardResult{Digest: "d1", Sessions: []proto.BoardSession{{Name: "a@p", Status: "idle"}}})
+	fd.mu.Lock()
+	fd.noNotes = true
+	fd.mu.Unlock()
+	opts := sshOpts(dir, fd.sock)
+	opts.BoardDebounce = 20 * time.Millisecond
+	b := newBackend(t, opts)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	waitBoards(t, b.WatchBoard(ctx), "board without notes op", func(bs []backend.HostBoard) bool {
+		hb, ok := localBoard(bs)
+		// The board itself stays healthy.
+		return ok && hb.Err == "" && len(hb.Board.Sessions) == 1 && hb.NotesErr != "" && len(hb.Notes) == 0
+	})
+}

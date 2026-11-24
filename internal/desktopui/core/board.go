@@ -19,11 +19,13 @@ type boardState struct {
 	// unsupported: the daemon has no op board; asked again after the event
 	// stream reconnects (a daemon upgrade restarts it).
 	unsupported bool
+	// notes is the host's backlog, fetched with every refresh.
+	notes notesState
 }
 
 // boardEvent reports whether an event kind may change the board.
 func boardEvent(kind string) bool {
-	for _, p := range []string{"task.", "mail.", "status.", "attention.", "session."} {
+	for _, p := range []string{"task.", "mail.", "status.", "attention.", "session.", "note."} {
 		if strings.HasPrefix(kind, p) {
 			return true
 		}
@@ -83,6 +85,7 @@ func (m *hostMon) hostBoard() (backend.HostBoard, bool) {
 		return backend.HostBoard{}, false
 	}
 	hb := backend.HostBoard{HostID: m.id, Updated: m.board.updated, Err: m.board.err}
+	hb.Notes, hb.NotesErr = m.notesLocked()
 	if m.board.res != nil {
 		hb.Board = *m.board.res
 	}
@@ -130,6 +133,7 @@ func (m *hostMon) refreshBoard() {
 	}
 	ctx, cancel := context.WithTimeout(m.ctx, 20*time.Second)
 	defer cancel()
+	m.refreshNotes(ctx)
 	var res proto.BoardResult
 	err := m.b.withClient(ctx, m.id, func(c *client.Client) error {
 		var err error

@@ -29,8 +29,9 @@ import (
 func init() {
 	app.Register(app.Area{
 		ID: "panel", Path: app.PanelPath, Title: "Panel", Icon: kit.IconPanel, Section: app.SectionMain, Order: -1,
-		Badge: AttentionCount,
-		New:   func(a *app.Context) app.View { return New(a) },
+		Patterns: []string{app.PanelPath, app.PanelPath + "/agent/{host}/{session}"},
+		Badge:    AttentionCount,
+		New:      func(a *app.Context) app.View { return New(a) },
 	})
 }
 
@@ -58,6 +59,8 @@ type View struct {
 	replyOpen map[string]bool
 	// expanded columns of the Tablero.
 	expanded map[string]bool
+	// bl is the Backlog section (notes, dialogs).
+	bl backlogUI
 	// query is the last ?view= of the route applied (a deep link to a view).
 	query string
 	// Now is the clock (tests).
@@ -85,6 +88,10 @@ func (v *View) draft(key string) *string {
 func (v *View) Build(c *ui.Context, r *ui.Route) {
 	t := kit.Current()
 	a := v.a
+	if name := routeParam(r, "session"); name != "" {
+		v.detail(c, routeParam(r, "host"), name)
+		return
+	}
 	if v.host != "" {
 		if _, ok := a.Live.Host(v.host); !ok && a.Live.HostsLoaded {
 			v.host = ""
@@ -110,6 +117,12 @@ func (v *View) Build(c *ui.Context, r *ui.Route) {
 					v.setView(app.PanelByAgent)
 				}
 			}
+			if board {
+				if n := openNotes(Backlog(a.Live, v.host)); n > 0 && kit.Button(c.Key("backlog-link"), kit.ButtonOpts{Variant: kit.Outline,
+					Label: fmt.Sprintf("Backlog · %d", n), Height: 36, Aria: "Ver el backlog"}).Clicked() {
+					v.setView(app.PanelByAgent)
+				}
+			}
 			v.hostMenu(c, t)
 			sel := 0
 			if board {
@@ -128,13 +141,14 @@ func (v *View) Build(c *ui.Context, r *ui.Route) {
 		switch {
 		case !a.Live.SessionsLoaded:
 			kit.EmptyState(c, "", "", "Cargando…")
-		case len(m.Agents) == 0:
+		case len(m.Agents) == 0 && len(Backlog(a.Live, v.host)) == 0:
 			kit.EmptyState(c, kit.IconPanel, "Ningún agente", "Aquí aparecen las sesiones agentd de tus hosts, sus tareas y lo que necesita tu respuesta.")
 		case board:
 			v.tablero(c, t, m, now)
 		default:
 			v.byAgent(c, t, m, now)
 		}
+		v.backlogDialogs(c, t)
 	})
 }
 
@@ -250,14 +264,19 @@ func (v *View) byAgent(c *ui.Context, t *kit.Tokens, m Model, now time.Time) {
 				})
 			})
 		}
+		backlog := func() { v.backlogSection(c, t, now) }
 		if wide {
 			ui.Row(c).Gap(22).AlignItems(ui.Start).Children(func() {
-				ui.Column(c).Width(430).Shrink(0).Children(attention)
+				ui.Column(c).Width(430).Shrink(0).Gap(18).Children(func() {
+					attention()
+					backlog()
+				})
 				agents()
 			})
 			return
 		}
 		attention()
+		backlog()
 		agents()
 	})
 }
@@ -585,7 +604,7 @@ func (v *View) agentCard(c *ui.Context, t *kit.Tokens, ag Agent, now time.Time) 
 	tasks := ag.Tasks()
 	done, total := Progress(tasks)
 	label, labelColor, cur, next := summary(t, ag)
-	b := ui.ButtonBase(c).Label(s.Name+": abrir agente").Column().Gap(8).Padding(13, 14).Radius(12).MinHeight(148).
+	b := ui.ButtonBase(c).Label(s.Name+": ver detalle").Column().Gap(8).Padding(13, 14).Radius(12).MinHeight(148).
 		Background(t.Surface).Border(1, t.Border).AlignItems(ui.Stretch).Cursor(ui.CursorPointer)
 	if b.Hovered() {
 		b.Background(t.Raised)
@@ -622,7 +641,7 @@ func (v *View) agentCard(c *ui.Context, t *kit.Tokens, ag Agent, now time.Time) 
 		})
 	})
 	if b.Clicked() {
-		v.open(s)
+		v.openDetail(s)
 	}
 }
 
@@ -777,9 +796,18 @@ func (v *View) taskCard(c *ui.Context, t *kit.Tokens, cd Card, color ui.Color, s
 		})
 	})
 	if b.Clicked() {
-		v.open(s)
+		v.openDetail(s)
 	}
 }
 
 // itoa64 formats an id.
 func itoa64(n int64) string { return strconv.FormatInt(n, 10) }
+
+// openNotes counts the open notes of the backlogs.
+func openNotes(hs []HostNotes) int {
+	n := 0
+	for _, h := range hs {
+		n += len(h.Open)
+	}
+	return n
+}

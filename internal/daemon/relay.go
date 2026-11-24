@@ -283,6 +283,12 @@ func (s *Server) startRelay() {
 		s.Log.Error("relay: state", "err", err)
 		return
 	}
+	if rc.JoinTokenEnv != "" && os.Getenv(rc.JoinTokenEnv) == "" && rc.JoinToken == "" {
+		// Typical under systemd --user: the variable lives in a shell profile
+		// the unit never reads, and the relay then refuses the host.
+		s.Log.Error("relay: [relay] join_token_env names a variable that is not set in the daemon's environment; the relay will refuse this host if it asks for a join token",
+			"var", rc.JoinTokenEnv)
+	}
 	r := &s.relay
 	r.mu.Lock()
 	if r.cancel != nil {
@@ -608,11 +614,14 @@ func (r *relayState) touchLocked(d *relayDevice) {
 
 // relayOp answers op relay (humans on the socket only).
 func (s *Server) relayOp(ctx context.Context, who caller, a proto.RelayArgs) (proto.RelayResult, error) {
-	if !who.human() || who.dev != nil {
+	if !who.human() {
 		return proto.RelayResult{}, proto.Errorf(proto.CodeForbidden, "relay: only a human on this host may manage the relay")
 	}
 	if err := s.relayInit(); err != nil {
 		return proto.RelayResult{}, proto.Errorf(proto.CodeInternal, "relay: %v", err)
+	}
+	if who.dev != nil {
+		return s.relayDeviceOp(who.dev, a)
 	}
 	r := &s.relay
 	switch a.Action {
@@ -653,54 +662,121 @@ func (s *Server) relayOp(ctx context.Context, who caller, a proto.RelayArgs) (pr
 		info := inv.info("")
 		return proto.RelayResult{Invite: &info}, nil
 	case proto.RelayDevices:
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		res := proto.RelayResult{Devices: []proto.RelayDeviceInfo{}}
-		for _, d := range r.devices {
-			res.Devices = append(res.Devices, d.info(len(r.tunnels[d.ID]) > 0))
-		}
-		sort.Slice(res.Devices, func(i, j int) bool { return res.Devices[i].CreatedAt.Before(res.Devices[j].CreatedAt) })
-		for _, inv := range r.invites {
-			if inv.state == relayInviteWaiting || inv.state == relayInviteRequest {
-				res.Invites = append(res.Invites, inv.info(""))
-			}
-		}
-		return res, nil
+		return s.relayListDevices(nil), nil
 	case proto.RelayRevoke:
-		r.mu.Lock()
-		var d *relayDevice
-		for _, x := range r.devices {
-			if x.ID == a.Device || x.Name == a.Device {
-				if d != nil {
-					r.mu.Unlock()
-					return proto.RelayResult{}, proto.Errorf(proto.CodeConflict, "relay: several devices are named %q; use the id", a.Device)
-				}
-				d = x
+		return s.relayRevoke(a.Device, "", false)
+	}
+	return proto.RelayResult{}, proto.Errorf(proto.CodeInvalid, "relay: unknown action %q (status, invite, pending, approve, cancel, devices, revoke)", a.Action)
+}
+
+// relayDeviceAdmin reports whether d may manage the host's devices: an owner
+// device with the admin scope that is not limited to some sessions.
+func relayDeviceAdmin(d *relayDevice) bool {
+	return d.Kind == relayDeviceKindOwner && d.atLeast(config.RelayScopeAdmin) && len(d.Sessions) == 0
+}
+
+// relayDeviceOp is op relay for a paired device (relayGate let it through):
+// devices lists every device for a device admin and only the caller's own
+// entry otherwise; revoke takes the caller itself (any device) or, for a
+// device admin, any device. Nothing else is offered remotely.
+func (s *Server) relayDeviceOp(d *relayDevice, a proto.RelayArgs) (proto.RelayResult, error) {
+	switch a.Action {
+	case proto.RelayDevices:
+		if relayDeviceAdmin(d) {
+			return s.relayListDevices(nil), nil
+		}
+		return s.relayListDevices(d), nil
+	case proto.RelayRevoke:
+		if a.Device == "" || a.Device == d.ID {
+			return s.relayRevoke(d.ID, d.ID, true)
+		}
+		if !relayDeviceAdmin(d) {
+			return proto.RelayResult{}, proto.Errorf(proto.CodeForbidden,
+				"relay: this device may only revoke itself (revoking others needs an owner device with the admin scope)")
+		}
+		return s.relayRevoke(a.Device, d.ID, false)
+	}
+	return proto.RelayResult{}, proto.Errorf(proto.CodeForbidden, "relay: %q is not allowed over the relay", a.Action)
+}
+
+// relayListDevices answers relay devices. only == nil lists every device and
+// the live invites (humans on the socket: device admins get no invites, see
+// relayDeviceOp); otherwise just that device's entry.
+func (s *Server) relayListDevices(only *relayDevice) proto.RelayResult {
+	r := &s.relay
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	res := proto.RelayResult{Devices: []proto.RelayDeviceInfo{}}
+	for _, d := range r.devices {
+		if only != nil && d.ID != only.ID {
+			continue
+		}
+		res.Devices = append(res.Devices, d.info(len(r.tunnels[d.ID]) > 0))
+	}
+	sort.Slice(res.Devices, func(i, j int) bool { return res.Devices[i].CreatedAt.Before(res.Devices[j].CreatedAt) })
+	if only != nil {
+		return res
+	}
+	for _, inv := range r.invites {
+		if inv.state == relayInviteWaiting || inv.state == relayInviteRequest {
+			res.Invites = append(res.Invites, inv.info(""))
+		}
+	}
+	return res
+}
+
+// relaySelfRevokeGrace lets the answer of a self-revoke reach the device
+// before its tunnels are closed.
+const relaySelfRevokeGrace = 300 * time.Millisecond
+
+// relayRevoke removes the device named by id or name and closes its tunnels.
+// by is the device that asked ("" = a human on the socket); self = the
+// caller revokes itself, so its tunnels are closed a moment later.
+func (s *Server) relayRevoke(device, by string, self bool) (proto.RelayResult, error) {
+	r := &s.relay
+	r.mu.Lock()
+	var d *relayDevice
+	for _, x := range r.devices {
+		if x.ID == device || x.Name == device {
+			if d != nil {
+				r.mu.Unlock()
+				return proto.RelayResult{}, proto.Errorf(proto.CodeConflict, "relay: several devices are named %q; use the id", device)
 			}
+			d = x
 		}
-		if d == nil {
-			r.mu.Unlock()
-			return proto.RelayResult{}, proto.Errorf(proto.CodeNotFound, "relay: no device %q", a.Device)
-		}
-		delete(r.devices, d.ID)
-		err := r.saveDevicesLocked()
-		var muxes []*relaywire.Mux
-		for m := range r.tunnels[d.ID] {
-			muxes = append(muxes, m)
-		}
+	}
+	if d == nil {
 		r.mu.Unlock()
+		return proto.RelayResult{}, proto.Errorf(proto.CodeNotFound, "relay: no device %q", device)
+	}
+	delete(r.devices, d.ID)
+	err := r.saveDevicesLocked()
+	var muxes []*relaywire.Mux
+	for m := range r.tunnels[d.ID] {
+		muxes = append(muxes, m)
+	}
+	r.mu.Unlock()
+	closeAll := func() {
 		for _, m := range muxes {
 			_ = m.Close()
 		}
-		s.Log.Info("relay: device revoked", "device", d.ID, "name", d.Name)
-		s.relayAudit("revoke", map[string]any{"device": d.ID, "name": d.Name})
-		info := d.info(false)
-		if err != nil {
-			return proto.RelayResult{Device: &info}, proto.Errorf(proto.CodeInternal, "relay: revoked, but saving devices.json failed: %v", err)
-		}
-		return proto.RelayResult{Device: &info}, nil
 	}
-	return proto.RelayResult{}, proto.Errorf(proto.CodeInvalid, "relay: unknown action %q (status, invite, pending, approve, cancel, devices, revoke)", a.Action)
+	if self {
+		time.AfterFunc(relaySelfRevokeGrace, closeAll)
+	} else {
+		closeAll()
+	}
+	s.Log.Info("relay: device revoked", "device", d.ID, "name", d.Name, "by", by)
+	f := map[string]any{"device": d.ID, "name": d.Name}
+	if by != "" {
+		f["by"] = by
+	}
+	s.relayAudit("revoke", f)
+	info := d.info(false)
+	if err != nil {
+		return proto.RelayResult{Device: &info}, proto.Errorf(proto.CodeInternal, "relay: revoked, but saving devices.json failed: %v", err)
+	}
+	return proto.RelayResult{Device: &info}, nil
 }
 
 func (s *Server) relayStatus() proto.RelayResult {

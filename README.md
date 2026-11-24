@@ -192,6 +192,23 @@ can be purged. Inside a session only that session's own `read`/`replied` message
 `--vacuum`). Replies to a purged message keep working (their `reply_to` is cleared), and message
 ids are never reused. There is no MCP tool for purging.
 
+### Backlog notes
+
+Write down ideas and future tasks on a host and hand them to an agent later. Notes are kept by the daemon
+(`backlog.db`, SQLite) and are for humans: agents do not see the backlog, only what you assign to them.
+
+```sh
+agentd note add "Dark mode for the settings page" --body "Follow the system theme by default."
+agentd note ls                         # open and assigned notes (--all adds the done ones)
+agentd note edit 3 --title "..." --body "..."      # --reopen takes an assigned or done note back
+agentd note assign 3 codex@webapp      # becomes pending task n3 of that agent; --start = in progress
+agentd note rm 3
+```
+
+Assigning adds the task to the agent's task list (it survives the agent rewriting its list until it is done or
+cancelled) and sends the agent a mailbox message with the text (`--no-notify` skips the message). When the agent marks
+the task done, the note is done too. The desktop and mobile apps show the backlog in the Panel.
+
 ## Desktop app
 
 `agentd-desktop` is a native desktop client (Linux and macOS) for the agents of every host you use: one inbox
@@ -398,6 +415,19 @@ join_token_env = "AGENTD_RELAY_JOIN_TOKEN"   # or join_token = "..."
 max_scope = "operate"                        # highest scope an invite may grant
 ```
 
+`join_token_env` is read from the **daemon's** environment. A daemon started by systemd (`systemctl --user`) does not
+see variables exported in your shell profile; give the unit the variable, then restart it:
+
+```sh
+systemctl --user edit agentd      # add:  [Service]
+                                  #       Environment=AGENTD_RELAY_JOIN_TOKEN=<token>
+systemctl --user restart agentd   # sessions end with the daemon: do it when no agent is working
+agentd relay status               # state: online
+```
+
+While the state is not `online` (`error: relay refused the host: join token refused`), invites can still be printed
+but no device can redeem them; `agentd relay invite` warns about it.
+
 Pair a device:
 
 ```sh
@@ -406,6 +436,9 @@ agentd relay invite --scope view     # read-only device
 agentd relay invite --guest --sessions 'codex@webapp' --expires 48h   # share one agent with someone else
 agentd relay status | devices | revoke <id|name>
 ```
+
+Access can also be revoked from the apps (Ajustes > Dispositivos). A device connected through the relay can always
+revoke itself; revoking other devices from there needs an owner device with the `admin` scope.
 
 Scopes: `view` (list, read, watch terminals), `operate` (+ prompts, menus, interactive terminal, mailbox),
 `admin` (+ start sessions from a harness profile, kill, remove). `operate` can type into agents that run

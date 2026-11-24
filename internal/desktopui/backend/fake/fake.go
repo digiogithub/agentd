@@ -60,6 +60,8 @@ type Fake struct {
 	keysInstalled []string
 	paired        []string
 	replies       []ReplyCall
+	backlog       *backlogState
+	devs          deviceState
 
 	hostSubs  []chan []backend.HostStatus
 	sessSubs  []chan []backend.Session
@@ -91,6 +93,7 @@ func New() *Fake {
 	now := time.Now()
 	f.seed(now)
 	f.seedBoard(now)
+	f.seedNotes(now)
 	return f
 }
 

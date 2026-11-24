@@ -33,6 +33,15 @@ type fakeDaemon struct {
 	boardArgs []proto.BoardArgs
 	noBoard   bool // answer board like a daemon without the op
 	replies   []proto.ReplyArgs
+	// notes is what op notes answers (digest "n<len>"); noNotes answers like
+	// a daemon without the op; noteArgs records the note_* calls.
+	notes     []proto.Note
+	noNotes   bool
+	notesCall int
+	noteOps   []string
+	// relayArgs records op relay calls; relayErr makes it fail.
+	relayArgs []proto.RelayArgs
+	relayErr  bool
 }
 
 func newFakeDaemon(t *testing.T) *fakeDaemon {
@@ -160,6 +169,31 @@ func (f *fakeDaemon) serve(c net.Conn) {
 			default:
 				resp, _ = proto.OKResponse(b)
 			}
+		case proto.OpNotes:
+			var a proto.NotesArgs
+			_ = req.DecodeArgs(&a)
+			f.mu.Lock()
+			f.notesCall++
+			ns, no := append([]proto.Note(nil), f.notes...), f.noNotes
+			f.mu.Unlock()
+			digest := "n" + string(rune('0'+len(ns)))
+			switch {
+			case no:
+				resp = proto.ErrorResponse(proto.Errorf(proto.CodeInvalid, "unknown op %q", req.Op))
+			case a.SinceDigest == digest:
+				resp, _ = proto.OKResponse(proto.NotesResult{Digest: digest, NotModified: true})
+			default:
+				resp, _ = proto.OKResponse(proto.NotesResult{Notes: ns, Digest: digest})
+			}
+		case proto.OpNoteAdd:
+			var a proto.NoteAddArgs
+			_ = req.DecodeArgs(&a)
+			f.mu.Lock()
+			f.noteOps = append(f.noteOps, req.Op+":"+a.Title)
+			n := proto.Note{ID: int64(len(f.notes) + 1), Title: a.Title, Body: a.Body, State: proto.NoteOpen}
+			f.notes = append(f.notes, n)
+			f.mu.Unlock()
+			resp, _ = proto.OKResponse(n)
 		case proto.OpReply:
 			var a proto.ReplyArgs
 			_ = req.DecodeArgs(&a)
@@ -168,6 +202,18 @@ func (f *fakeDaemon) serve(c net.Conn) {
 			f.mu.Unlock()
 			id := a.ID
 			resp, _ = proto.OKResponse(proto.Message{ID: 900, Sender: "human:u", Recipient: "a@p", Body: a.Body, ReplyTo: &id, State: "queued"})
+		case proto.OpRelay:
+			var a proto.RelayArgs
+			_ = req.DecodeArgs(&a)
+			f.mu.Lock()
+			f.relayArgs = append(f.relayArgs, a)
+			bad := f.relayErr
+			f.mu.Unlock()
+			if bad {
+				resp = proto.ErrorResponse(proto.Errorf(proto.CodeInvalid, "relay is not enabled"))
+				break
+			}
+			resp, _ = proto.OKResponse(proto.RelayResult{Devices: []proto.RelayDeviceInfo{{ID: "d1", Name: "Móvil", Scope: "operate", Kind: "owner"}}})
 		default:
 			resp = proto.ErrorResponse(proto.Errorf(proto.CodeInvalid, "fake: %s", req.Op))
 		}

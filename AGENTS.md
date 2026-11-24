@@ -242,6 +242,7 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
 | `internal/relayclient` | Go client side: `Pair` (redeem an invite), `Connect`, `Dialer` (one reconnecting tunnel per host, `Dial` = one daemon connection) | relaywire |
 | `internal/notify` | ntfy / webhook notification sinks (AGED-US-0044): `Event`, `Notifier` (`Offer` never blocks; bounded queue 256 drop-oldest, one worker, 10 s timeout, 3 retries on 429/5xx/network, no redirects, debounce per session+reason, HMAC `X-Agentd-Signature`), `Payload`, `CleanText`; never logs URLs, secrets or bodies | stdlib only |
 | `internal/mailbox` | Message store: send, inbox, get, state transitions, replies, purge/vacuum, work queues (`Claim`, `QueueItems`, `Queues`), listing digests (`Digest`, `InboxDigest`, `QueueDigest`) | sqlite |
+| `internal/backlog` | Backlog notes store (plan `docs/plans/agentd/backlog-notes_plan.md`): `$STATE/backlog.db` (SQLite WAL, 0600, schema versioned), `Add/Get/Update/Remove/List/Assign/MarkDone`, `Digest`; at most `proto.MaxNotes`; no text sanitizing or identity rules (the daemon's) | sqlite, proto |
 | `internal/inject` | Safe input path: guard, bracketed paste, paste verification, submit delay, per-session input lock | session, config |
 | `internal/delivery` | Decide when a session is idle and inject queued messages (via `inject`) | session, mailbox, config, inject |
 | `internal/proto` | Wire protocol: JSON request/response + binary framed attach stream | stdlib |
@@ -255,7 +256,7 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
 | `internal/hcompat` | herdr-core (`hc`) client protocol, generation 1, translated onto daemon ops (Herdr Desktop / Whip compatibility, proof of concept): JSON-RPC 2.0 lines then 9-byte LE frames, per-stream credit, first paint, events, in-memory labels/keep/turn/docs; `Listener` (unix socket with herdr-core's `core.lock` ownership, admission hook, cleanup) and `LoadCoreID` | client, proto (stdlib otherwise; never daemon/session/config) |
 | `cmd/agentd-relay` | Relay server binary (flags, TLS files / ACME / plain HTTP behind a proxy, join tokens) | relayserver, version, x/crypto/acme/autocert |
 | `cmd/agentd` | Cobra CLI wiring; invoked as `herdr-core`/`hc` (argv[0]) it is the hc CLI subset (`hc.go`) | client, attach, daemon, mcpserver, httpapi, hcompat, config, tlsutil (never desktopui, never MyGo) |
-| `internal/desktopui/backend` | Contract between the desktop UI and the code that reaches hosts: `Backend`, `Shell`, `PTY`, `Session`, `Host`, auth kinds, provisioning types; `LaunchSpec.TerminalOnly`, `ListDir` (`DirListing`, `ErrDirNotFound`/`ErrDirDenied`) and `Terminate`; typed connect errors (`HostKeyError` for a key not yet accepted, `ErrHostKeyChanged`, `ErrPasswordRequired`, `HostStatus.ErrCode`) and `TrustHostKey` / `ConnectWithPassword(…, installKey)` (password used once, never stored); relay hosts: `Host.Relay *RelayTarget` (`relay_url`, route, pinned X25519 `host_key`, device id, scope `view|operate|admin`, session globs, kind), `Host.Allows(Capability)` (`CapOperate`/`CapLaunch`/`CapMailbox`/`CapShell`), `PairRelay(ctx, link, name)` (blocks until the owner approves), `ErrRelayHostOffline`/`ErrDeviceRevoked` (`HostErrRelayOffline`/`HostErrDeviceRevoked`), `ErrPairDenied`, `ErrBadInvite`, `ErrNeedsSSH`; Panel: `HostBoard {HostID, Board proto.BoardResult, Updated, Err}`, `WatchBoard(ctx)` (hosts whose daemon is up, ordered by id) and `Reply(ctx, hostID, id, body, notify)` (op reply, `notify=false` = recorded as delivered, never injected; relay devices need `CapMailbox`). Change it only together with every implementation | proto |
+| `internal/desktopui/backend` | Contract between the desktop UI and the code that reaches hosts: `Backend`, `Shell`, `PTY`, `Session`, `Host`, auth kinds, provisioning types; `LaunchSpec.TerminalOnly`, `ListDir` (`DirListing`, `ErrDirNotFound`/`ErrDirDenied`) and `Terminate`; typed connect errors (`HostKeyError` for a key not yet accepted, `ErrHostKeyChanged`, `ErrPasswordRequired`, `HostStatus.ErrCode`) and `TrustHostKey` / `ConnectWithPassword(…, installKey)` (password used once, never stored); relay hosts: `Host.Relay *RelayTarget` (`relay_url`, route, pinned X25519 `host_key`, device id, scope `view|operate|admin`, session globs, kind), `Host.Allows(Capability)` (`CapOperate`/`CapLaunch`/`CapMailbox`/`CapShell`), `PairRelay(ctx, link, name)` (blocks until the owner approves), `ErrRelayHostOffline`/`ErrDeviceRevoked` (`HostErrRelayOffline`/`HostErrDeviceRevoked`), `ErrPairDenied`, `ErrBadInvite`, `ErrNeedsSSH`; backlog: `HostBoard.Notes`/`NotesErr`, `NoteAdd`/`NoteUpdate`/`NoteRemove`/`NoteAssign` (`CapBacklog`); relay devices: `RelayDevices`/`RevokeRelayDevice` (`CapDevices`); Panel: `HostBoard {HostID, Board proto.BoardResult, Updated, Err}`, `WatchBoard(ctx)` (hosts whose daemon is up, ordered by id) and `Reply(ctx, hostID, id, body, notify)` (op reply, `notify=false` = recorded as delivered, never injected; relay devices need `CapMailbox`). Change it only together with every implementation | proto |
 | `internal/desktopui/backend/fake` | In-memory `Backend` with the mockup data (UI work, headless tests, `AGENTD_DESKTOP_FAKE=1`): act choose/prompt bump revisions (stale = conflict), canned PTY echo, provisioning events, an in-memory folder tree for `ListDir` (a non-enterable dir, a path above home), recorded `Terminate`/`Launch` calls, relay host `nube` (operate device) and `PairRelay` for `fake.InviteLink`, task lists and one open question for the Panel (`WatchBoard`, `Reply`, recorded `Replies`, `SetTasks`, `Ask`); never runs a program | backend, proto |
 | `internal/desktopui/remote` | `backend.Shell` over SSH (`golang.org/x/crypto/ssh`: ssh-agent, the app key, key files, password callbacks never stored) and on this computer; `DialUnix` (`direct-streamlocal`); TOFU host keys (`known_hosts`), app key `id_ed25519`, relay device key `relay_key` (`RelayKey`), `hosts.json` (SSH and relay hosts), `~/.ssh/config` import, per-host connection pool, `InstallAuthorizedKey` (app public key into `~/.ssh/authorized_keys`, idempotent, 0700/0600, refuses anything but one plain public key line); `remote/sshtest` = in-process SSH server for tests | backend, pty, x/crypto (no MyGo) |
 | `internal/desktopui/core` | The real `Backend`: saved hosts + one Shell per host, daemon socket discovery, session aggregation (agentd `ls` + `subscribe` per host, zellij/tmux polled, plain shells), view streams, mailbox/act/attach/run/kill/terminate/reply on daemon ops, the board per host (`board.go`: op `board {since_digest}` after `task.*`/`mail.*`/`status.*`/`attention.*`/`session.*`/`resync` events of the host's subscribe stream, debounced `Options.BoardDebounce` = 300 ms, only while `WatchBoard` has a consumer; a daemon without the op = `HostBoard.Err`, asked again after a reconnect), `ListDir` over the host's `Shell`; every op on a fresh connection (`client.Dial` locally, `remote` `DialUnix` + `client.NewConn` over SSH, a stream of the host's relay tunnel + `client.NewConn` for relay hosts: `relay.go`, no shell ops there) | backend, remote, client, proto, config, relayclient, relaywire (mux and provision through its `MuxAdapter`/`Provisioner` interfaces, wired in `cmd/agentd-desktop`; no MyGo). The local daemon is dialed with no `auth` (inherited `AGENTD_ID`/`AGENTD_TOKEN` are ignored) |
@@ -273,7 +274,7 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
 ### Key behaviours (normative)
 
 - **Paths**: socket `$XDG_RUNTIME_DIR/agentd/agentd.sock` (fallback `/tmp/agentd-$UID/`), state
-  `$XDG_STATE_HOME/agentd` (fallback `~/.local/state/agentd`): `mailbox.db`, `docs.json` (document store, 0600), `hc/core-id`, `api/devices.json` (device tokens, dir 0700, file 0600, `api/devices.lock`), `api/tls/{cert.pem,key.pem}` (self-signed gateway cert), `logs/<session>.log`,
+  `$XDG_STATE_HOME/agentd` (fallback `~/.local/state/agentd`): `mailbox.db`, `backlog.db` (backlog notes, 0600), `docs.json` (document store, 0600), `hc/core-id`, `api/devices.json` (device tokens, dir 0700, file 0600, `api/devices.lock`), `api/tls/{cert.pem,key.pem}` (self-signed gateway cert), `logs/<session>.log`,
   `daemon.log`, `relay/{host_key.json,devices.json,audit.log}` (dir 0700, files 0600). Config `~/.config/agentd/config.toml`. `AGENTD_SOCKET` env overrides the socket path
   (tests must use a temp socket + temp state dir via `AGENTD_STATE_DIR`).
 - **Daemon lock**: the daemon holds an exclusive `flock` on `<socketdir>/agentd.lock` for its whole
@@ -445,11 +446,19 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   turns tasks dump attach` (view: attach forced `observe`; `tasks_set`/`task_update` are denied: session-only writes; a device
   never sends `kind: "question"`, it resolves as a human; `board` filters sessions by the device's globs and gives
   `questions`/`unread_human` only to owner devices); `operate` + `act view_ack`, and owners `send inbox read reply`;
+  owner devices not limited to sessions also `notes note_add note_update note_rm note_assign`;
   `admin` + `run` (no `cmd`/`env`/`env_base`: a harness/target/profile only; a session-limited device must give a
   matching `name`), `kill rm label`, `doc_get doc_set` (not for session-limited devices); never `type purge shutdown
-  hc_listener claim queue peers relay`. The device's `sessions` globs filter `ls`, the subscribe snapshot and events (a
+  hc_listener claim queue peers`. Op `relay` over the relay is limited to two actions (`relayDeviceOp`): `devices` (an owner
+  `admin` device that is not session-limited gets every device, without invites; any other device only its own
+  entry) and `revoke` (any device may revoke itself, `device` empty or its own id: the answer is sent, its tunnels close
+  300 ms later; an owner `admin` device not session-limited may revoke any device; anything else `forbidden`); `status`,
+  `invite`, `pending`, `approve` and `cancel` stay `forbidden`. The device's `sessions` globs filter `ls`, the subscribe snapshot and events (a
   name outside them is `not_found`); guests and session-limited devices get no host-wide events (mail, docs). `info`
-  hides aliases below `admin`. Op `relay` is for humans on the socket only (never a session, never a device).
+  hides aliases below `admin`. Op `relay` is otherwise for humans on the socket only (never a session). The daemon logs an error at start when
+  `join_token_env` names a variable missing from its environment and no `join_token` is set (typical under systemd
+  `--user`), and `agentd relay invite` warns on stderr when the link is not `online` (the invite is still created, but no
+  device can redeem it until the host is linked).
 - **Project aliases**: short name → working directory, kept apart from `config.toml`.
   - File `~/.config/agentd/aliases.toml` (override path with `AGENTD_ALIASES_FILE`; respects
     `$XDG_CONFIG_HOME`), flat table: `webapp = "~/src/webapp"`. `~` is expanded;
@@ -531,6 +540,28 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   `tool_response.task.id`; `deleted` removes) into `tasks_set`. Dials with `client.Dial` (never autostarts), needs
   `whoami` = session, hard 3 s timeout, no stdout, exit 0 on anything unexpected (`--verbose` → stderr).
   `agentd hooks install --print` prints the settings.json snippet and the agent instruction block (never writes files).
+- **Backlog notes** (plan `docs/plans/agentd/backlog-notes_plan.md`; `internal/backlog`, `internal/daemon/notes.go`, wire
+  `internal/proto/note.go`, CLI `agentd note`): the human keeps notes / future tasks in `$STATE/backlog.db` and later
+  assigns them to a session. Ops (humans on the socket; a session is `forbidden`; relay devices: only owner devices with
+  at least `operate` that are not limited to sessions, write ops audited): `notes {states?, since_digest?}` → `{notes,
+  digest, not_modified?}` (open newest first, assigned by `assigned_at` desc, done by `done_at` desc; digest over id,
+  state, updated_at), `note_add {title, body?}` (title 1..200 runes, body <= 4000 runes, `screen.Sanitize` per line so the
+  body keeps `\n`; at most 1000 notes, else `invalid`), `note_update {id, title?, body?, state?}` (`state` only `open`:
+  takes an assigned or done note back, the session's task is not touched), `note_rm {id}`, `note_assign {id, session,
+  status?: pending|in_progress, notify?}` → `{note, task, message_id?, warning?}`. Assign needs a running session
+  (`not_found`/`exited`/`starting`) and a note that is not done. It puts task `n<id>` with `origin: "backlog"` (title =
+  note title, note = the body on one line, 500 runes) into the session's list (replaced in place if present; a full list
+  is `invalid` and the note stays open), publishes `task.changed`, marks the note `assigned` and, unless `notify` is
+  false, stores a `queued` mailbox message from the caller to the session (subject `Backlog task n<id>: <title>`; usual
+  `mail.queued` and delivery). A mailbox or ACL failure only sets `warning`. **Task rules** (`tasks.go`): `Task.Origin` is
+  set by the daemon and ignored on input; `tasks_set` keeps the origin of matching ids and keeps backlog tasks that are
+  `pending`, `in_progress` or `blocked` and that the new list leaves out (appended after the agent's tasks, counted in
+  the limit of 50; overflow is `invalid`); `task_update` preserves origin; when a backlog task becomes `done` the note
+  with the same `assigned_to` and `task_id` becomes `done` (`done_at`). `rm` of the session does not touch the note.
+  Event `note.changed {id, state?, removed?}` (no `session`; never delivered to sessions, even with `agent_view`). A
+  daemon whose store failed to open answers `not_ready`. CLI: `agentd note add TITLE [--body B|-]`, `note ls [--all]
+  [--json]`, `note edit ID [--title] [--body] [--reopen]`, `note rm ID`, `note assign ID SESSION [--start]
+  [--no-notify]`. No MCP tools.
 - **Chrome vs content** (`screen.Split`, same idea as Herdr, which keeps pinned chrome out of the text it reads back): a full-height vertical divider (one column holding `│ ┃ ║` on >= 60 % of the rows, interior of the screen) cuts a right-hand info panel off before anything else is detected: transcript, input and dialog come from the left columns only and the panel text is `Regions.Side` (rows without the divider, such as a full-width status bar, stay whole). Profile key `header_regex` marks the top rows that are chrome (tab bar, title strip: `RegionHeader`, `Regions.Header`), next to `footer_regex` for the status bar. Built-in `pando`: header `\bChat\b.*\bEditor\+Chat\b`, footer `ctrl\+h help`, busy `Thinking\.\.\.|press enter to`. **Info rows** (profile key `info_regex`, AGED-US-0051): rows directly above the input box (next to the status rows) matching it are chrome too (`RegionInfo`): left out of the transcript and of the history (`transientFn`) without counting as busy, unlike `busy_regex` rows. Built-in `claude` (`config.ClaudeInfoRegex`): the spinner row (`✶ Brewing… (23s · ↓ 1.4k tokens)`), the context counter (`134920 tokens`) and the tip under the spinner; as transcript they changed on every frame and broke the history alignment (gaps followed by repeated blocks).
 - **Idle detection** (per harness profile, configurable): idle ⇔ no PTY output for `idle_ms`
   (default 1500) AND (no `prompt_regex` configured OR it matches the current screen text) AND no
@@ -724,6 +755,7 @@ compacted in `docs.json`, atomic rename; a broken file is renamed `.bad` and the
 `doc.changed {name, version}` with no session, so session subscribers never see it),
 `turns {name}` (→ `{turns[]}`, see "Turn records"), `tasks_set {tasks[]}` / `task_update {id, status?, title?, note?}`
 (sessions only, → `{tasks, revision}`) and `tasks {name}` (→ `{name, tasks, revision}`), see "Task lists";
+`notes` / `note_add` / `note_update` / `note_rm` / `note_assign` (humans only, see "Backlog notes");
 `board {since_digest?}` (humans on the socket; a session is `forbidden`; → `{sessions[{name, status, attention, turn, preview,
 tasks[], questions[{id, body, options, task, created_at}]}], unread_human, digest, not_modified?}`: every registered session in
 `ls` order with its full task list and the open questions it asked the caller's human mailbox (oldest first);
@@ -862,10 +894,10 @@ session; a work-queue post is `mail.queued` with `to: "queue:<name>"`, `queue` a
 `mail.claimed` `{id, from, to, queue, by}` (`session` = `by` = the claimer; followed by `mail.delivered` unless
 `inject`), `session.labels` `{labels}`, `doc.changed` `{name, version}` (no `session`), `status.reported`
 `{status, records, reported}` (OSC 7501), `turn.completed` (a turn record), `task.changed` `{revision, counts,
-current?, changed[]}` (session = owner, see "Task lists"), `resync` `{reason: overflow|since_seq_too_old|epoch_mismatch}`, `heartbeat` (every 15 s,
+current?, changed[]}` (session = owner, see "Task lists"), `note.changed` `{id, state?, removed?}` (no `session`, see "Backlog notes"), `resync` `{reason: overflow|since_seq_too_old|epoch_mismatch}`, `heartbeat` (every 15 s,
 `Server.HeartbeatInterval`; `heartbeat_ms` min 1000) and `bye` (daemon shutdown, sent before connections
 are closed). `kinds` filters by exact kind or prefix (`session`, `status`, `view`, `input`, `attention`,
-`mail`, `doc`, `turn`, `task`); control kinds always pass.
+`mail`, `doc`, `turn`, `task`, `note`); control kinds always pass.
 - The bus keeps a 1024-event replay ring. `since_seq` requires `epoch` (`invalid` otherwise); inside the
   ring (same `epoch`) it replays the missed events, then goes live; outside it, or with another `epoch`,
   the stream starts with `resync`.
@@ -1021,6 +1053,23 @@ settings. It is a client only: it never changes daemon behaviour, and the daemon
   (`<session> · tarea bloqueada`, body = title · note), `Settings.NotifyQuestion` / `NotifyBlocked` (Ajustes
   "Preguntas" / "Tareas bloqueadas", default on), mutes respected, a host's first board is only the baseline, a click
   opens the Panel.
+- **Panel agent detail and Backlog** (`app/panel/detail.go`, `backlog.go`; plan `docs/plans/agentd/backlog-notes_plan.md`):
+  a click on an agent card (Por agente) or a task card (Tablero) opens `/panel/agent/{host}/{session}`
+  (`panel.AgentPath`): Volver, Abrir agente (chat), progress, open questions (same card as in the Panel), tasks grouped En
+  curso / Bloqueadas / Pendientes / Hechas (newest first) / Canceladas (folded), `Task.Origin == "backlog"` marked "del
+  backlog". **Backlog** (Por agente, under the attention list; Tablero has a `Backlog · N` button that switches to it):
+  notes of `Live.Boards[].Notes` per host (host filter; host label when more than one host has a backlog): open, then
+  assigned (`→ session · task state`), done behind "Ver hechas"; add / edit (title + multi-line body), delete (confirm),
+  Asignar (running agentd session of the same host + Pendiente | En curso → `Backend.NoteAssign`, notify default),
+  Devolver al backlog (`NoteUpdate` state open). Write actions need `Host.Allows(CapBacklog)`; a host with
+  `HostBoard.NotesErr` (older daemon, device without access) hides the section silently. `core` fetches `notes` with
+  every board refresh and on `note.*` events; an op error `invalid`/`forbidden` is `NotesErr`, never a failed board.
+- **Ajustes > Dispositivos** (`app/settings/devices.go`, client only): per host with a daemon up, the devices of
+  `Backend.RelayDevices` (op `relay devices`): name, platform, scope, "invitado", session globs, online / last seen,
+  expiry; loaded when the page opens and with "Actualizar". "Revocar" asks for confirmation and calls
+  `RevokeRelayDevice` (op `relay revoke`). The row whose id is `Host.Relay.DeviceID` is "este equipo" (the confirm warns
+  that this computer loses the host). On relay hosts without `CapDevices` only the own device is listed and revocable
+  (`canRevoke` mirrors the daemon rule). A daemon error is an inline note, never a toast.
 - **Chat scroll and prompts**: the chat follows the newest line only while pinned to the bottom (24 DIP slack); scrolling up releases it, and reaching the bottom or the `Ir al final` button pins it again (the mobile app does the same). A message typed while the status is `working` is sent as act `prompt` with `force` (most agents queue it mid-turn); `waiting` with a menu still refuses.
 - **UI rules**: one session view per window content area (no pane/split UI, see Rules); UI state is
   touched only on the UI thread (`app.Context.Update`); acts carry the view's `revision` + `epoch`.

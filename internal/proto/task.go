@@ -29,10 +29,13 @@ const (
 // t1, t2... when tasks_set gives none); Title and Note are agent-written,
 // sanitized text. UpdatedAt is set by the daemon (ignored on input).
 type Task struct {
-	ID        string    `json:"id,omitempty"`
-	Title     string    `json:"title"`
-	Status    string    `json:"status,omitempty"`
-	Note      string    `json:"note,omitempty"`
+	ID     string `json:"id,omitempty"`
+	Title  string `json:"title"`
+	Status string `json:"status,omitempty"`
+	Note   string `json:"note,omitempty"`
+	// Origin is "backlog" for a task the human assigned from the backlog
+	// (op note_assign); set by the daemon, ignored on input.
+	Origin    string    `json:"origin,omitempty"`
 	UpdatedAt time.Time `json:"updated_at,omitzero"`
 }
 

@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/digiogithub/agentd/internal/backlog"
 	"github.com/digiogithub/agentd/internal/config"
 	"github.com/digiogithub/agentd/internal/mailbox"
 	"github.com/digiogithub/agentd/internal/proto"
@@ -41,8 +42,11 @@ type Server struct {
 	// currentAliases); Aliases is the fallback when a reload fails.
 	AliasesLoader func(getenv func(string) string) (*config.Aliases, error)
 	Store         *mailbox.Store
-	Log           *slog.Logger
-	Delivery      Deliverer
+	// Backlog is the backlog notes store (notes.go); nil = the note ops answer
+	// not_ready. The daemon closes it on shutdown.
+	Backlog  *backlog.Store
+	Log      *slog.Logger
+	Delivery Deliverer
 
 	// SocketPath is where Listen binds; "" means config.SocketPath().
 	SocketPath string
@@ -450,6 +454,11 @@ func (s *Server) Shutdown() {
 		if s.Store != nil {
 			if err := s.Store.Close(); err != nil {
 				s.Log.Error("close store", "err", err)
+			}
+		}
+		if s.Backlog != nil {
+			if err := s.Backlog.Close(); err != nil {
+				s.Log.Error("close backlog", "err", err)
 			}
 		}
 		if sockInfo != nil {

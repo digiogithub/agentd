@@ -102,3 +102,46 @@ func TestRelayInviteApproved(t *testing.T) {
 		t.Fatalf("output: %s", out.String())
 	}
 }
+
+// An invite created while the host is not linked to the relay says so.
+func TestRelayInviteWarnsWhenNotLinked(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(config.EnvStateDir, filepath.Join(dir, "state"))
+	sock := filepath.Join(dir, "s.sock")
+	t.Setenv(config.EnvSocket, sock)
+	if err := config.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	// A relay that refuses the host: it asks for a join token we do not have.
+	rs := httptest.NewServer(relayserver.New(relayserver.Config{JoinTokens: []string{"0123456789abcdef-token"}}).Handler())
+	defer rs.Close()
+	cfg := config.Default()
+	cfg.Relay = config.RelayConfig{Enabled: true, URL: rs.URL, Label: "box"}
+	st, err := mailbox.Open(filepath.Join(dir, "m.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := daemon.New(cfg, nil, st, nil)
+	if err := srv.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = srv.Serve(context.Background()) }()
+	defer srv.Shutdown()
+	dial := func() (*client.Client, error) { return client.Dial(sock) }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	out, errw := &syncBuf{}, &syncBuf{}
+	done := make(chan error, 1)
+	go func() { done <- runRelayInvite(ctx, proto.RelayArgs{}, strings.NewReader(""), out, errw, dial) }()
+	for i := 0; !strings.Contains(out.String(), "Link:  "); i++ {
+		if i > 250 {
+			t.Fatal("no link printed")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if !strings.Contains(errw.String(), "not linked to the relay") {
+		t.Fatalf("no warning on stderr: %q", errw.String())
+	}
+}

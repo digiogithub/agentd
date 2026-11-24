@@ -112,6 +112,14 @@ const (
 	// shells, Solo terminal, folder browser, provisioning): SSH and local
 	// hosts only.
 	CapShell
+	// CapBacklog: the host's backlog notes (ops notes, note_add,
+	// note_update, note_rm, note_assign): owner devices with operate that
+	// are not limited to some sessions.
+	CapBacklog
+	// CapDevices: list and revoke the host's relay devices (op relay
+	// devices / revoke): owner devices with admin, not session-limited.
+	// Without it a relay device may still revoke itself.
+	CapDevices
 )
 
 // Allows reports whether the app may offer c on h. SSH and local hosts
@@ -128,6 +136,11 @@ func (h Host) Allows(c Capability) bool {
 		return h.Relay.Scope == ScopeAdmin
 	case CapMailbox:
 		return h.Relay.Kind != "guest" && (h.Relay.Scope == ScopeOperate || h.Relay.Scope == ScopeAdmin)
+	case CapBacklog:
+		return h.Relay.Kind != "guest" && len(h.Relay.Sessions) == 0 &&
+			(h.Relay.Scope == ScopeOperate || h.Relay.Scope == ScopeAdmin)
+	case CapDevices:
+		return h.Relay.Kind != "guest" && len(h.Relay.Sessions) == 0 && h.Relay.Scope == ScopeAdmin
 	}
 	return false
 }
@@ -339,6 +352,12 @@ type HostBoard struct {
 	// answer; a daemon without op board (before AGED-US-0041) has an empty
 	// Board and Err set, and the UI falls back to the session list.
 	Err string
+	// Notes is the host's backlog (op notes: open first, then assigned,
+	// then done), refreshed with the board and on note.* events. NotesErr is
+	// the last error ("" = fresh): a daemon without the op, or a relay device
+	// without CapBacklog, has no Notes and NotesErr set.
+	Notes    []proto.Note
+	NotesErr string
 }
 
 // PlannedStep is one provisioning step, shown before it runs.
@@ -430,6 +449,22 @@ type Backend interface {
 	// task.*, mail.*, status.*, attention.* and session.* events (debounced)
 	// and when its event stream reconnects.
 	WatchBoard(ctx context.Context) <-chan []HostBoard
+
+	// Backlog notes (agentd hosts; relay devices need CapBacklog). The
+	// result reaches the UI through WatchBoard (HostBoard.Notes) as well.
+	NoteAdd(ctx context.Context, hostID, title, body string) (*proto.Note, error)
+	NoteUpdate(ctx context.Context, hostID string, args proto.NoteUpdateArgs) (*proto.Note, error)
+	NoteRemove(ctx context.Context, hostID string, id int64) error
+	// NoteAssign turns a note into a task of a running session of the host
+	// (op note_assign) and, unless args.Notify is false, tells the agent.
+	NoteAssign(ctx context.Context, hostID string, args proto.NoteAssignArgs) (*proto.NoteAssignResult, error)
+
+	// Relay devices of a host (op relay devices / revoke). SSH and local
+	// hosts: every device. Relay hosts: CapDevices for the list and for
+	// revoking another device; any relay device may revoke itself (then the
+	// host is unreachable until paired again).
+	RelayDevices(ctx context.Context, hostID string) ([]proto.RelayDeviceInfo, error)
+	RevokeRelayDevice(ctx context.Context, hostID, device string) error
 
 	// Provisioning
 	Detect(ctx context.Context, hostID string) (*Capabilities, error)

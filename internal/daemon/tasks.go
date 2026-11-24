@@ -26,7 +26,14 @@ type taskList struct {
 }
 
 func sameTask(a, b proto.Task) bool {
-	return a.ID == b.ID && a.Title == b.Title && a.Status == b.Status && a.Note == b.Note
+	return a.ID == b.ID && a.Title == b.Title && a.Status == b.Status && a.Note == b.Note && a.Origin == b.Origin
+}
+
+// keepsBacklog reports whether a backlog task survives a tasks_set that leaves
+// it out: it is still open.
+func keepsBacklog(t proto.Task) bool {
+	return t.Origin == proto.TaskOriginBacklog &&
+		(t.Status == proto.TaskPending || t.Status == proto.TaskInProgress || t.Status == proto.TaskBlocked)
 }
 
 func cleanTitle(op, t string) (string, error) {
@@ -173,17 +180,45 @@ func (s *Server) tasksSet(who caller, a proto.TasksSetArgs) (proto.TasksResult, 
 		return proto.TasksResult{}, err
 	}
 	now := time.Now()
+	res, done, err := s.tasksSetLocked(who.id, e, next, now)
+	if err != nil {
+		return proto.TasksResult{}, err
+	}
+	s.backlogDone(who.id, done) // store I/O, outside e.mu
+	return res, nil
+}
+
+// tasksSetLocked applies a normalized list under e.mu. It returns the ids of
+// the backlog tasks that became done.
+func (s *Server) tasksSetLocked(name string, e *entry, next []proto.Task, now time.Time) (proto.TasksResult, []string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	prev := e.tasks.tasks
-	if e.tasks.rev > 0 && slices.EqualFunc(prev, next, sameTask) {
-		return e.tasksResultLocked(), nil
-	}
 	byID := make(map[string]proto.Task, len(prev))
 	for _, t := range prev {
 		byID[t.ID] = t
 	}
+	// Origin is the daemon's: kept for matching ids (input is ignored), and an
+	// open backlog task the agent left out stays after its own tasks.
+	inNext := make(map[string]bool, len(next))
+	for i, t := range next {
+		inNext[t.ID] = true
+		next[i].Origin = byID[t.ID].Origin
+	}
+	for _, t := range prev {
+		if keepsBacklog(t) && !inNext[t.ID] {
+			next = append(next, t)
+		}
+	}
+	if len(next) > proto.MaxTasks {
+		return proto.TasksResult{}, nil, proto.Errorf(proto.CodeInvalid,
+			"tasks_set: at most %d tasks including the open backlog tasks the list leaves out (got %d)", proto.MaxTasks, len(next))
+	}
+	if e.tasks.rev > 0 && slices.EqualFunc(prev, next, sameTask) {
+		return e.tasksResultLocked(), nil, nil
+	}
 	var changed []proto.TaskChange
+	var done []string
 	for i, t := range next {
 		old, ok := byID[t.ID]
 		switch {
@@ -197,12 +232,15 @@ func (s *Server) tasksSet(who caller, a proto.TasksSetArgs) (proto.TasksResult, 
 			ch := proto.TaskChange{ID: t.ID, Title: t.Title, Status: t.Status}
 			if old.Status != t.Status {
 				ch.From = old.Status
+				if t.Origin == proto.TaskOriginBacklog && t.Status == proto.TaskDone {
+					done = append(done, t.ID)
+				}
 			}
 			changed = append(changed, ch)
 		}
 	}
-	s.commitTasksLocked(who.id, e, next, changed)
-	return e.tasksResultLocked(), nil
+	s.commitTasksLocked(name, e, next, changed)
+	return e.tasksResultLocked(), done, nil
 }
 
 // taskUpdate serves op task_update: one task of the caller's list changes.
@@ -226,11 +264,25 @@ func (s *Server) taskUpdate(who caller, a proto.TaskUpdateArgs) (proto.TasksResu
 			return proto.TasksResult{}, err
 		}
 	}
+	res, done, err := s.taskUpdateLocked(who.id, e, a, title, note)
+	if err != nil {
+		return proto.TasksResult{}, err
+	}
+	if done {
+		s.backlogDone(who.id, []string{a.ID}) // store I/O, outside e.mu
+	}
+	return res, nil
+}
+
+// taskUpdateLocked applies one task_update under e.mu; done reports that a
+// backlog task became done.
+func (s *Server) taskUpdateLocked(name string, e *entry, a proto.TaskUpdateArgs, title, note string) (proto.TasksResult, bool, error) {
+	const op = proto.OpTaskUpdate
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	i := slices.IndexFunc(e.tasks.tasks, func(t proto.Task) bool { return t.ID == a.ID })
 	if i < 0 {
-		return proto.TasksResult{}, proto.Errorf(proto.CodeNotFound, "%s: no task %q", op, a.ID)
+		return proto.TasksResult{}, false, proto.Errorf(proto.CodeNotFound, "%s: no task %q", op, a.ID)
 	}
 	old := e.tasks.tasks[i]
 	t := old
@@ -244,7 +296,7 @@ func (s *Server) taskUpdate(who caller, a proto.TaskUpdateArgs) (proto.TasksResu
 		t.Status = *a.Status
 	}
 	if sameTask(old, t) {
-		return e.tasksResultLocked(), nil
+		return e.tasksResultLocked(), false, nil
 	}
 	t.UpdatedAt = time.Now()
 	next := slices.Clone(e.tasks.tasks)
@@ -253,8 +305,9 @@ func (s *Server) taskUpdate(who caller, a proto.TaskUpdateArgs) (proto.TasksResu
 	if old.Status != t.Status {
 		ch.From = old.Status
 	}
-	s.commitTasksLocked(who.id, e, next, []proto.TaskChange{ch})
-	return e.tasksResultLocked(), nil
+	s.commitTasksLocked(name, e, next, []proto.TaskChange{ch})
+	done := old.Origin == proto.TaskOriginBacklog && old.Status != proto.TaskDone && t.Status == proto.TaskDone
+	return e.tasksResultLocked(), done, nil
 }
 
 // tasksOp serves op tasks: humans read any session, a session itself unless

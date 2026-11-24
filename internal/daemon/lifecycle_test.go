@@ -3,6 +3,7 @@ package daemon_test
 import (
 	"context"
 	"errors"
+	"github.com/digiogithub/agentd/internal/backlog"
 	"net"
 	"os"
 	"path/filepath"
@@ -53,6 +54,7 @@ func startServer(t *testing.T, cfg *config.Config, tweak func(*daemon.Server)) *
 		t.Fatal(err)
 	}
 	srv := daemon.New(cfg, nil, store, nil)
+	srv.Backlog = openTestBacklog(t)
 	if tweak != nil {
 		tweak(srv)
 	}
@@ -395,4 +397,15 @@ func TestRunEnvBase(t *testing.T) {
 	if !strings.Contains(got, "|envd|none|none|none|") {
 		t.Fatalf("CLAUDECODE leaked from the daemon env: %q", got)
 	}
+}
+
+// openTestBacklog opens the backlog store in the test's temp state dir.
+func openTestBacklog(t *testing.T) *backlog.Store {
+	t.Helper()
+	p, _ := config.BacklogPath()
+	b, err := backlog.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
