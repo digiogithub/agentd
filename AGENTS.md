@@ -241,6 +241,7 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
 | `internal/relayserver` | agentd-relay: host registration (challenge signed with the route key + join token), client tunnels spliced to a fresh host data connection, limits; forwards opaque frames only | relaywire, coder/websocket |
 | `internal/relayclient` | Go client side: `Pair` (redeem an invite), `Connect`, `Dialer` (one reconnecting tunnel per host, `Dial` = one daemon connection) | relaywire |
 | `internal/notify` | ntfy / webhook notification sinks (AGED-US-0044): `Event`, `Notifier` (`Offer` never blocks; bounded queue 256 drop-oldest, one worker, 10 s timeout, 3 retries on 429/5xx/network, no redirects, debounce per session+reason, HMAC `X-Agentd-Signature`), `Payload`, `CleanText`; never logs URLs, secrets or bodies | stdlib only |
+| `internal/push` | FCM push (plan `docs/plans/agentd/push-fcm_plan.md`): service account `Credentials`, `TokenSource` (RS256 JWT bearer grant, cached, refresh on 401), `Client.Send` (FCM HTTP v1; `ErrUnregistered`, retryable 429/5xx/network 3 tries, no redirects, 10 s, capped reads), `Store` (`$STATE/push/tokens.json`, 32 tokens max); never logs tokens, keys or payload text | stdlib only |
 | `internal/mailbox` | Message store: send, inbox, get, state transitions, replies, purge/vacuum, work queues (`Claim`, `QueueItems`, `Queues`), listing digests (`Digest`, `InboxDigest`, `QueueDigest`) | sqlite |
 | `internal/backlog` | Backlog notes store (plan `docs/plans/agentd/backlog-notes_plan.md`): `$STATE/backlog.db` (SQLite WAL, 0600, schema versioned), `Add/Get/Update/Remove/List/Assign/MarkDone`, `Digest`; at most `proto.MaxNotes`; no text sanitizing or identity rules (the daemon's) | sqlite, proto |
 | `internal/inject` | Safe input path: guard, bracketed paste, paste verification, submit delay, per-session input lock | session, config |
@@ -274,7 +275,7 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
 ### Key behaviours (normative)
 
 - **Paths**: socket `$XDG_RUNTIME_DIR/agentd/agentd.sock` (fallback `/tmp/agentd-$UID/`), state
-  `$XDG_STATE_HOME/agentd` (fallback `~/.local/state/agentd`): `mailbox.db`, `backlog.db` (backlog notes, 0600), `docs.json` (document store, 0600), `hc/core-id`, `api/devices.json` (device tokens, dir 0700, file 0600, `api/devices.lock`), `api/tls/{cert.pem,key.pem}` (self-signed gateway cert), `logs/<session>.log`,
+  `$XDG_STATE_HOME/agentd` (fallback `~/.local/state/agentd`): `mailbox.db`, `backlog.db` (backlog notes, 0600), `push/tokens.json` (FCM tokens, dir 0700, file 0600), `docs.json` (document store, 0600), `hc/core-id`, `api/devices.json` (device tokens, dir 0700, file 0600, `api/devices.lock`), `api/tls/{cert.pem,key.pem}` (self-signed gateway cert), `logs/<session>.log`,
   `daemon.log`, `relay/{host_key.json,devices.json,audit.log}` (dir 0700, files 0600). Config `~/.config/agentd/config.toml`. `AGENTD_SOCKET` env overrides the socket path
   (tests must use a temp socket + temp state dir via `AGENTD_STATE_DIR`).
 - **Daemon lock**: the daemon holds an exclusive `flock` on `<socketdir>/agentd.lock` for its whole
@@ -423,6 +424,27 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   no screen or agent-written text unless `include_preview` (then the session's preview line, or for `question`/`blocked`
   the task title or the question text read from the mailbox by message id, always sanitized and capped at 160 chars). Delivery rules (queue, retries, no redirects, never
   logging URLs/secrets/bodies, payload) are those of the gateway sinks: both use `internal/notify`.
+- **Push notifications (FCM)** (plan `docs/plans/agentd/push-fcm_plan.md`; `internal/push`, `internal/daemon/push.go`, wire
+  `internal/proto/push.go`, `internal/config/push.go`, CLI `agentd push`): apps register their Firebase token with each host's
+  daemon and the daemon sends straight to FCM HTTP v1 with a Google service account key stored on that host (no relay
+  involvement). `[push]` (off by default): `enabled`, `credentials_file` (`~/.config/agentd/fcm-service-account.json`; push
+  stays off, cause logged and shown by `push_ls`, unless it is a regular file owned by the user with no group/other bits and
+  a valid service account JSON), `on` (default `["question","permission"]`; also `waiting`, `blocked`, `exited`,
+  `turn_done`; unknown = config error), `include_preview` (default false: the question / dialog text goes through Google
+  only when true), `debounce` (30s per session+reason), `host_label`. Tap (`startPush` in `Serve`, `stopPush` first in
+  `Shutdown` next to `stopNotify`; own bounded queue 256 drop-oldest + one worker): `mail.queued` kind question to
+  `human:*` -> `question`; `attention.changed` set with reason `waiting` and at least one option in the session's current
+  view -> `permission`, otherwise `waiting` (bell/notify too); `session.exited` -> `exited`; `task.changed` newly
+  blocked -> `blocked`; `turn_done`. Message: notification title in Spanish ("<s> te pregunta", "<s> pide permiso",
+  "<s> espera tu respuesta", "<s> tiene una tarea bloqueada", "<s> terminó"), body `<host_label>[ · <text>]`, data
+  `v host host_ref session reason message_id? link`, Android high priority, `collapse_key` = session, channel
+  `agentd_attention`, tag `<host>/<session>/<reason>`. A token FCM calls unregistered (404 UNREGISTERED, 400 about the token)
+  is removed. Ops: `push_register {token, platform, name, host_ref?}` (humans on the socket and owner relay devices of any
+  scope; a relay registration records `device` and revoking the device removes its tokens), `push_unregister {token|id}` (a
+  device only its own), `push_ls` (never the token value; devices see their own; also `enabled`, `project_id`, `reason`),
+  `push_test {id?}` (humans only, never over the relay; needs push on); sessions are `forbidden` on all of them. relayGate:
+  the first three for owner devices (not guests). CLI `agentd push ls [--json]|test [ID]|rm ID` and hidden `register`.
+  Tokens, access tokens, the private key and payload text are never logged (logs name the token id only).
 - **Relay transport** (design `docs/design/relay-transport.md`, plan `docs/plans/agentd/relay_plan.md` = normative
   protocol v1): with `[relay] enabled = true` and `url` (https/wss; http/ws only on loopback) the daemon keeps one
   outbound WebSocket link to an `agentd-relay` (`relaywire.RunHostLink`, backoff 1 s → 60 s; started in `Serve`, stopped
@@ -755,7 +777,7 @@ compacted in `docs.json`, atomic rename; a broken file is renamed `.bad` and the
 `doc.changed {name, version}` with no session, so session subscribers never see it),
 `turns {name}` (→ `{turns[]}`, see "Turn records"), `tasks_set {tasks[]}` / `task_update {id, status?, title?, note?}`
 (sessions only, → `{tasks, revision}`) and `tasks {name}` (→ `{name, tasks, revision}`), see "Task lists";
-`notes` / `note_add` / `note_update` / `note_rm` / `note_assign` (humans only, see "Backlog notes");
+`notes` / `note_add` / `note_update` / `note_rm` / `note_assign` (humans only, see "Backlog notes"); `push_register` / `push_unregister` / `push_ls` / `push_test` (humans; see "Push notifications (FCM)");
 `board {since_digest?}` (humans on the socket; a session is `forbidden`; → `{sessions[{name, status, attention, turn, preview,
 tasks[], questions[{id, body, options, task, created_at}]}], unread_human, digest, not_modified?}`: every registered session in
 `ls` order with its full task list and the open questions it asked the caller's human mailbox (oldest first);

@@ -766,6 +766,7 @@ func (s *Server) relayRevoke(device, by string, self bool) (proto.RelayResult, e
 	} else {
 		closeAll()
 	}
+	s.pushRemoveDevice(d.ID)
 	s.Log.Info("relay: device revoked", "device", d.ID, "name", d.Name, "by", by)
 	f := map[string]any{"device": d.ID, "name": d.Name}
 	if by != "" {

@@ -557,3 +557,31 @@ func (c *Client) Relay(a proto.RelayArgs) (proto.RelayResult, error) {
 	err := c.Call(proto.OpRelay, a, &r)
 	return r, err
 }
+
+// PushRegister registers (or refreshes) an FCM token on this host.
+func (c *Client) PushRegister(a proto.PushRegisterArgs) (proto.PushRegisterResult, error) {
+	var r proto.PushRegisterResult
+	err := c.Call(proto.OpPushRegister, a, &r)
+	return r, err
+}
+
+// PushUnregister removes a token by value or id.
+func (c *Client) PushUnregister(a proto.PushUnregisterArgs) (proto.PushUnregisterResult, error) {
+	var r proto.PushUnregisterResult
+	err := c.Call(proto.OpPushUnregister, a, &r)
+	return r, err
+}
+
+// PushLs lists the registered tokens (never their values) and the push state.
+func (c *Client) PushLs() (proto.PushLsResult, error) {
+	var r proto.PushLsResult
+	err := c.Call(proto.OpPushLs, struct{}{}, &r)
+	return r, err
+}
+
+// PushTest sends a test notification to one token (id) or to every token.
+func (c *Client) PushTest(id string) (proto.PushTestResult, error) {
+	var r proto.PushTestResult
+	err := c.Call(proto.OpPushTest, proto.PushTestArgs{ID: id}, &r)
+	return r, err
+}

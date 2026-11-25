@@ -209,6 +209,30 @@ Assigning adds the task to the agent's task list (it survives the agent rewritin
 cancelled) and sends the agent a mailbox message with the text (`--no-notify` skips the message). When the agent marks
 the task done, the note is done too. The desktop and mobile apps show the backlog in the Panel.
 
+### Push notifications (Firebase)
+
+The phone can get a system notification when an agent asks you a question or shows a permission dialog, even when
+the app is closed. Each host's daemon sends straight to Firebase Cloud Messaging with a service account key kept on
+that host; no relay is involved, and it works for hosts reached over SSH or relay.
+
+1. Firebase console > Project settings > Service accounts > Generate new private key. Save it on every host as
+   `~/.config/agentd/fcm-service-account.json` and `chmod 600` it. Never commit it.
+2. In `~/.config/agentd/config.toml`:
+
+   ```toml
+   [push]
+   enabled = true
+   # on = ["question", "permission"]   # default; also waiting, blocked, exited, turn_done
+   # include_preview = false           # true sends the question text through Google
+   ```
+
+3. Restart the daemon (this ends running sessions).
+
+The app registers its token with each host by itself. Check with `agentd push ls`, send a test with
+`agentd push test`, remove a token with `agentd push rm ID`. The payload carries no agent-written text unless
+`include_preview` is on. The app must be built with your own Firebase project (its `google-services.json` is not in
+the repository).
+
 ## Desktop app
 
 `agentd-desktop` is a native desktop client (Linux and macOS) for the agents of every host you use: one inbox

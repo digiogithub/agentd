@@ -418,6 +418,42 @@ func (s *Server) dispatch(ctx context.Context, req proto.Request, peer peerInfo)
 			return nil, err
 		}
 		return s.noteAssign(ctx, who, a)
+	case proto.OpPushRegister:
+		var a proto.PushRegisterArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.pushRegister(who, a)
+	case proto.OpPushUnregister:
+		var a proto.PushUnregisterArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.pushUnregister(who, a)
+	case proto.OpPushLs:
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.pushLs(who)
+	case proto.OpPushTest:
+		var a proto.PushTestArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.pushTest(ctx, who, a)
 	case proto.OpHCListen:
 		var a proto.HCListenArgs
 		if err := req.DecodeArgs(&a); err != nil {

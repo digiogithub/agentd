@@ -242,6 +242,8 @@ type Config struct {
 	// (same keys as [api.notify]; reasons question, waiting, blocked,
 	// turn_done, exited). Off by default.
 	Notify NotifyConfig `toml:"notify"`
+	// Push is [push]: FCM push notifications to registered apps (push.go).
+	Push PushConfig `toml:"push"`
 
 	// Path is the file the config was loaded from ("" for defaults).
 	Path string `toml:"-"`
@@ -474,6 +476,10 @@ func (c *Config) init() error {
 	}
 	c.Notify.applyDefaultsOn(DefaultDaemonNotifyOn)
 	if err := c.Notify.validateAs("notify", daemonNotifyReasons, "question, waiting, blocked, turn_done, exited"); err != nil {
+		return err
+	}
+	c.Push.applyDefaults()
+	if err := c.Push.validate(); err != nil {
 		return err
 	}
 	for name, pc := range c.Profiles {

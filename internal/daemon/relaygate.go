@@ -16,7 +16,8 @@ import (
 // relayAudited are the side-effecting ops recorded in relay/audit.log.
 var relayAudited = []string{proto.OpRun, proto.OpAct, proto.OpKill, proto.OpRm, proto.OpSend, proto.OpReply,
 	proto.OpViewAck, proto.OpLabel, proto.OpDocSet, proto.OpAttach,
-	proto.OpNoteAdd, proto.OpNoteUpdate, proto.OpNoteRm, proto.OpNoteAssign}
+	proto.OpNoteAdd, proto.OpNoteUpdate, proto.OpNoteRm, proto.OpNoteAssign,
+	proto.OpPushRegister, proto.OpPushUnregister}
 
 // relayGate checks (and may rewrite) a request from device d. It returns the
 // session the request names ("" if none) for the audit log.
@@ -112,6 +113,13 @@ func relayGate(d *relayDevice, req *proto.Request) (string, error) {
 			return "", forbid("the backlog is for owner devices that are not limited to some sessions")
 		}
 		return "", need(config.RelayScopeOperate)
+	case proto.OpPushRegister, proto.OpPushUnregister, proto.OpPushLs:
+		// Owner devices of any scope (an app registers its own token);
+		// guests have no use for it. push_test is never exposed.
+		if d.Kind != relayDeviceKindOwner {
+			return "", forbid("guests cannot use push notifications")
+		}
+		return "", nil
 	case proto.OpDocGet, proto.OpDocSet:
 		if len(d.Sessions) > 0 {
 			return "", forbid("documents are host-wide; this device is limited to some sessions")

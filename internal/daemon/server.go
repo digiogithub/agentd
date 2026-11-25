@@ -21,6 +21,7 @@ import (
 	"github.com/digiogithub/agentd/internal/config"
 	"github.com/digiogithub/agentd/internal/mailbox"
 	"github.com/digiogithub/agentd/internal/proto"
+	"github.com/digiogithub/agentd/internal/push"
 	"github.com/digiogithub/agentd/internal/session"
 )
 
@@ -44,9 +45,15 @@ type Server struct {
 	Store         *mailbox.Store
 	// Backlog is the backlog notes store (notes.go); nil = the note ops answer
 	// not_ready. The daemon closes it on shutdown.
-	Backlog  *backlog.Store
-	Log      *slog.Logger
-	Delivery Deliverer
+	Backlog *backlog.Store
+	// PushStore is the registered FCM token store (push.go); nil = the push
+	// ops answer not_ready. PushEndpoint / PushBackoff override the FCM base
+	// URL and the retry backoff (tests only).
+	PushStore    *push.Store
+	PushEndpoint string
+	PushBackoff  time.Duration
+	Log          *slog.Logger
+	Delivery     Deliverer
 
 	// SocketPath is where Listen binds; "" means config.SocketPath().
 	SocketPath string
@@ -81,6 +88,7 @@ type Server struct {
 	hc       hcListen     // [herdr] listen: the hc socket listener (hclisten.go)
 	relay    relayState   // [relay]: link to agentd-relay, devices, invites (relay.go)
 	ntf      daemonNotify // [notify]: ntfy/webhook tap on the bus (notify.go)
+	pushd    daemonPush   // [push]: FCM tap on the bus (push.go)
 
 	lockFile *os.File    // exclusive flock on <socketdir>/agentd.lock, held for the daemon's lifetime
 	sockInfo os.FileInfo // the socket file as bound, to unlink only our own on shutdown
@@ -282,6 +290,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	s.startHC()
 	s.startRelay()
 	s.startNotify()
+	s.startPush()
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -419,6 +428,7 @@ func (s *Server) Shutdown() {
 		// The hc listener first: its connections are clients of this daemon.
 		s.stopHC("daemon shutdown")
 		s.stopNotify() // before the bus closes
+		s.stopPush()
 		if ln != nil {
 			_ = ln.Close()
 		}

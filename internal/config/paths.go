@@ -171,3 +171,6 @@ func RelayDir() (string, error) { return inStateDir("relay") }
 
 // BacklogPath returns <state>/backlog.db (backlog notes).
 func BacklogPath() (string, error) { return inStateDir(backlogName) }
+
+// PushDir is $STATE/push: the registered FCM tokens.
+func PushDir() (string, error) { return inStateDir("push") }

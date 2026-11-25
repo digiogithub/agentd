@@ -18,6 +18,7 @@ import (
 	"github.com/digiogithub/agentd/internal/daemon"
 	"github.com/digiogithub/agentd/internal/mailbox"
 	"github.com/digiogithub/agentd/internal/proto"
+	"github.com/digiogithub/agentd/internal/push"
 	"github.com/digiogithub/agentd/internal/testutil"
 )
 
@@ -55,6 +56,7 @@ func startServer(t *testing.T, cfg *config.Config, tweak func(*daemon.Server)) *
 	}
 	srv := daemon.New(cfg, nil, store, nil)
 	srv.Backlog = openTestBacklog(t)
+	srv.PushStore = openTestPushStore(t)
 	if tweak != nil {
 		tweak(srv)
 	}
@@ -408,4 +410,15 @@ func openTestBacklog(t *testing.T) *backlog.Store {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// openTestPushStore opens the push token store in the test's temp state dir.
+func openTestPushStore(t *testing.T) *push.Store {
+	t.Helper()
+	d, _ := config.PushDir()
+	st, err := push.OpenStore(filepath.Join(d, "tokens.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st
 }

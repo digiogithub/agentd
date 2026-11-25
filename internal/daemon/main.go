@@ -13,6 +13,7 @@ import (
 	"github.com/digiogithub/agentd/internal/backlog"
 	"github.com/digiogithub/agentd/internal/config"
 	"github.com/digiogithub/agentd/internal/mailbox"
+	"github.com/digiogithub/agentd/internal/push"
 )
 
 // Options configures Main.
@@ -88,6 +89,13 @@ func Main(ctx context.Context, opts Options) error {
 		log.Error("open backlog (note ops disabled)", "err", err)
 	} else {
 		srv.Backlog = bl
+	}
+	if pdir, err := config.PushDir(); err != nil {
+		log.Warn("push dir", "err", err)
+	} else if ps, err := push.OpenStore(filepath.Join(pdir, "tokens.json")); err != nil {
+		log.Error("open push tokens (push ops disabled)", "err", err)
+	} else {
+		srv.PushStore = ps
 	}
 	srv.Delivery = srv.NewDeliveryLoop(log.With("component", "delivery"))
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
