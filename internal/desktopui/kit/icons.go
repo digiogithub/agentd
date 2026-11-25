@@ -66,6 +66,8 @@ const (
 	IconMonitor     = "monitor"
 	IconCircle      = "circle"
 	IconPanel       = "list-checks"
+	IconCode        = "code"
+	IconWrapText    = "wrap-text"
 
 	// Custom window controls (minimise, maximise, restore).
 	IconMinus    = "minus"

@@ -199,6 +199,9 @@ func (f *Fake) seed(now time.Time) {
 			{Text: "  ├──────────┼───────────────────────┤", Role: "transcript"},
 			{Text: "  │ reviews  │ revisiones pendientes │", Role: "transcript"},
 			{Text: "  └──────────┴───────────────────────┘", Role: "transcript"},
+			// Prose the daemon took for code (the chat can show it as text).
+			{Text: "  Nota: las colas reparten el trabajo entre", Code: true, Role: "transcript"},
+			{Text: "  las sesiones que pueden reclamarlo.", Code: true, Role: "transcript"},
 			{Text: "● README actualizado con la sección de colas de trabajo y un ejemplo de agentd claim.", Role: "transcript"},
 		}, Input: proto.ViewInput{State: "suggestion", Ghost: "Try \"commit the changes\""}}
 	landingView := &proto.View{Name: "claude@landing", Epoch: Epoch, Revision: 6, Status: "idle", Cwd: "~/src/landing",

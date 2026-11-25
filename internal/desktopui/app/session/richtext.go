@@ -50,7 +50,8 @@ func (v *View) markdownOpts(t *kit.Tokens) *markdown.Options {
 				LineHeight:   app.ChatAgentLineHeight * s.ChatLineScale(),
 				BlockSpacing: chatBlockSpacing * s.ChatLineScale(),
 			},
-			OnLink: v.openLink,
+			OnLink:    v.openLink,
+			CodeBlock: v.codeBlock,
 		}
 	}
 	return v.md

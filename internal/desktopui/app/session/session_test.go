@@ -387,3 +387,19 @@ func TestItemsFenceCodeAndJoinPrompt(t *testing.T) {
 		t.Errorf("code only %q, want %q", items[2].Text, want)
 	}
 }
+
+// A code block has a button that shows it as normal text (wrapped, the
+// terminal's line breaks undone) and back.
+func TestCodeBlockAsText(t *testing.T) {
+	e := apptest.New(t, "/agents/s/estudio/agentd/claude@docs", 1400, 900)
+	joined := "Nota: las colas reparten el trabajo entre las sesiones que pueden reclamarlo."
+	if e.UI.HasText(joined) {
+		t.Fatalf("shown as text before the toggle; texts %q", e.UI.Texts())
+	}
+	e.Click("Mostrar como texto")
+	e.Has(joined)
+	e.Click("Mostrar como código")
+	if e.UI.HasText(joined) {
+		t.Errorf("still shown as text; texts %q", e.UI.Texts())
+	}
+}

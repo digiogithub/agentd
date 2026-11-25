@@ -44,6 +44,7 @@ type View struct {
 	answering   bool
 	focusDraft  bool
 	expanded    map[int]bool
+	asText      map[string]bool // code blocks shown as normal text (codeblock.go)
 	scroll      ui.ScrollState
 	md          *markdown.Options // chat markup options (markdownOpts)
 	mdKey       string
@@ -62,7 +63,7 @@ type View struct {
 // New returns the page of session s.
 func New(a *app.Context, s backend.Session) *View {
 	ctx, stop := context.WithCancel(a.Ctx)
-	v := &View{a: a, key: s.Key(), expanded: map[int]bool{}, ctx: ctx, stop: stop, kill: app.NewTerminator(a)}
+	v := &View{a: a, key: s.Key(), expanded: map[int]bool{}, asText: map[string]bool{}, ctx: ctx, stop: stop, kill: app.NewTerminator(a)}
 	if s.Source != backend.SourceAgentd {
 		v.tab = TabTerminal
 	}
