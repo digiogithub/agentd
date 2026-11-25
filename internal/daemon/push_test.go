@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/digiogithub/agentd/internal/config"
+	"github.com/digiogithub/agentd/internal/mailbox"
 	"github.com/digiogithub/agentd/internal/proto"
 	"github.com/digiogithub/agentd/internal/push"
 )
@@ -373,5 +374,140 @@ func TestPushRelayGate(t *testing.T) {
 	}
 	if _, err := relayGate(owner, &proto.Request{Op: proto.OpPushTest}); proto.CodeOf(err) != proto.CodeForbidden {
 		t.Errorf("push_test: %v", err)
+	}
+}
+
+func TestPushRegisterModes(t *testing.T) {
+	f := newFakeFCM(t)
+	s := pushServer(t, f, nil)
+	r, err := s.pushRegister(humanCaller, proto.PushRegisterArgs{Token: "T1", Platform: "android", Name: "p"})
+	if err != nil || r.Mode != "notification" || strings.Join(r.Modes, ",") != "notification,data" {
+		t.Fatalf("default = %+v, %v", r, err)
+	}
+	r, err = s.pushRegister(humanCaller, proto.PushRegisterArgs{Token: "T1", Platform: "android", Name: "p", Mode: "data"})
+	if err != nil || r.Mode != "data" {
+		t.Fatalf("data = %+v, %v", r, err)
+	}
+	if ls, _ := s.pushLs(humanCaller); len(ls.Tokens) != 1 || ls.Tokens[0].Mode != "data" {
+		t.Fatalf("ls = %+v", ls)
+	}
+	for _, a := range []proto.PushRegisterArgs{
+		{Token: "T2", Platform: "android", Mode: "silent"},
+		{Token: "T2", Platform: "ios", Mode: "data"},
+	} {
+		if _, err := s.pushRegister(humanCaller, a); proto.CodeOf(err) != proto.CodeInvalid {
+			t.Fatalf("%+v: err = %v", a, err)
+		}
+	}
+	s.Cfg.Push.AndroidMode = "data"
+	if r, _ := s.pushRegister(humanCaller, proto.PushRegisterArgs{Token: "T3", Platform: "android"}); r.Mode != "data" {
+		t.Fatalf("android_mode data: %+v", r)
+	}
+	if r, _ := s.pushRegister(humanCaller, proto.PushRegisterArgs{Token: "T4", Platform: "ios"}); r.Mode != "notification" {
+		t.Fatalf("ios: %+v", r)
+	}
+}
+
+// byToken splits FCM messages by token.
+func byToken(ms []map[string]any) map[string][]map[string]any {
+	out := map[string][]map[string]any{}
+	for _, m := range ms {
+		out[m["token"].(string)] = append(out[m["token"].(string)], m)
+	}
+	return out
+}
+
+func TestPushDataModeAndResolved(t *testing.T) {
+	f := newFakeFCM(t)
+	s := pushServer(t, f, nil)
+	if _, err := s.pushRegister(humanCaller, proto.PushRegisterArgs{Token: "DATA", Platform: "android", Name: "p", HostRef: "r", Mode: "data"}); err != nil {
+		t.Fatal(err)
+	}
+	register(t, s, "NOTIF") // android, default mode notification
+
+	// A question, then its answer: data token gets the message and a resolved push.
+	s.bus.publish(proto.EvMailQueued, "", "a@x", "human:me", map[string]any{"id": 7, "from": "a@x", "to": "human:me", "kind": "question"})
+	f.wait(t, 2)
+	s.pushResolveQuestion("a@x", 8) // not an open push: nothing
+	s.pushResolveQuestion("a@x", 7)
+	s.pushResolveQuestion("a@x", 7) // already resolved: nothing
+	ms := f.wait(t, 3)
+	time.Sleep(100 * time.Millisecond)
+	if f.count() != 3 {
+		t.Fatalf("messages = %d, want 3", f.count())
+	}
+	bt := byToken(ms)
+	if len(bt["NOTIF"]) != 1 || bt["NOTIF"][0]["notification"] == nil {
+		t.Fatalf("notification token got %v", bt["NOTIF"])
+	}
+	if len(bt["DATA"]) != 2 {
+		t.Fatalf("data token got %v", bt["DATA"])
+	}
+	q := bt["DATA"][0]
+	if q["notification"] != nil || q["android"].(map[string]any)["notification"] != nil {
+		t.Fatalf("data-mode message carries a notification: %v", q)
+	}
+	d := q["data"].(map[string]any)
+	if d["title"] != "a@x te pregunta" || d["body"] != "hst" || d["tag"] != "hst/a@x/question" || d["reason"] != "question" ||
+		d["message_id"] != "7" || d["host_ref"] != "r" {
+		t.Fatalf("data %v", d)
+	}
+	rd := bt["DATA"][1]["data"].(map[string]any)
+	if rd["reason"] != "resolved" || rd["resolves"] != "question" || rd["tag"] != "hst/a@x/question" || rd["message_id"] != "7" ||
+		rd["session"] != "a@x" || rd["title"] != nil {
+		t.Fatalf("resolved %v", rd)
+	}
+
+	// A waiting attention cleared by the view: resolved; a second clear: nothing.
+	s.bus.publish(proto.EvAttentionChanged, "b@x", "", "", proto.AttentionChangedData{Attention: true, Reason: "waiting"})
+	f.wait(t, 5)
+	s.bus.publish(proto.EvAttentionChanged, "b@x", "", "", proto.AttentionChangedData{Attention: false})
+	s.bus.publish(proto.EvStatusChanged, "b@x", "", "", proto.StatusChangedData{From: "waiting", Status: "working"})
+	ms = f.wait(t, 6)
+	time.Sleep(100 * time.Millisecond)
+	if f.count() != 6 {
+		t.Fatalf("messages = %d, want 6", f.count())
+	}
+	last := ms[5]
+	if last["token"] != "DATA" || last["data"].(map[string]any)["resolves"] != "waiting" ||
+		last["data"].(map[string]any)["tag"] != "hst/b@x/waiting" {
+		t.Fatalf("resolved %v", last)
+	}
+
+	// Blocked task: resolved only when no task stays blocked.
+	s.bus.publish("task.changed", "c@x", "", "", map[string]any{"counts": map[string]int{"blocked": 2}, "changed": []map[string]any{{"title": "t", "status": "blocked", "from": "pending"}}})
+	f.wait(t, 8)
+	s.bus.publish("task.changed", "c@x", "", "", map[string]any{"counts": map[string]int{"blocked": 1}, "changed": []map[string]any{{"status": "done", "from": "blocked"}}})
+	s.bus.publish("task.changed", "c@x", "", "", map[string]any{"counts": map[string]int{"blocked": 0}, "changed": []map[string]any{{"status": "done", "from": "blocked"}}})
+	ms = f.wait(t, 9)
+	time.Sleep(100 * time.Millisecond)
+	if f.count() != 9 || ms[8]["data"].(map[string]any)["resolves"] != "blocked" {
+		t.Fatalf("messages = %d, last %v", f.count(), ms[len(ms)-1])
+	}
+}
+
+func TestPushReplyResolvesQuestion(t *testing.T) {
+	f := newFakeFCM(t)
+	s := pushServer(t, f, nil)
+	if _, err := s.pushRegister(humanCaller, proto.PushRegisterArgs{Token: "DATA", Platform: "android", Mode: "data"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.run(context.Background(), proto.RunArgs{Name: "q@x", Cmd: []string{"sleep", "60"}, Cwd: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	m, err := s.Store.Send(ctx, mailbox.Message{Sender: "q@x", Recipient: "human:me", Body: "ok?", Kind: "question"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.publishMailKind(proto.EvMailQueued, m.ID, "q@x", "human:me", "question")
+	f.wait(t, 1)
+	no := false
+	if _, err := s.reply(ctx, humanCaller, proto.ReplyArgs{ID: m.ID, Body: "yes", Notify: &no}); err != nil {
+		t.Fatal(err)
+	}
+	ms := f.wait(t, 2)
+	if d := ms[1]["data"].(map[string]any); d["reason"] != "resolved" || d["message_id"] != itoa(m.ID) {
+		t.Fatalf("resolved %v", d)
 	}
 }

@@ -24,7 +24,17 @@ type PushConfig struct {
 	Debounce Duration `toml:"debounce"`
 	// HostLabel names the host in payloads (default: hostname).
 	HostLabel string `toml:"host_label"`
+	// AndroidMode is how Android tokens that did not choose a mode at
+	// registration get pushes: "notification" (default, drawn by the system)
+	// or "data" (data-only, the app draws its own notification).
+	AndroidMode string `toml:"android_mode"`
 }
+
+// Push Android modes (same values as proto.PushModes).
+const (
+	PushModeNotification = "notification"
+	PushModeData         = "data"
+)
 
 // DefaultPushCredentials is the default credentials_file.
 const DefaultPushCredentials = "~/.config/agentd/fcm-service-account.json"
@@ -44,6 +54,9 @@ func (p *PushConfig) applyDefaults() {
 	if p.Debounce == 0 {
 		p.Debounce = Duration(DefaultNotifyDebounce)
 	}
+	if p.AndroidMode == "" {
+		p.AndroidMode = PushModeNotification
+	}
 }
 
 func (p PushConfig) validate() error {
@@ -54,6 +67,9 @@ func (p PushConfig) validate() error {
 	}
 	if time.Duration(p.Debounce) < 0 {
 		return fmt.Errorf("push.debounce must be >= 0")
+	}
+	if m := p.AndroidMode; m != "" && m != PushModeNotification && m != PushModeData {
+		return fmt.Errorf("push.android_mode: unknown mode %q (notification, data)", m)
 	}
 	return nil
 }

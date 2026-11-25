@@ -117,9 +117,9 @@ a permission. Only humans use these commands; agent sessions are refused.`,
 		},
 	}
 
-	var token, platform, name, hostRef string
+	var token, platform, name, hostRef, mode string
 	register := &cobra.Command{
-		Use:    "register --token T --platform P --name N [--host-ref R]",
+		Use:    "register --token T --platform P --name N [--host-ref R] [--mode notification|data]",
 		Short:  "Register a token (apps do this themselves; for tests and scripts)",
 		Hidden: true,
 		Args:   cobra.NoArgs,
@@ -128,11 +128,11 @@ a permission. Only humans use these commands; agent sessions are refused.`,
 				return errors.New("push register: --token is required")
 			}
 			return with(func(api pushAPI) error {
-				res, err := api.PushRegister(proto.PushRegisterArgs{Token: token, Platform: platform, Name: name, HostRef: hostRef})
+				res, err := api.PushRegister(proto.PushRegisterArgs{Token: token, Platform: platform, Name: name, HostRef: hostRef, Mode: mode})
 				if err != nil {
 					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "token %s registered\n", res.ID)
+				fmt.Fprintf(cmd.OutOrStdout(), "token %s registered (mode %s)\n", res.ID, dash(res.Mode))
 				return nil
 			})
 		},
@@ -141,6 +141,7 @@ a permission. Only humans use these commands; agent sessions are refused.`,
 	register.Flags().StringVar(&platform, "platform", proto.PushOther, "android|ios|macos|other")
 	register.Flags().StringVar(&name, "name", "", "device name")
 	register.Flags().StringVar(&hostRef, "host-ref", "", "the app's reference for this host")
+	register.Flags().StringVar(&mode, "mode", "", "android delivery mode: notification|data (default: [push] android_mode)")
 
 	cmd.AddCommand(ls, test, rm, register)
 	return cmd
@@ -157,13 +158,13 @@ func printPush(out io.Writer, res proto.PushLsResult) error {
 		return nil
 	}
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tPLATFORM\tNAME\tDEVICE\tREGISTERED\tLAST OK\tLAST ERROR")
+	fmt.Fprintln(w, "ID\tPLATFORM\tMODE\tNAME\tDEVICE\tREGISTERED\tLAST OK\tLAST ERROR")
 	for _, t := range res.Tokens {
 		lastOK := "-"
 		if t.LastOKAt != nil {
 			lastOK = ago(*t.LastOKAt)
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, t.Platform, oneLine(t.Name, 30), dash(t.Device), ago(t.CreatedAt), lastOK, dash(oneLine(t.LastError, 60)))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, t.Platform, dash(t.Mode), oneLine(t.Name, 30), dash(t.Device), ago(t.CreatedAt), lastOK, dash(oneLine(t.LastError, 60)))
 	}
 	return w.Flush()
 }

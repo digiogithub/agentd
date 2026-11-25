@@ -47,6 +47,12 @@ type Message struct {
 	CollapseKey string
 	ChannelID   string
 	Tag         string
+	// DataOnly sends a data message: no notification block (nor
+	// android.notification); Title, Body and Tag go into the data as "title",
+	// "body" and "tag" (when not empty) and the app draws the notification.
+	DataOnly bool
+	// Normal lowers the Android priority from HIGH to NORMAL.
+	Normal bool
 }
 
 // Client sends messages through FCM HTTP v1.
@@ -74,8 +80,27 @@ func (c *Client) ProjectID() string { return c.creds.ProjectID }
 
 func (m Message) payload() ([]byte, error) {
 	android := map[string]any{"priority": "HIGH"}
+	if m.Normal {
+		android["priority"] = "NORMAL"
+	}
 	if m.CollapseKey != "" {
 		android["collapse_key"] = m.CollapseKey
+	}
+	if m.DataOnly {
+		data := make(map[string]string, len(m.Data)+3)
+		for k, v := range m.Data {
+			data[k] = v
+		}
+		for k, v := range map[string]string{"title": m.Title, "body": m.Body, "tag": m.Tag} {
+			if v != "" {
+				data[k] = v
+			}
+		}
+		msg := map[string]any{"token": m.Token, "android": android}
+		if len(data) > 0 {
+			msg["data"] = data
+		}
+		return json.Marshal(map[string]any{"message": msg})
 	}
 	n := map[string]string{}
 	if m.ChannelID != "" {

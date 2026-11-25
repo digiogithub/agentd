@@ -43,6 +43,27 @@ host_label = ""                   # default: hostname
   `token_uri`); `project_id` is the FCM project.
 - Unknown `on` reasons are a config error.
 
+### Android data mode (2026-11-25, request from agentd-app, confirmed by the user)
+
+Android Auto ignores system-drawn FCM notification messages (no reply action), so the app draws its own
+(MessagingStyle + RemoteInput) and needs data-only messages; otherwise the phone shows two notifications.
+
+- `[push] android_mode = "notification" | "data"` (default `notification`: unchanged behaviour).
+- `push_register {..., mode?}`: `notification` | `data` (`data` only with platform `android`, else `invalid`); stored
+  in `tokens.json` (`mode`); answer `{id, mode, modes}` (`mode` = effective, `modes` = `["notification","data"]`). An
+  older daemon rejects the unknown field, so the app registers first without `mode`, sees `modes`, then registers
+  again with `mode: data`. `push_ls` tokens carry `mode` (as registered).
+- Effective mode of a token: non-android = `notification`; else its `mode`, else `android_mode`.
+- Data-mode message: no `notification`, no `android.notification`; `android.priority` HIGH and `collapse_key` kept;
+  `data` = the usual keys plus `title`, `body`, `tag` (`<host_label>/<session>/<reason>`). `include_preview` unchanged.
+- **Resolved**: the daemon remembers the pushes it queued (session + reason; question: + message id, at most 64 per
+  session) and, for data tokens only, sends a data-only, priority NORMAL push `{v, host, host_ref, session, reason:
+  "resolved", resolves: <earlier reason>, tag: <earlier tag>, link, message_id?}` when: `reply` to that question;
+  `attention.changed` cleared or `status.changed` leaving `waiting` (permission, waiting; attention also turn_done);
+  `session.exited` (permission, waiting, turn_done); `task.changed` with a task leaving `blocked` and `counts.blocked ==
+  0` (blocked). Once per open push; not filtered by `on`, not debounced; the debounce state is not reset by it (default
+  behaviour unchanged). Note: the tag of a question is per session, so `message_id` tells which question was answered.
+
 ### Package `internal/push` (stdlib only)
 
 - `Credentials` (parsed service account), `TokenSource`: OAuth 2.0 JWT bearer grant (RS256 JWT, `iss` =
@@ -119,4 +140,5 @@ the message; `ErrUnregistered` removes the token. Reuses `internal/notify` for q
 ## Status
 
 - 2026-11-25: plan written; P1-P4 started.
+- 2026-11-25: Android data mode + resolved pushes done ([[changes/push-fcm-data-mode]]).
 - 2026-11-25: P1-P4 done (proto, config, `internal/push`, daemon ops + tap + relay gate + revoke hook, CLI, docs); tests pass. P5 (app) and P6 (end to end) pending. Change note: [[changes/push-fcm]].

@@ -26,6 +26,22 @@ const (
 // PushPlatforms lists every valid platform.
 var PushPlatforms = []string{PushAndroid, PushIOS, PushMacOS, PushOther}
 
+// Push delivery modes of an Android token. notification = FCM notification
+// message drawn by the system (default); data = data-only message, the app
+// draws its own notification (title, body and tag are in the data) and gets
+// a "resolved" data push when the question is answered or the dialog closes.
+const (
+	PushModeNotification = "notification"
+	PushModeData         = "data"
+)
+
+// PushModes lists the modes this daemon accepts (advertised by push_register).
+var PushModes = []string{PushModeNotification, PushModeData}
+
+// PushResolved is the data reason of a push that withdraws an earlier one
+// (data mode only): data "resolves" names the earlier reason and "tag" its tag.
+const PushResolved = "resolved"
+
 // Push limits.
 const (
 	MaxPushToken   = 4096 // printable ASCII bytes
@@ -40,11 +56,17 @@ type PushRegisterArgs struct {
 	Platform string `json:"platform"`
 	Name     string `json:"name"`
 	HostRef  string `json:"host_ref,omitempty"`
+	// Mode is the token's delivery mode (PushModes; android only). Empty =
+	// [push] android_mode.
+	Mode string `json:"mode,omitempty"`
 }
 
-// PushRegisterResult is the answer of push_register: the token's id.
+// PushRegisterResult is the answer of push_register: the token's id, the
+// mode it gets (the effective one) and every mode this daemon accepts.
 type PushRegisterResult struct {
-	ID string `json:"id"`
+	ID    string   `json:"id"`
+	Mode  string   `json:"mode,omitempty"`
+	Modes []string `json:"modes,omitempty"`
 }
 
 // PushUnregisterArgs names the token to drop by its value or by its id.
@@ -65,6 +87,7 @@ type PushToken struct {
 	Name      string     `json:"name"`
 	HostRef   string     `json:"host_ref,omitempty"`
 	Device    string     `json:"device,omitempty"`
+	Mode      string     `json:"mode,omitempty"` // as registered; empty = [push] android_mode
 	CreatedAt time.Time  `json:"created_at"`
 	LastOKAt  *time.Time `json:"last_ok_at,omitempty"`
 	LastError string     `json:"last_error,omitempty"`

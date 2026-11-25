@@ -50,15 +50,24 @@ type daemonPush struct {
 	queue    []pushJob
 	wake     chan struct{}
 	lastSent map[string]time.Time
+	// open records the pushes that a later "resolved" push may withdraw:
+	// session + reason -> message ids (0 for reasons other than question).
+	open map[string]map[int64]bool
 }
 
 type pushJob struct {
 	session, reason, text string
 	messageID             int64
 	at                    time.Time
+	// resolves is set on a "resolved" job (reason proto.PushResolved): the
+	// reason of the push it withdraws.
+	resolves string
 }
 
-var pushKinds = []string{proto.EvAttentionChanged, proto.EvSessionExited, proto.EvMailQueued, "task.changed"}
+// pushMaxOpenQuestions bounds the open question ids kept per session.
+const pushMaxOpenQuestions = 64
+
+var pushKinds = []string{proto.EvAttentionChanged, proto.EvSessionExited, proto.EvMailQueued, "task.changed", proto.EvStatusChanged}
 
 // startPush starts the tap when [push] is enabled and the credentials load.
 // Any problem leaves it off, logs the cause (never the key) and is reported by
@@ -113,8 +122,11 @@ func (s *Server) startPush() {
 		host, _ = os.Hostname()
 	}
 	d.client, d.project, d.reason, d.host, d.cfg = cl, creds.ProjectID, "", host, cfg
+	d.qmu.Lock()
 	d.wake = make(chan struct{}, 1)
 	d.lastSent = map[string]time.Time{}
+	d.open = map[string]map[int64]bool{}
+	d.qmu.Unlock()
 	ctx, cancel := context.WithCancel(context.Background())
 	d.cancel = cancel
 	d.done = make(chan struct{})
@@ -126,6 +138,7 @@ func (s *Server) startPush() {
 		for {
 			select {
 			case ev := <-sub.ch:
+				s.pushEventResolved(ev)
 				if job, ok := s.pushEventJob(ev); ok {
 					d.offer(job)
 				}
@@ -187,6 +200,24 @@ func (d *daemonPush) offer(j pushJob) {
 		}
 	}
 	d.lastSent[key] = j.at
+	if d.open != nil {
+		ids := d.open[key]
+		if ids == nil {
+			ids = map[int64]bool{}
+			d.open[key] = ids
+		}
+		if len(ids) >= pushMaxOpenQuestions {
+			for id := range ids { // any one: a bound, not an order
+				delete(ids, id)
+				break
+			}
+		}
+		ids[j.messageID] = true
+	}
+	d.enqueueLocked(j)
+}
+
+func (d *daemonPush) enqueueLocked(j pushJob) {
 	if len(d.queue) >= pushQueueSize {
 		d.queue = d.queue[1:]
 	}
@@ -194,6 +225,79 @@ func (d *daemonPush) offer(j pushJob) {
 	select {
 	case d.wake <- struct{}{}:
 	default:
+	}
+}
+
+// resolve queues a "resolved" push for every reason in reasons that has an
+// open push for session (for question: the open push of message id). Not
+// filtered by `on` nor debounced; only data-mode tokens get it. No-op while
+// push is off.
+func (d *daemonPush) resolve(session string, id int64, reasons ...string) {
+	d.qmu.Lock()
+	defer d.qmu.Unlock()
+	if d.open == nil {
+		return
+	}
+	for _, r := range reasons {
+		key := session + "\x00" + r
+		ids := d.open[key]
+		if !ids[id] {
+			continue
+		}
+		delete(ids, id)
+		if len(ids) == 0 {
+			delete(d.open, key)
+		}
+		d.enqueueLocked(pushJob{session: session, reason: proto.PushResolved, resolves: r, messageID: id, at: time.Now()})
+	}
+}
+
+// pushResolveQuestion withdraws the push of question id asked by session
+// (called by reply).
+func (s *Server) pushResolveQuestion(session string, id int64) {
+	s.pushd.resolve(session, id, notify.Question)
+}
+
+// pushEventResolved maps a bus event onto "resolved" pushes: the attention
+// flag cleared or the waiting status left (the dialog closed, the human
+// typed or acked), the session exited, or its last blocked task unblocked.
+func (s *Server) pushEventResolved(ev proto.Event) {
+	d := &s.pushd
+	if ev.Session == "" {
+		return
+	}
+	switch ev.Kind {
+	case proto.EvAttentionChanged:
+		var a proto.AttentionChangedData
+		if json.Unmarshal(ev.Data, &a) == nil && !a.Attention {
+			d.resolve(ev.Session, 0, pushPermission, notify.Waiting, notify.TurnDone)
+		}
+	case proto.EvStatusChanged:
+		var st proto.StatusChangedData
+		if json.Unmarshal(ev.Data, &st) == nil && st.From == "waiting" && st.Status != "waiting" {
+			d.resolve(ev.Session, 0, pushPermission, notify.Waiting)
+		}
+	case proto.EvSessionExited:
+		d.resolve(ev.Session, 0, pushPermission, notify.Waiting, notify.TurnDone)
+	case "task.changed":
+		var t struct {
+			Counts struct {
+				Blocked int `json:"blocked"`
+			} `json:"counts"`
+			Changed []struct {
+				Status string `json:"status"`
+				From   string `json:"from"`
+			} `json:"changed"`
+		}
+		if json.Unmarshal(ev.Data, &t) != nil || t.Counts.Blocked > 0 {
+			return
+		}
+		for _, c := range t.Changed {
+			if c.From == "blocked" && c.Status != "blocked" {
+				d.resolve(ev.Session, 0, notify.Blocked)
+				return
+			}
+		}
 	}
 }
 
@@ -310,22 +414,58 @@ func pushTitle(session, reason string) string {
 	return session + " espera tu respuesta"
 }
 
+// tokenMode is the delivery mode of e: its registered mode, else [push]
+// android_mode; tokens of other platforms always get notifications.
+func (d *daemonPush) tokenMode(e push.Entry) string {
+	return pushTokenMode(e, d.cfg.AndroidMode)
+}
+
+func pushTokenMode(e push.Entry, androidMode string) string {
+	if e.Platform != proto.PushAndroid {
+		return proto.PushModeNotification
+	}
+	if e.Mode != "" {
+		return e.Mode
+	}
+	if androidMode == proto.PushModeData {
+		return proto.PushModeData
+	}
+	return proto.PushModeNotification
+}
+
+func (d *daemonPush) tag(session, reason string) string {
+	return d.host + "/" + session + "/" + reason
+}
+
 // pushMessage builds the FCM message of a job for one registered token.
+// Data-mode tokens get a data-only message (title, body and tag in the data);
+// a "resolved" job is data only, normal priority, with "resolves" and the tag
+// of the push it withdraws.
 func (d *daemonPush) pushMessage(j pushJob, e push.Entry) push.Message {
+	link := "agentd://open?h=" + url.QueryEscape(d.host) + "&s=" + url.QueryEscape(j.session)
+	if j.reason == proto.PushResolved {
+		data := map[string]string{"v": "1", "host": d.host, "host_ref": e.HostRef, "session": j.session,
+			"reason": proto.PushResolved, "resolves": j.resolves, "link": link}
+		if j.messageID > 0 {
+			data["message_id"] = itoa(j.messageID)
+		}
+		return push.Message{Token: e.Token, Data: data, CollapseKey: j.session, Tag: d.tag(j.session, j.resolves),
+			DataOnly: true, Normal: true}
+	}
 	body := d.host
 	if d.cfg.IncludePreview {
 		if t := notify.CleanText(j.text); t != "" {
 			body += " · " + t
 		}
 	}
-	link := "agentd://open?h=" + url.QueryEscape(d.host) + "&s=" + url.QueryEscape(j.session)
 	data := map[string]string{"v": "1", "host": d.host, "host_ref": e.HostRef, "session": j.session, "reason": j.reason, "link": link}
 	if j.reason == notify.Question && j.messageID > 0 {
 		data["message_id"] = itoa(j.messageID)
 	}
 	return push.Message{
 		Token: e.Token, Title: pushTitle(j.session, j.reason), Body: body, Data: data,
-		CollapseKey: j.session, ChannelID: pushChannel, Tag: d.host + "/" + j.session + "/" + j.reason,
+		CollapseKey: j.session, ChannelID: pushChannel, Tag: d.tag(j.session, j.reason),
+		DataOnly: d.tokenMode(e) == proto.PushModeData,
 	}
 }
 
@@ -364,6 +504,9 @@ func (s *Server) pushDeliver(ctx context.Context, j pushJob) {
 	for _, e := range s.PushStore.List() {
 		if ctx.Err() != nil {
 			return
+		}
+		if j.reason == proto.PushResolved && d.tokenMode(e) != proto.PushModeData {
+			continue // a system-drawn notification cannot be withdrawn by data
 		}
 		_ = s.pushSend(ctx, cl, e, d.pushMessage(j, e))
 	}
@@ -415,11 +558,17 @@ func (s *Server) pushRegister(who caller, a proto.PushRegisterArgs) (proto.PushR
 	if a.HostRef != "" && !printableASCII(a.HostRef, proto.MaxPushHostRef) {
 		return proto.PushRegisterResult{}, proto.Errorf(proto.CodeInvalid, "%s: host_ref must be at most %d printable ASCII characters", op, proto.MaxPushHostRef)
 	}
+	if a.Mode != "" && !slices.Contains(proto.PushModes, a.Mode) {
+		return proto.PushRegisterResult{}, proto.Errorf(proto.CodeInvalid, "%s: mode must be one of %s", op, strings.Join(proto.PushModes, ", "))
+	}
+	if a.Mode == proto.PushModeData && a.Platform != proto.PushAndroid {
+		return proto.PushRegisterResult{}, proto.Errorf(proto.CodeInvalid, "%s: mode data is for android tokens only", op)
+	}
 	st, err := s.pushStore(op)
 	if err != nil {
 		return proto.PushRegisterResult{}, err
 	}
-	e := push.Entry{Token: a.Token, Platform: a.Platform, HostRef: a.HostRef,
+	e := push.Entry{Token: a.Token, Platform: a.Platform, HostRef: a.HostRef, Mode: a.Mode,
 		Name: strings.TrimSpace(screen.Sanitize(a.Name, proto.MaxPushName))}
 	if who.dev != nil {
 		e.Device = who.dev.ID
@@ -429,8 +578,13 @@ func (s *Server) pushRegister(who caller, a proto.PushRegisterArgs) (proto.PushR
 		s.Log.Error("push: saving tokens failed", "err", err)
 		return proto.PushRegisterResult{ID: got.ID}, proto.Errorf(proto.CodeInternal, "%s: saving the token failed", op)
 	}
-	s.Log.Info("push: token registered", "token", got.ID, "platform", got.Platform, "device", got.Device)
-	return proto.PushRegisterResult{ID: got.ID}, nil
+	androidMode := ""
+	if s.Cfg != nil {
+		androidMode = s.Cfg.Push.AndroidMode
+	}
+	mode := pushTokenMode(got, androidMode)
+	s.Log.Info("push: token registered", "token", got.ID, "platform", got.Platform, "mode", mode, "device", got.Device)
+	return proto.PushRegisterResult{ID: got.ID, Mode: mode, Modes: proto.PushModes}, nil
 }
 
 // pushUnregister serves op push_unregister.
@@ -478,7 +632,7 @@ func (s *Server) pushLs(who caller) (proto.PushLsResult, error) {
 			continue
 		}
 		res.Tokens = append(res.Tokens, proto.PushToken{ID: e.ID, Platform: e.Platform, Name: e.Name, HostRef: e.HostRef,
-			Device: e.Device, CreatedAt: e.CreatedAt, LastOKAt: e.LastOKAt, LastError: e.LastError})
+			Device: e.Device, Mode: e.Mode, CreatedAt: e.CreatedAt, LastOKAt: e.LastOKAt, LastError: e.LastError})
 	}
 	d := &s.pushd
 	d.mu.Lock()
@@ -507,7 +661,7 @@ func (s *Server) pushTest(ctx context.Context, who caller, a proto.PushTestArgs)
 	}
 	d := &s.pushd
 	d.mu.Lock()
-	cl, host, reason := d.client, d.host, d.reason
+	cl, host, reason, androidMode := d.client, d.host, d.reason, d.cfg.AndroidMode
 	d.mu.Unlock()
 	if cl == nil {
 		return proto.PushTestResult{}, proto.Errorf(proto.CodeNotReady, "%s: push is off (%s)", op, reason)
@@ -525,7 +679,8 @@ func (s *Server) pushTest(ctx context.Context, who caller, a proto.PushTestArgs)
 	for _, e := range targets {
 		m := push.Message{Token: e.Token, Title: "agentd", Body: host + " · notificación de prueba",
 			Data:      map[string]string{"v": "1", "host": host, "host_ref": e.HostRef, "reason": "test"},
-			ChannelID: pushChannel, Tag: host + "/test"}
+			ChannelID: pushChannel, Tag: host + "/test",
+			DataOnly: pushTokenMode(e, androidMode) == proto.PushModeData}
 		if err := s.pushSend(ctx, cl, e, m); err != nil {
 			res.Errors = append(res.Errors, e.ID+": "+err.Error())
 		} else {

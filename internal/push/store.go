@@ -26,6 +26,7 @@ type Entry struct {
 	Name      string     `json:"name"`
 	HostRef   string     `json:"host_ref,omitempty"`
 	Device    string     `json:"device,omitempty"`
+	Mode      string     `json:"mode,omitempty"`
 	CreatedAt time.Time  `json:"created_at"`
 	LastOKAt  *time.Time `json:"last_ok_at,omitempty"`
 	LastError string     `json:"last_error,omitempty"`
@@ -91,7 +92,7 @@ func (s *Store) saveLocked() error {
 	return os.Rename(tmp.Name(), s.path)
 }
 
-// Upsert registers e (Token, Platform, Name, HostRef, Device); the same token
+// Upsert registers e (Token, Platform, Name, HostRef, Device, Mode); the same token
 // again updates the entry in place (created_at kept). At most MaxTokens: the
 // oldest is evicted.
 func (s *Store) Upsert(e Entry) (Entry, error) {

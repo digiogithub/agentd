@@ -59,3 +59,16 @@ func TestCheckCredentialsFile(t *testing.T) {
 		t.Fatal("missing accepted")
 	}
 }
+
+func TestPushAndroidMode(t *testing.T) {
+	if m := Default().Push.AndroidMode; m != PushModeNotification {
+		t.Fatalf("default android_mode = %q", m)
+	}
+	c, err := loadAPI(t, "[push]\nandroid_mode = \"data\"\n")
+	if err != nil || c.Push.AndroidMode != PushModeData {
+		t.Fatalf("loaded = %+v, %v", c.Push, err)
+	}
+	if _, err := loadAPI(t, "[push]\nandroid_mode = \"silent\"\n"); err == nil || !strings.Contains(err.Error(), "push.android_mode") {
+		t.Fatalf("err = %v", err)
+	}
+}

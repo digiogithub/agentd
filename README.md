@@ -224,13 +224,16 @@ that host; no relay is involved, and it works for hosts reached over SSH or rela
    enabled = true
    # on = ["question", "permission"]   # default; also waiting, blocked, exited, turn_done
    # include_preview = false           # true sends the question text through Google
+   # android_mode = "notification"     # or "data": the app draws its own notification (Android Auto)
    ```
 
 3. Restart the daemon (this ends running sessions).
 
 The app registers its token with each host by itself. Check with `agentd push ls`, send a test with
 `agentd push test`, remove a token with `agentd push rm ID`. The payload carries no agent-written text unless
-`include_preview` is on. The app must be built with your own Firebase project (its `google-services.json` is not in
+`include_preview` is on. With `android_mode = "data"` (or an app that asks for it when it registers) Android gets
+data-only messages: the app draws the notification itself, with reply actions that Android Auto can show, and gets a
+`resolved` push that withdraws it once the question is answered or the dialog is gone. The app must be built with your own Firebase project (its `google-services.json` is not in
 the repository).
 
 ## Desktop app

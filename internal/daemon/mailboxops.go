@@ -244,6 +244,9 @@ func (s *Server) reply(ctx context.Context, who caller, a proto.ReplyArgs) (prot
 		s.Log.Info("reply recorded", "id", m.ID, "from", m.Sender, "to", m.Recipient, "reply_to", a.ID, "via", who.via)
 		s.publishMail(proto.EvMailDelivered, m.ID, m.Sender, m.Recipient)
 	}
+	if orig.Kind == "question" {
+		s.pushResolveQuestion(orig.Sender, orig.ID)
+	}
 	w := toWire(m)
 	if !s.knownRecipient(m.Recipient) {
 		w.Warning = fmt.Sprintf("the original sender %q is not a known session or human address: the reply is stored but may never be delivered", m.Recipient)

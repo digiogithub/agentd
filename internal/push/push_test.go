@@ -361,3 +361,34 @@ func TestStoreEvictsOldestAndHandlesCorruption(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSendDataOnlyShape(t *testing.T) {
+	f := newFakeGoogle(t)
+	cl := f.client(t)
+	must(t, cl.Send(context.Background(), Message{Token: "tok", Title: "a@x te pregunta", Body: "h",
+		Data: map[string]string{"v": "1"}, CollapseKey: "a@x", ChannelID: "agentd_attention", Tag: "h/a@x/question", DataOnly: true}))
+	must(t, cl.Send(context.Background(), Message{Token: "tok", Data: map[string]string{"reason": "resolved"}, Tag: "h/a@x/question",
+		DataOnly: true, Normal: true}))
+	var got []map[string]map[string]any
+	for _, s := range f.sends {
+		var m map[string]map[string]any
+		must(t, json.Unmarshal([]byte(s), &m))
+		got = append(got, m)
+	}
+	m := got[0]["message"]
+	if _, ok := m["notification"]; ok {
+		t.Fatalf("data-only message has a notification: %s", f.sends[0])
+	}
+	a := m["android"].(map[string]any)
+	if _, ok := a["notification"]; ok || a["priority"] != "HIGH" || a["collapse_key"] != "a@x" {
+		t.Fatalf("android %v", a)
+	}
+	d := m["data"].(map[string]any)
+	if d["title"] != "a@x te pregunta" || d["body"] != "h" || d["tag"] != "h/a@x/question" || d["v"] != "1" {
+		t.Fatalf("data %v", d)
+	}
+	r := got[1]["message"]
+	if r["android"].(map[string]any)["priority"] != "NORMAL" || r["data"].(map[string]any)["title"] != nil {
+		t.Fatalf("resolved %s", f.sends[1])
+	}
+}

@@ -431,7 +431,15 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   stays off, cause logged and shown by `push_ls`, unless it is a regular file owned by the user with no group/other bits and
   a valid service account JSON), `on` (default `["question","permission"]`; also `waiting`, `blocked`, `exited`,
   `turn_done`; unknown = config error), `include_preview` (default false: the question / dialog text goes through Google
-  only when true), `debounce` (30s per session+reason), `host_label`. Tap (`startPush` in `Serve`, `stopPush` first in
+  only when true), `debounce` (30s per session+reason), `host_label`, `android_mode` (`notification` default | `data`).
+  **Data mode** (Android only; a token's own `mode` from `push_register` wins over `android_mode`; other platforms always
+  `notification`): no `notification` / `android.notification` blocks, `title`, `body` and `tag` go into `data` (priority
+  HIGH and `collapse_key` kept), so the app draws the notification. Data tokens also get a `resolved` push (data only,
+  priority NORMAL, data `v host host_ref session reason=resolved resolves=<earlier reason> tag=<its tag> link message_id?`)
+  for an earlier push still open: a question answered (`reply` of that message id), `attention.changed` cleared or
+  status leaving `waiting` (permission, waiting, turn_done), `session.exited`, the session's last blocked task
+  unblocked (`counts.blocked == 0`). Not filtered by `on`, not debounced; notification tokens never get it; debounce is
+  unchanged by it. Tap (`startPush` in `Serve`, `stopPush` first in
   `Shutdown` next to `stopNotify`; own bounded queue 256 drop-oldest + one worker): `mail.queued` kind question to
   `human:*` -> `question`; `attention.changed` set with reason `waiting` and at least one option in the session's current
   view -> `permission`, otherwise `waiting` (bell/notify too); `session.exited` -> `exited`; `task.changed` newly
@@ -439,11 +447,12 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   "<s> espera tu respuesta", "<s> tiene una tarea bloqueada", "<s> terminó"), body `<host_label>[ · <text>]`, data
   `v host host_ref session reason message_id? link`, Android high priority, `collapse_key` = session, channel
   `agentd_attention`, tag `<host>/<session>/<reason>`. A token FCM calls unregistered (404 UNREGISTERED, 400 about the token)
-  is removed. Ops: `push_register {token, platform, name, host_ref?}` (humans on the socket and owner relay devices of any
+  is removed. Ops: `push_register {token, platform, name, host_ref?, mode?}` → `{id, mode, modes}` (`mode` = effective mode,
+  `modes` = what this daemon accepts; `mode: data` only for `android`) (humans on the socket and owner relay devices of any
   scope; a relay registration records `device` and revoking the device removes its tokens), `push_unregister {token|id}` (a
   device only its own), `push_ls` (never the token value; devices see their own; also `enabled`, `project_id`, `reason`),
   `push_test {id?}` (humans only, never over the relay; needs push on); sessions are `forbidden` on all of them. relayGate:
-  the first three for owner devices (not guests). CLI `agentd push ls [--json]|test [ID]|rm ID` and hidden `register`.
+  the first three for owner devices (not guests). CLI `agentd push ls [--json]|test [ID]|rm ID` (MODE column = the registered mode, `-` = android_mode) and hidden `register [--mode]`; `push_test` follows each token's mode.
   Tokens, access tokens, the private key and payload text are never logged (logs name the token id only).
 - **Relay transport** (design `docs/design/relay-transport.md`, plan `docs/plans/agentd/relay_plan.md` = normative
   protocol v1): with `[relay] enabled = true` and `url` (https/wss; http/ws only on loopback) the daemon keeps one
