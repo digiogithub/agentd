@@ -124,7 +124,10 @@ func (h *pairHarness) code(t *testing.T) string {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if m := codeRE.FindStringSubmatch(h.out.String()); m != nil {
+		// The banner ends with the Scope line: wait for it, so callers
+		// read the whole banner, not only the lines printed so far.
+		out := h.out.String()
+		if m := codeRE.FindStringSubmatch(out); m != nil && strings.Contains(out, "Waiting for a device") {
 			return m[1]
 		}
 		time.Sleep(5 * time.Millisecond)
