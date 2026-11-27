@@ -17,3 +17,7 @@ Continues [[site-work-dashboard]] and the apps section ([[relay-transport]]).
 ## Verification
 HTML tag balance checked; headless Chrome screenshots of the dashboard (1440 px, 1100 px) and apps (1440 px,
 420 px) sections from a local copy.
+
+## Follow-up: hero and meta
+The hero lede, `description` and `og:description` (both languages) mention push notifications and the hands-free
+voice mode on the phone.
