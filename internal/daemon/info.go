@@ -53,6 +53,7 @@ func (s *Server) infoOp(a proto.InfoArgs) proto.InfoResult {
 		Host: host, Version: Version, Pid: os.Getpid(), Epoch: s.epoch,
 		Harnesses: []string{}, Profiles: []proto.ProfileInfo{}, Aliases: []proto.AliasInfo{},
 		AgentView: s.Cfg.Security.AgentView,
+		Features:  []string{proto.FeatureUpload},
 	}
 	builtin := map[string]bool{}
 	for _, n := range config.BuiltinProfileNames() {

@@ -276,7 +276,7 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
 
 - **Paths**: socket `$XDG_RUNTIME_DIR/agentd/agentd.sock` (fallback `/tmp/agentd-$UID/`), state
   `$XDG_STATE_HOME/agentd` (fallback `~/.local/state/agentd`): `mailbox.db`, `backlog.db` (backlog notes, 0600), `push/tokens.json` (FCM tokens, dir 0700, file 0600), `docs.json` (document store, 0600), `hc/core-id`, `api/devices.json` (device tokens, dir 0700, file 0600, `api/devices.lock`), `api/tls/{cert.pem,key.pem}` (self-signed gateway cert), `logs/<session>.log`,
-  `daemon.log`, `relay/{host_key.json,devices.json,audit.log}` (dir 0700, files 0600). Config `~/.config/agentd/config.toml`. `AGENTD_SOCKET` env overrides the socket path
+  `daemon.log`, `relay/{host_key.json,devices.json,audit.log}` (dir 0700, files 0600), `uploads/<session>/` (op `upload`; dirs 0700, files 0600). Config `~/.config/agentd/config.toml`. `AGENTD_SOCKET` env overrides the socket path
   (tests must use a temp socket + temp state dir via `AGENTD_STATE_DIR`).
 - **Daemon lock**: the daemon holds an exclusive `flock` on `<socketdir>/agentd.lock` for its whole
   lifetime. Only the lock holder may remove a stale socket file and bind; a second daemon fails with
@@ -476,7 +476,7 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   through `relayGate` (`internal/daemon/relaygate.go`, deny by default): any scope `ping whoami info ls subscribe board view
   turns tasks dump attach` (view: attach forced `observe`; `tasks_set`/`task_update` are denied: session-only writes; a device
   never sends `kind: "question"`, it resolves as a human; `board` filters sessions by the device's globs and gives
-  `questions`/`unread_human` only to owner devices); `operate` + `act view_ack`, and owners `send inbox read reply`;
+  `questions`/`unread_human` only to owner devices); `operate` + `act view_ack upload`, and owners `send inbox read reply`;
   owner devices not limited to sessions also `notes note_add note_update note_rm note_assign`;
   `admin` + `run` (no `cmd`/`env`/`env_base`: a harness/target/profile only; a session-limited device must give a
   matching `name`), `kill rm label`, `doc_get doc_set` (not for session-limited devices); never `type purge shutdown
@@ -490,6 +490,18 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
   `join_token_env` names a variable missing from its environment and no `join_token` is set (typical under systemd
   `--user`), and `agentd relay invite` warns on stderr when the link is not `online` (the invite is still created, but no
   device can redeem it until the host is linked).
+- **Uploads** (op `upload`, `internal/daemon/upload.go`, wire `internal/proto/upload.go`): a client (the mobile app over the
+  relay, which has no shell to copy files with) stores an image for a session and puts the returned path in its act prompt;
+  the daemon types nothing. Args `{name, ext, data}`: `ext` one of `png jpg jpeg webp gif` (lowercase), `data` standard
+  base64, decoded 1..`proto.MaxUploadBytes` (6,000,000 bytes: its base64 must fit in one 8 MiB wire line) and starting with
+  the signature of `ext` (else `invalid`). The session must be registered (`not_found`/`starting`) and not exited (`exited`).
+  Stored as `<state>/uploads/<session>/YYYYMMDD-HHMMSS-<n>.<ext>` (`config.UploadsDir`, `Server.UploadsDir` for tests;
+  dirs 0700 and never a symlink, file 0600 created with `O_EXCL`, name chosen by the daemon) → `{path (absolute), size}`. A write
+  failure is `internal` without the path. Permissions: humans any session, a session only itself unless `[security]
+  agent_type`; relay devices `operate`+ within their session globs (audited). Files older than 7 days
+  (`daemon.UploadRetention`) are removed at daemon start and by an upload at most once an hour; `rm` removes the session's
+  directory. Logs carry session, ext, size and caller, never the content. Clients detect it with `info.features`
+  containing `upload` (an older daemon answers `invalid` "unknown op" on the socket and `forbidden` over the relay).
 - **Project aliases**: short name → working directory, kept apart from `config.toml`.
   - File `~/.config/agentd/aliases.toml` (override path with `AGENTD_ALIASES_FILE`; respects
     `$XDG_CONFIG_HOME`), flat table: `webapp = "~/src/webapp"`. `~` is expanded;
@@ -748,7 +760,7 @@ agentd (daemon; auto-started by the CLI; or systemd --user)
 ### Ops (daemon API, mirrored by CLI and partially by MCP)
 
 `ping` (→ `{version, pid, epoch}`; `epoch` is unique per daemon start),
-`info {env_base?[]}` (→ `{host, version, pid, epoch, harnesses[], profiles[{name, builtin}], aliases[{name, dir, source}]}`: the
+`info {env_base?[]}` (→ `{host, version, pid, epoch, harnesses[], profiles[{name, builtin}], aliases[{name, dir, source}], features?[]}` (`features` = optional ops served, today `upload`; absent on older daemons): the
 daemon's view of config and aliases; with `env_base` the aliases are those a `run` carrying the same `env_base` resolves),
 `run {name, target?, harness?, cwd, cmd[], env_base[], env{}, profile, cols, rows}` (with `target` + `harness`
 the daemon resolves like the CLI via `config.Aliases.ResolveRun`: `target` = alias or directory, a relative path
@@ -786,7 +798,7 @@ compacted in `docs.json`, atomic rename; a broken file is renamed `.bad` and the
 `doc.changed {name, version}` with no session, so session subscribers never see it),
 `turns {name}` (→ `{turns[]}`, see "Turn records"), `tasks_set {tasks[]}` / `task_update {id, status?, title?, note?}`
 (sessions only, → `{tasks, revision}`) and `tasks {name}` (→ `{name, tasks, revision}`), see "Task lists";
-`notes` / `note_add` / `note_update` / `note_rm` / `note_assign` (humans only, see "Backlog notes"); `push_register` / `push_unregister` / `push_ls` / `push_test` (humans; see "Push notifications (FCM)");
+`notes` / `note_add` / `note_update` / `note_rm` / `note_assign` (humans only, see "Backlog notes"); `push_register` / `push_unregister` / `push_ls` / `push_test` (humans; see "Push notifications (FCM)"); `upload {name, ext, data}` (→ `{path, size}`, see "Uploads");
 `board {since_digest?}` (humans on the socket; a session is `forbidden`; → `{sessions[{name, status, attention, turn, preview,
 tasks[], questions[{id, body, options, task, created_at}]}], unread_human, digest, not_modified?}`: every registered session in
 `ls` order with its full task list and the open questions it asked the caller's human mailbox (oldest first);

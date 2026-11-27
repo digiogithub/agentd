@@ -467,12 +467,16 @@ agentd relay status | devices | revoke <id|name>
 Access can also be revoked from the apps (Ajustes > Dispositivos). A device connected through the relay can always
 revoke itself; revoking other devices from there needs an owner device with the `admin` scope.
 
-Scopes: `view` (list, read, watch terminals), `operate` (+ prompts, menus, interactive terminal, mailbox),
+Scopes: `view` (list, read, watch terminals), `operate` (+ prompts, menus, interactive terminal, mailbox, image uploads),
 `admin` (+ start sessions from a harness profile, kill, remove). `operate` can type into agents that run
 shell commands, so it is as powerful as a shell on the host: invite only your own devices with it. The
 daemon enforces every scope and session filter itself; `type`, `purge`, `shutdown` and arbitrary commands
 are never available through the relay. Invites are one-time (10 minutes by default); a revoked device is
 disconnected at once.
+
+Images attached in the mobile app's chat reach a relay host through the daemon (op `upload`, png/jpg/webp/gif up to
+6,000,000 bytes): they are stored under `~/.local/state/agentd/uploads/<session>/` (0600) and the app puts the path in
+the prompt. Files are removed after 7 days, and with the session on `agentd rm`.
 
 ## Security
 

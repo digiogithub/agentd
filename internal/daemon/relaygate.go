@@ -17,7 +17,7 @@ import (
 var relayAudited = []string{proto.OpRun, proto.OpAct, proto.OpKill, proto.OpRm, proto.OpSend, proto.OpReply,
 	proto.OpViewAck, proto.OpLabel, proto.OpDocSet, proto.OpAttach,
 	proto.OpNoteAdd, proto.OpNoteUpdate, proto.OpNoteRm, proto.OpNoteAssign,
-	proto.OpPushRegister, proto.OpPushUnregister}
+	proto.OpPushRegister, proto.OpPushUnregister, proto.OpUpload}
 
 // relayGate checks (and may rewrite) a request from device d. It returns the
 // session the request names ("" if none) for the audit log.
@@ -67,7 +67,7 @@ func relayGate(d *relayDevice, req *proto.Request) (string, error) {
 			req.Args, _ = json.Marshal(a)
 		}
 		return name, nil
-	case proto.OpAct, proto.OpViewAck:
+	case proto.OpAct, proto.OpViewAck, proto.OpUpload:
 		if err := need(config.RelayScopeOperate); err != nil {
 			return "", err
 		}

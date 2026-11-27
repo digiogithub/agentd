@@ -26,6 +26,7 @@ const (
 	logDirName    = "logs"
 	daemonLogName = "daemon.log"
 	docsName      = "docs.json"
+	uploadsName   = "uploads"
 	configName    = "config.toml"
 	appDirName    = "agentd"
 )
@@ -91,6 +92,9 @@ func MailboxPath() (string, error) { return inStateDir(mailboxName) }
 
 // DocsPath returns the path of the document store (ops doc_get/doc_set).
 func DocsPath() (string, error) { return inStateDir(docsName) }
+
+// UploadsDir returns <state>/uploads (op upload: one subdirectory per session).
+func UploadsDir() (string, error) { return inStateDir(uploadsName) }
 
 // LogDir returns <state>/logs.
 func LogDir() (string, error) { return inStateDir(logDirName) }

@@ -67,6 +67,11 @@ type Server struct {
 	// client that does not drain it in time is dropped (0 =
 	// DefaultAttachWriteTimeout).
 	AttachWriteTimeout time.Duration
+	// UploadsDir overrides the root of op upload files (tests; "" =
+	// config.UploadsDir()).
+	UploadsDir string
+	uploads    uploads
+
 	// Clock drives mailbox retention and purge's older_than (nil = real time).
 	Clock Clock
 	// HeartbeatInterval is the period of heartbeat events on subscribe
@@ -287,6 +292,7 @@ func (s *Server) Serve(ctx context.Context) error {
 		}()
 	}
 	s.startRetention()
+	go s.sweepUploads()
 	s.startHC()
 	s.startRelay()
 	s.startNotify()

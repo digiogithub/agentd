@@ -474,6 +474,16 @@ func (s *Server) dispatch(ctx context.Context, req proto.Request, peer peerInfo)
 			return nil, err
 		}
 		return s.relayOp(ctx, who, a)
+	case proto.OpUpload:
+		var a proto.UploadArgs
+		if err := req.DecodeArgs(&a); err != nil {
+			return nil, err
+		}
+		who, err := s.resolveCaller(peer, req.Auth)
+		if err != nil {
+			return nil, err
+		}
+		return s.uploadOp(who, a)
 	case proto.OpPeers:
 		return s.peers(), nil
 	case proto.OpWhoami:
@@ -780,6 +790,7 @@ func (s *Server) rm(name string) error {
 	}
 	s.Log.Info("session removed", "name", name)
 	s.publish(proto.EvSessionRemoved, name, nil)
+	s.removeUploads(name)
 	return nil
 }
 

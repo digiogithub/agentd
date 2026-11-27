@@ -347,3 +347,9 @@ func TestEventJSONShape(t *testing.T) {
 		t.Fatalf("heartbeat carries empty fields: %s", hb)
 	}
 }
+
+func TestMaxUploadFitsInALine(t *testing.T) {
+	if b64 := (MaxUploadBytes + 2) / 3 * 4; b64+64<<10 > MaxLineSize {
+		t.Fatalf("base64 of MaxUploadBytes (%d) leaves less than 64 KiB in a %d-byte line", b64, MaxLineSize)
+	}
+}

@@ -367,6 +367,9 @@ type InfoResult struct {
 	// AgentView mirrors [security] agent_view: sessions may use op view on
 	// other sessions (the MCP server registers agentd_view only then).
 	AgentView bool `json:"agent_view"`
+	// Features lists optional ops this daemon serves (FeatureUpload...), so a
+	// client can tell before calling one; older daemons omit it.
+	Features []string `json:"features,omitempty"`
 }
 
 // ProfileInfo describes a harness profile (element of InfoResult.Profiles).

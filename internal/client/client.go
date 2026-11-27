@@ -455,6 +455,14 @@ func (c *Client) Label(name string, labels map[string]string) (map[string]string
 	return r.Labels, err
 }
 
+// Upload stores an image (base64 data) for session name on the daemon's host
+// and returns where (op upload; check InfoResult.Features first).
+func (c *Client) Upload(name, ext, data string) (proto.UploadResult, error) {
+	var r proto.UploadResult
+	err := c.Call(proto.OpUpload, proto.UploadArgs{Name: name, Ext: ext, Data: data}, &r)
+	return r, err
+}
+
 // DocGet reads a stored document.
 func (c *Client) DocGet(name string) (proto.DocGetResult, error) {
 	var r proto.DocGetResult
