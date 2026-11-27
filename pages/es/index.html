@@ -286,9 +286,9 @@
     <div class="section-head">
       <span class="eyebrow">Panel de trabajo</span>
       <h2>Mira qué hace cada agente y qué necesita de ti</h2>
-      <p>Los agentes informan de su plan como una lista de tareas y te hacen preguntas con opciones. Un panel lo reúne todo, y respondes con un toque en vez de leer seis terminales.</p>
+      <p>Los agentes informan de su plan como una lista de tareas y te hacen preguntas con opciones. Tú llevas un backlog de lo que viene y lo repartes. Un panel lo reúne todo, y respondes con un toque en vez de leer seis terminales.</p>
     </div>
-    <div class="cards">
+    <div class="cards four">
       <article class="card rough reveal">
         <span class="tape" aria-hidden="true"></span>
         <div class="ic crayon" style="--c:#b9e0b9"><svg viewBox="0 0 32 32"><path d="M5 9l2 2 4-4M5 17l2 2 4-4M5 25l2 2 4-4M15 9h12M15 17h12M15 25h8"/></svg></div>
@@ -305,11 +305,18 @@
         <span class="tape" aria-hidden="true"></span>
         <div class="ic crayon" style="--c:#f2a68a"><svg viewBox="0 0 32 32"><path d="M8 22V14a8 8 0 0 1 16 0v8l2 3H6zM13 28h6M16 4v2"/></svg></div>
         <h3>Te avisa cuando importa</h3>
-        <p>Notificaciones de escritorio para preguntas, agentes en espera y tareas bloqueadas. En el móvil, el daemon te avisa por ntfy o por un webhook firmado: sin backend de por medio.</p>
+        <p>Notificaciones de escritorio para preguntas, agentes en espera y tareas bloqueadas. En el móvil, cada host envía un push por Firebase cuando un agente te pregunta o pide permiso, y lo retira al responder. O ntfy y webhooks firmados: sin backend nuestro de por medio.</p>
+      </article>
+      <article class="card rough reveal">
+        <span class="tape" aria-hidden="true"></span>
+        <div class="ic crayon" style="--c:#d7c3ef"><svg viewBox="0 0 32 32"><path d="M8 4h13l5 5v19H8z"/><path d="M21 4v5h5M12 15h10M12 20h10M12 25h6"/></svg></div>
+        <h3>Un backlog que repartes</h3>
+        <p>Apunta el trabajo futuro con <code>agentd note add</code> o desde las apps. Cuando un agente queda libre, asígnale una nota: entra en su lista de tareas y un mensaje le dice que empiece. Hecha allí, hecha en el backlog.</p>
       </article>
     </div>
 <pre class="snip" id="cmd-board"><button class="copy" type="button" data-copy="cmd-board">copy</button><span class="p">$ </span>agentd ask "¿Migro el esquema en este cambio?" --option "En este cambio" --option "Cambio aparte"
-<span class="p">$ </span>agentd board   <span class="c"># todo en una llamada: tareas, preguntas abiertas, quién espera</span></pre>
+<span class="p">$ </span>agentd board   <span class="c"># todo en una llamada: tareas, preguntas abiertas, quién espera</span>
+<span class="p">$ </span>agentd note add "Limitar peticiones en la API" &amp;&amp; agentd note assign 1 codex@api</pre>
     <div class="shots">
       <figure class="shot rough reveal" style="--tilt: -.7deg">
         <span class="tape" aria-hidden="true"></span>
@@ -349,7 +356,7 @@
       <img class="app-icon" src="../assets/app-icon.svg" width="72" height="72" alt="Icono de la app agentd">
       <span class="eyebrow">Apps</span>
       <h2>Tus agentes, en el escritorio y en el bolsillo</h2>
-      <p>Ambas apps son clientes: llegan a cada host por SSH o a través de un relay autoalojado con cifrado de extremo a extremo, y agentd nunca escucha en un puerto de red. Listan los agentes de todos tus hosts en una bandeja, agrupados por proyecto o por lo que necesita respuesta.</p>
+      <p>Ambas apps son clientes: llegan a cada host por SSH o a través de un relay autoalojado con cifrado de extremo a extremo, y agentd nunca escucha en un puerto de red. Empareja el móvil escaneando el QR de <code>agentd relay invite</code>; revoca cualquier dispositivo emparejado desde las apps. Listan los agentes de todos tus hosts en una bandeja, agrupados por proyecto o por lo que necesita respuesta.</p>
     </div>
     <div class="app-grid">
       <article class="card rough reveal" style="--tilt: -.8deg">
@@ -361,11 +368,13 @@
           <li>Pestaña <b>Chat</b>: transcripción, tablas, enlaces pulsables, la pregunta pendiente con sus opciones y un compositor</li>
           <li>Pestaña <b>Terminal</b>: un attach real que sigue el tamaño de la ventana</li>
           <li><b>Panel</b>: las tareas y preguntas abiertas de cada agente, por agente o en tablero; responde sin abrir la sesión</li>
+          <li><b>Backlog</b> por host: escribe notas, asígnalas a un agente en marcha, recupéralas</li>
           <li>Agentes agrupados por proyecto, con notificaciones cuando uno pregunta, espera o se bloquea</li>
           <li>Sesiones solo de terminal con agentd, zellij, tmux o SSH simple</li>
           <li>Añade hosts, explora carpetas remotas, lanza sesiones y termina a la fuerza las atascadas</li>
           <li>Provisiona un host nuevo: instala agentd, una unidad systemd y fragmentos MCP</li>
           <li>Buzón y colas de trabajo</li>
+          <li>Ajustes › Dispositivos: ve y revoca los móviles y equipos emparejados por el relay</li>
         </ul>
       </article>
       <article class="card rough reveal" style="--tilt: .9deg">
@@ -376,9 +385,12 @@
         <ul class="app-list">
           <li>El mismo modelo: una bandeja, chat, terminal, aprobaciones, buzón y provisión de hosts</li>
           <li>Pestaña <b>Panel</b>: responde a una pregunta con sus opciones o con tus palabras, al buzón del agente o directo a su prompt</li>
-          <li>Adjunta imágenes y márcalas con lápiz, flechas, cuadros y texto antes de enviar</li>
-          <li>Dicta tus prompts</li>
-          <li>Tema claro, oscuro o del sistema</li>
+          <li><b>Notificaciones push</b> cuando un agente te pregunta o espera un permiso, incluso con la app cerrada (agentd 0.10+)</li>
+          <li>Adjunta imágenes y márcalas con lápiz, flechas, cuadros y texto, también en hosts por relay (agentd 0.12+)</li>
+          <li><b>Modo voz</b> para auriculares Bluetooth: escucha qué concluyeron los agentes, elige opciones y dicta sin mirar</li>
+          <li><b>Android Auto</b>: el Panel en la pantalla del coche, preguntas leídas en voz alta y respondidas por voz</li>
+          <li>Notas del backlog, emparejamiento por QR y revocación de dispositivos</li>
+          <li>Tema claro, oscuro o del sistema con esquemas de color (Nord, Solarized, Gruvbox, Dracula…) y ahorro de batería</li>
           <li>Clave ed25519 propia guardada en el dispositivo; claves de host aceptadas en el primer uso</li>
         </ul>
       </article>

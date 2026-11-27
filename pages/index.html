@@ -286,9 +286,9 @@
     <div class="section-head">
       <span class="eyebrow">Work dashboard</span>
       <h2>See what every agent is doing, and what it needs from you</h2>
-      <p>Agents report their plan as a task list and ask you questions with options. One board gathers it all, so you answer in a tap instead of reading six terminals.</p>
+      <p>Agents report their plan as a task list and ask you questions with options. You keep a backlog of what comes next and hand it out. One board gathers it all, so you answer in a tap instead of reading six terminals.</p>
     </div>
-    <div class="cards">
+    <div class="cards four">
       <article class="card rough reveal">
         <span class="tape" aria-hidden="true"></span>
         <div class="ic crayon" style="--c:#b9e0b9"><svg viewBox="0 0 32 32"><path d="M5 9l2 2 4-4M5 17l2 2 4-4M5 25l2 2 4-4M15 9h12M15 17h12M15 25h8"/></svg></div>
@@ -305,11 +305,18 @@
         <span class="tape" aria-hidden="true"></span>
         <div class="ic crayon" style="--c:#f2a68a"><svg viewBox="0 0 32 32"><path d="M8 22V14a8 8 0 0 1 16 0v8l2 3H6zM13 28h6M16 4v2"/></svg></div>
         <h3>Nudged when it matters</h3>
-        <p>Desktop notifications for questions, waiting agents and blocked tasks. On your phone, the daemon alerts you through ntfy or a signed webhook: no backend in between.</p>
+        <p>Desktop notifications for questions, waiting agents and blocked tasks. On your phone, each host pushes through Firebase when an agent asks you or wants a permission, and clears it once answered. Or ntfy and signed webhooks: no backend of ours in between.</p>
+      </article>
+      <article class="card rough reveal">
+        <span class="tape" aria-hidden="true"></span>
+        <div class="ic crayon" style="--c:#d7c3ef"><svg viewBox="0 0 32 32"><path d="M8 4h13l5 5v19H8z"/><path d="M21 4v5h5M12 15h10M12 20h10M12 25h6"/></svg></div>
+        <h3>A backlog you hand out</h3>
+        <p>Jot down future work with <code>agentd note add</code> or from the apps. When an agent is free, assign a note: it lands in that agent's task list and a message tells it to start. Done there, done in the backlog.</p>
       </article>
     </div>
 <pre class="snip" id="cmd-board"><button class="copy" type="button" data-copy="cmd-board">copy</button><span class="p">$ </span>agentd ask "Migrate the schema in this change?" --option "This change" --option "A separate one"
-<span class="p">$ </span>agentd board   <span class="c"># everything in one call: tasks, open questions, who is waiting</span></pre>
+<span class="p">$ </span>agentd board   <span class="c"># everything in one call: tasks, open questions, who is waiting</span>
+<span class="p">$ </span>agentd note add "Add rate limiting to the API" &amp;&amp; agentd note assign 1 codex@api</pre>
     <div class="shots">
       <figure class="shot rough reveal" style="--tilt: -.7deg">
         <span class="tape" aria-hidden="true"></span>
@@ -349,7 +356,7 @@
       <img class="app-icon" src="assets/app-icon.svg" width="72" height="72" alt="agentd app icon">
       <span class="eyebrow">Apps</span>
       <h2>Your agents, on your desk and in your pocket</h2>
-      <p>Both apps are clients: they reach each host over SSH or through a self-hosted relay with end-to-end encryption, and agentd never listens on a network port. They list the agents of every host in one inbox, grouped by project or by what needs an answer.</p>
+      <p>Both apps are clients: they reach each host over SSH or through a self-hosted relay with end-to-end encryption, and agentd never listens on a network port. Pair a phone by scanning the QR of <code>agentd relay invite</code>; revoke any paired device from the apps. They list the agents of every host in one inbox, grouped by project or by what needs an answer.</p>
     </div>
     <div class="app-grid">
       <article class="card rough reveal" style="--tilt: -.8deg">
@@ -361,11 +368,13 @@
           <li><b>Chat</b> tab: transcript, tables, clickable links, the pending question with its options and a composer</li>
           <li><b>Terminal</b> tab: a real attach that follows the window size</li>
           <li><b>Panel</b>: every agent's tasks and open questions, by agent or as a board; answer without opening the session</li>
+          <li><b>Backlog</b> per host: write notes, assign them to a running agent, take them back</li>
           <li>Agents grouped by project, with notifications when one asks, waits or gets blocked</li>
           <li>Terminal-only sessions with agentd, zellij, tmux or plain SSH</li>
           <li>Add hosts, browse remote folders, start sessions and force-terminate stuck ones</li>
           <li>Provision a new host: install agentd, a systemd unit and MCP snippets</li>
           <li>Mailbox and work queues</li>
+          <li>Settings › Devices: see and revoke the phones and computers paired through the relay</li>
         </ul>
       </article>
       <article class="card rough reveal" style="--tilt: .9deg">
@@ -376,9 +385,12 @@
         <ul class="app-list">
           <li>The same model: one inbox, chat, terminal, approvals, mailbox and host provisioning</li>
           <li><b>Panel</b> tab: answer a question with its options or your own words, to the agent's mailbox or straight to its prompt</li>
-          <li>Attach images and mark them up with pen, arrows, boxes and text before sending</li>
-          <li>Dictate your prompts</li>
-          <li>Light, dark or system theme</li>
+          <li><b>Push notifications</b> when an agent asks you or waits for a permission, even with the app closed (agentd 0.10+)</li>
+          <li>Attach images and mark them up with pen, arrows, boxes and text, also on relay hosts (agentd 0.12+)</li>
+          <li><b>Voice mode</b> for Bluetooth headphones: hear what agents concluded, pick options and dictate without looking</li>
+          <li><b>Android Auto</b>: the Panel on the car screen, questions read aloud and answered by voice</li>
+          <li>Backlog notes, pairing by QR and device revocation</li>
+          <li>Light, dark or system theme with color schemes (Nord, Solarized, Gruvbox, Dracula…) and a battery saver</li>
           <li>Its own ed25519 key stored on the device; host keys trusted on first use</li>
         </ul>
       </article>

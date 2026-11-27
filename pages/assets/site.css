@@ -224,8 +224,10 @@ section { padding: 84px 0; }
 .card h3 { font-size: 1.85rem; }
 .card p { color: var(--ink-soft); margin: 0; }
 .card .tape { position: absolute; top: -12px; left: 50%; width: 92px; height: 24px; transform: translateX(-50%) rotate(-3deg); background: rgb(241 181 49 / .55); box-shadow: 0 1px 2px rgb(0 0 0 / .08); }
+.cards.four { grid-template-columns: repeat(4, 1fr); gap: 34px 24px; }
+@media (max-width: 1180px) { .cards.four { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 960px) { .cards { grid-template-columns: 1fr 1fr; } }
-@media (max-width: 640px) { .cards { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { .cards, .cards.four { grid-template-columns: 1fr; } }
 
 /* ---------- what the recipient sees ---------- */
 
